@@ -46,8 +46,14 @@ open the download folder, and more. Left-click opens the control panel.
   yourself out.
 - **First-run friendly** — if yt-dlp isn't installed, one click downloads
   the official standalone `yt-dlp.exe` from GitHub into ytTrayDL's own
-  folder. ffmpeg status is shown honestly (best-quality merging and MP3
-  conversion need it).
+  folder. Same for ffmpeg: if it's missing, one click downloads the GyanD
+  essentials build (the Windows build ffmpeg.org links to) and unpacks
+  it next to yt-dlp. Best-quality merging and MP3 conversion need ffmpeg.
+- **Closing the window is your choice** — the X button asks: Exit,
+  minimize to tray, minimize to taskbar, or hide entirely (keeps
+  running in the background; **Ctrl+Alt+G**, relaunching, or `--show`
+  brings it back). Tick "Remember my choice" to stop being asked, and
+  change it any time in Settings → General.
 - **Private by design** — no accounts, no telemetry, nothing leaves your
   PC except the requests yt-dlp itself makes. Settings live in
   `%APPDATA%\ytTrayDL`.
@@ -60,8 +66,8 @@ open the download folder, and more. Left-click opens the control panel.
 3. Copy any supported link and try it.
 
 Optional: enable **Start with Windows** in Settings (per-user, no admin
-needed), and drop a copy of `ffmpeg.exe` next to `yttraydl.exe` (or on
-PATH) for best-quality merges and MP3 extraction.
+needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button
+(or drop `ffmpeg.exe` next to `yttraydl.exe` / on PATH yourself).
 
 ## Configuration tour
 

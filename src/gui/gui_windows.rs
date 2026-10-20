@@ -678,8 +678,8 @@ impl App {
             egui::ViewportId::from_hash_of("yttraydl-settings"),
             egui::ViewportBuilder::default()
                 .with_title("ytTrayDL — Settings")
-                .with_inner_size([640.0, 680.0])
-                .with_min_inner_size([520.0, 480.0]),
+                .with_inner_size([570.0, 590.0])
+                .with_min_inner_size([500.0, 430.0]),
             |ctx, _class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     open = false;
@@ -707,6 +707,9 @@ impl App {
                         });
                     });
                     ui.separator();
+                    // Condensed layout (0.2.1): tighter row spacing
+                    // than egui's default throughout Settings.
+                    ui.style_mut().spacing.item_spacing = egui::vec2(6.0, 3.0);
                     egui::ScrollArea::vertical().show(ui, |ui| match tab {
                         0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
                         1 => settings_downloads(ui, &mut settings, &mut outcome),
@@ -945,28 +948,31 @@ fn settings_general(
     });
 
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("Notifications (small toasts, bottom-right)").strong());
-    for (flag, label, tip) in [
-        (
-            &mut s.notify_on_complete,
-            "When a download finishes",
-            "A brief toast naming the finished file",
-        ),
-        (
-            &mut s.notify_on_error,
-            "When a download fails",
-            "Shows the error so silent downloads never fail silently",
-        ),
-        (
-            &mut s.notify_on_auto_start,
-            "When an auto-download starts",
-            "Confirms ytTrayDL reacted; off by default to stay unobtrusive",
-        ),
-    ] {
-        if ui.checkbox(flag, label).on_hover_text(tip).changed() {
-            out.changed = true;
-        }
-    }
+    egui::CollapsingHeader::new("Notifications (small toasts, bottom-right)")
+        .default_open(false)
+        .show(ui, |ui| {
+            for (flag, label, tip) in [
+                (
+                    &mut s.notify_on_complete,
+                    "When a download finishes",
+                    "A brief toast naming the finished file",
+                ),
+                (
+                    &mut s.notify_on_error,
+                    "When a download fails",
+                    "Shows the error so silent downloads never fail silently",
+                ),
+                (
+                    &mut s.notify_on_auto_start,
+                    "When an auto-download starts",
+                    "Confirms ytTrayDL reacted; off by default to stay unobtrusive",
+                ),
+            ] {
+                if ui.checkbox(flag, label).on_hover_text(tip).changed() {
+                    out.changed = true;
+                }
+            }
+        });
 }
 
 fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOutcome) {
@@ -1107,7 +1113,9 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
     });
 
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("Advanced").strong());
+    egui::CollapsingHeader::new("Advanced")
+        .default_open(false)
+        .show(ui, |ui| {
     ui.horizontal(|ui| {
         ui.label("Extra yt-dlp arguments:");
         if ui.add(egui::TextEdit::singleline(&mut s.extra_args).desired_width(320.0).font(egui::TextStyle::Monospace)).on_hover_text("Passed to yt-dlp after ytTrayDL's own arguments, so yours win on conflicts. Example: --limit-rate 10M --retries 5").changed() {
@@ -1120,6 +1128,7 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             out.changed = true;
         }
     });
+        });
 }
 
 fn domain_list_editor(

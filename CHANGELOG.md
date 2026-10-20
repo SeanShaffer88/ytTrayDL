@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.2 — 2026-10-20
+
+### Fixed
+
+- **The actual startup crash.** The 0.1.1 diagnostic log captured
+  it on the reporter's machine: the app panicked inside wgpu —
+  "No wgpu backend feature that is implemented for the target
+  platform was enabled." The build had enabled eframe's `wgpu`
+  renderer (with `default-features = false`) without any wgpu
+  backend feature, so window creation panicked before anything
+  could appear — in both 0.1.0 and 0.1.1. This, not a hidden
+  tray icon, is why double-clicking "did nothing".
+- Switched the renderer to **glow (OpenGL)**: eframe feature
+  changed in Cargo.toml and `Renderer::Glow` pinned in
+  NativeOptions. Glow runs on effectively every Windows 10/11
+  machine and is ample for this UI.
+- Startup is now wrapped in `catch_unwind`: any future startup
+  panic shows the error dialog and lands in the log, instead of
+  exiting silently.
+
 ## 0.1.1 — 2026-10-20
 
 ### Fixed

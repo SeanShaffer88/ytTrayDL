@@ -15,9 +15,12 @@
   install, Start-menu entry, optional desktop shortcut and
   start-with-Windows, standard uninstaller that keeps your
   `%APPDATA%\ytTrayDL` data. The portable zip remains available.
-- **Settings condensed.** Smaller window (570×590), tighter row
-  spacing, and the Notifications and Advanced sections are now
-  collapsible (collapsed by default).
+- **Settings slide out.** Settings are no longer a separate
+  window: the main window grows and the settings drawer slides
+  out from its right side (✕ or the Settings button slides it
+  back). Layout inside is condensed too — tighter row spacing,
+  and the Notifications and Advanced sections are collapsible
+  (collapsed by default).
 
 ## 0.2.0 — 2026-10-20
 

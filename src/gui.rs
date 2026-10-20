@@ -750,6 +750,11 @@ impl App {
         };
         let tray = match tray_icon::TrayIconBuilder::new()
             .with_menu(Box::new(menu))
+            // SEAN (0.2.3): single left-click opens the window;
+            // the menu belongs to the right-click. Without this,
+            // tray-icon pops the menu on left-click too, and the
+            // click ALSO toggled the window — a confusing mess.
+            .with_menu_on_left_click(false)
             .with_tooltip("ytTrayDL \u{2014} monitoring clipboard")
             .with_icon(icon)
             .build()
@@ -785,7 +790,7 @@ impl App {
     }
 
     #[cfg(windows)]
-    fn process_tray_events(&mut self) {
+    fn process_tray_events(&mut self, ctx: &egui::Context) {
         use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
         while let Ok(ev) = TrayIconEvent::receiver().try_recv() {
             if let TrayIconEvent::Click {
@@ -794,7 +799,12 @@ impl App {
                 ..
             } = ev
             {
-                self.show_panel = !self.show_panel;
+                // Single click OPENS the window (SEAN, 0.2.3) —
+                // it used to toggle, which read as randomness
+                // combined with the left-click menu popup.
+                yttraydl::diag_log("tray icon left-click: opening window");
+                self.show_panel = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
         }
         while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
@@ -813,6 +823,33 @@ impl App {
                 ),
                 None => break,
             };
+            // Log every tray-menu click by name (0.2.3): when a
+            // click "does nothing" in the field, this line is how
+            // we learn whether the event ever reached the app.
+            let item_name = if ev.id == ids.0 {
+                "monitoring toggle"
+            } else if ev.id == ids.1 {
+                "auto-download toggle"
+            } else if ev.id == ids.2 {
+                "autostart toggle"
+            } else if ev.id == ids.3 {
+                "download from clipboard"
+            } else if ev.id == ids.4 {
+                "downloads"
+            } else if ev.id == ids.5 {
+                "open download folder"
+            } else if ev.id == ids.6 {
+                "settings"
+            } else if ev.id == ids.7 {
+                "hide tray icon"
+            } else if ev.id == ids.8 {
+                "about"
+            } else if ev.id == ids.9 {
+                "exit"
+            } else {
+                "unknown"
+            };
+            yttraydl::diag_log(&format!("tray menu click: {item_name}"));
             if ev.id == ids.0 {
                 self.settings.monitoring_enabled = !self.settings.monitoring_enabled;
                 let v = self.settings.monitoring_enabled;
@@ -898,7 +935,7 @@ impl App {
         // No tray on non-Windows dev builds.
         self.tray_failed = true;
     }
-    fn process_tray_events(&mut self) {}
+    fn process_tray_events(&mut self, _ctx: &egui::Context) {}
     fn sync_tray(&mut self) {}
 }
 
@@ -910,7 +947,7 @@ impl eframe::App for App {
         self.process_download_events();
         self.process_ytdlp_fetch();
         self.process_ffmpeg_fetch();
-        self.process_tray_events();
+        self.process_tray_events(ctx);
         self.ensure_version();
         self.activate_next_popup();
         self.sync_tray();

@@ -54,9 +54,9 @@ fn run_until_finished(
     }
 }
 
-#[test]
-fn successful_download_flows_through_the_manager() {
-    let dir = std::env::temp_dir().join(format!("yttraydl-e2e-{}", std::process::id()));
+fn run_success_scenario(tag: &str) -> (yttraydl::download::Job, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("yttraydl-e2e-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let out_file = dir.join("video.mp4");
     let script = format!(
@@ -83,7 +83,39 @@ fn successful_download_flows_through_the_manager() {
         Preset::Best,
         true,
     );
+    // Let the just-renamed script settle before exec: this VM's
+    // overlayfs has returned ETXTBSY ("Text file busy") for a
+    // freshly written+renamed file under parallel load — three
+    // flakes so far, always this test, always that error.
+    std::thread::sleep(Duration::from_millis(250));
     let job = run_until_finished(&mut manager, &settings, &bin);
+    (job, dir)
+}
+
+#[test]
+fn successful_download_flows_through_the_manager() {
+    // Retry ONLY the ETXTBSY harness artifact (see above); any
+    // other failure is a real assertion failure on first sight.
+    let mut job = None;
+    for attempt in 0..3 {
+        let (j, dir) = run_success_scenario(&attempt.to_string());
+        let etxtbsy = j
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("Text file busy"));
+        let out_file = dir.join("video.mp4");
+        if j.state == JobState::Done {
+            assert_eq!(j.percent, 100.0);
+            assert_eq!(j.final_file.as_deref(), Some(out_file.as_path()));
+            assert!(out_file.is_file());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        job = Some(j);
+        if !etxtbsy {
+            break;
+        }
+    }
+    let job = job.unwrap();
     assert_eq!(
         job.state,
         JobState::Done,
@@ -91,10 +123,6 @@ fn successful_download_flows_through_the_manager() {
         job.error,
         job.tail_lines
     );
-    assert_eq!(job.percent, 100.0);
-    assert_eq!(job.final_file.as_deref(), Some(out_file.as_path()));
-    assert!(out_file.is_file());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

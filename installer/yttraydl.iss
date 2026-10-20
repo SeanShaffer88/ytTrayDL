@@ -8,7 +8,7 @@
 ; portable build can keep using it.
 
 #ifndef AppVersion
-  #define AppVersion "0.2.2"
+  #define AppVersion "0.2.3"
 #endif
 #define AppName "ytTrayDL"
 #define AppPublisher "Sean Shaffer"

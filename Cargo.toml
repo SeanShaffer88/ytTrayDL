@@ -1,0 +1,59 @@
+[package]
+name = "yttraydl"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["Sean Shaffer"]
+description = "ytTrayDL — a quiet system-tray companion for yt-dlp. Copy a supported link and ytTrayDL offers to download it, or downloads it silently with your defaults."
+license = "MIT"
+repository = "https://github.com/SeanShaffer88/ytTrayDL"
+keywords = ["windows", "tray", "clipboard", "yt-dlp", "downloader"]
+categories = ["gui"]
+
+[lib]
+name = "yttraydl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "yttraydl"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+egui = { version = "0.33", default-features = false, features = ["default_fonts"] }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "accesskit"] }
+
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "x11"] }
+
+[target.'cfg(windows)'.dependencies]
+# The tray icon and native file dialogs are Windows-only surface in
+# v0.1: tray-icon's Linux backend needs system GTK libraries, and
+# this is a Windows product. Non-Windows builds still compile the
+# full library + GUI (panel/settings/downloads) for development.
+tray-icon = "0.21"
+rfd = "0.15"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

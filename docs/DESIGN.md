@@ -154,7 +154,7 @@ rules:
 | Info JSON parsing | Verified | Unit tests in `ytdlp.rs` |
 | Download manager queueing/cancel logic | Verified (logic) | Unit tests; process plumbing partially verified |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
-| First field report (2026-10-20) | Partially verified | v0.1.0 exe launched on a real PC "did nothing" — root cause: hidden-by-design first launch (panel only auto-opened when yt-dlp was missing) + Windows 11 tray overflow hiding the icon; process state unconfirmed by reporter. Fixed in 0.1.1 (panel on manual launch, `--background` for autostart, tray-failure fallback, diagnostic log + fatal-error dialog). Awaiting re-test with the log. |
+| First field report (2026-10-20) | Root cause CONFIRMED via the 0.1.1 diagnostic log | v0.1.0/0.1.1 exe "did nothing" on a real PC. The log captured a panic in wgpu 27.0.1 instance creation: "No wgpu backend feature that is implemented for the target platform was enabled" — the build enabled eframe's wgpu feature without any backend (DX12/Vulkan). The hidden-by-design first launch was a real design flaw but NOT the cause of this crash. Fixed in 0.1.2: glow (OpenGL) renderer via Cargo feature + pinned `Renderer::Glow`, plus catch_unwind around startup so any startup panic shows the error dialog. Awaiting re-test of 0.1.2 on the same machine. |
 | Clipboard listener on a real PC | **Unverified** | Needs an on-machine run (release gate) |
 | Tray menu / hide + relaunch recovery | **Unverified** | Needs an on-machine run |
 | Popup placement / DPI behaviour | **Unverified** | Needs an on-machine run |

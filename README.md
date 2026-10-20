@@ -10,7 +10,10 @@ downloads quietly in the background with your defaults while you keep working.
 
 ## How it works
 
-1. Run `yttraydl.exe`. It lives in the system tray (notification area).
+1. Run `yttraydl.exe`. The control panel opens; close it and the
+   app keeps running in the system tray (notification area). Only
+   Start-with-Windows launches skip the panel and go straight to
+   the tray.
 2. Copy a link — from a browser, a chat app, anywhere.
 3a. **Ask mode (default):** a small popup appears near the corner of your
     screen with the video's title, a quality selector, and Download /

@@ -30,7 +30,8 @@ fn main() -> eframe::Result<()> {
 
     let setup = platform::setup(show);
     yttraydl::diag_log(&format!(
-        "launch: background={background} show={show} already_running={}",
+        "launch: v{} background={background} show={show} already_running={}",
+        env!("CARGO_PKG_VERSION"),
         setup.already_running
     ));
     if setup.already_running {

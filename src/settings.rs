@@ -20,6 +20,48 @@ pub enum DefaultAction {
     AutoDownload,
 }
 
+/// What happens when the user closes the main (panel) window.
+/// Chosen in the close dialog (with a "remember" option) or in
+/// Settings → General. Auxiliary windows (Settings, Downloads…)
+/// always just close; this governs the main window only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseAction {
+    /// Ask every time (the dialog offers to remember a choice).
+    #[default]
+    Ask,
+    /// Quit ytTrayDL completely.
+    Exit,
+    /// Close the window; keep running with the tray icon visible.
+    Tray,
+    /// Minimize the window to the taskbar like a normal app.
+    Taskbar,
+    /// Close the window AND hide the tray icon; keep running in
+    /// the background. Ctrl+Alt+G, relaunching, or `--show`
+    /// brings everything back.
+    Hide,
+}
+
+impl CloseAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CloseAction::Ask => "Ask every time",
+            CloseAction::Exit => "Exit ytTrayDL",
+            CloseAction::Tray => "Minimize to tray",
+            CloseAction::Taskbar => "Minimize to taskbar",
+            CloseAction::Hide => "Hide entirely (background)",
+        }
+    }
+
+    pub const ALL: [CloseAction; 5] = [
+        CloseAction::Ask,
+        CloseAction::Exit,
+        CloseAction::Tray,
+        CloseAction::Taskbar,
+        CloseAction::Hide,
+    ];
+}
+
 /// Which URLs count as "supported".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -158,6 +200,10 @@ pub struct Settings {
     pub start_with_windows: bool,
     pub default_action: DefaultAction,
     pub detection_scope: DetectionScope,
+    /// What closing the main window does. `Ask` (the default) shows
+    /// the choice dialog with a "remember" option; the choice can
+    /// be changed later in Settings → General.
+    pub close_action: CloseAction,
 
     // --- Domain rules (host names, lowercase, no scheme) ---
     /// Matching URLs are never prompted or downloaded.
@@ -221,6 +267,7 @@ impl Default for Settings {
             start_with_windows: false,
             default_action: DefaultAction::Prompt,
             detection_scope: DetectionScope::KnownSitesOnly,
+            close_action: CloseAction::Ask,
             ignored_domains: Vec::new(),
             auto_domains: Vec::new(),
             allowed_domains: Vec::new(),
@@ -442,5 +489,23 @@ mod tests {
         assert!(domain_matches("youtube.com", "youtube.com"));
         assert!(!domain_matches("notyoutube.com", "youtube.com"));
         assert!(!domain_matches("youtube.com.evil.example", "youtube.com"));
+    }
+
+    #[test]
+    fn close_action_defaults_to_ask_and_roundtrips() {
+        // Default settings ask — never silently exit or hide.
+        assert_eq!(Settings::default().close_action, CloseAction::Ask);
+        // Old settings files (no close_action key) still load.
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.close_action, CloseAction::Ask);
+        for a in CloseAction::ALL {
+            let json = serde_json::to_string(&a).unwrap();
+            assert_eq!(serde_json::from_str::<CloseAction>(&json).unwrap(), a);
+        }
+        assert_eq!(
+            serde_json::to_string(&CloseAction::Hide).unwrap(),
+            "\"hide\""
+        );
+        assert_eq!(CloseAction::ALL.len(), 5);
     }
 }

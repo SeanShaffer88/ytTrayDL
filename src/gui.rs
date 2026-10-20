@@ -33,6 +33,8 @@ pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xF5, 0xF5, 0xF5);
 pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xA8, 0xA8, 0xA8);
 pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6E, 0x6E);
 pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0x4C, 0xC3, 0x6B);
+/// Width of the slide-out settings drawer (0.2.1).
+pub const SETTINGS_DRAWER_W: f32 = 530.0;
 
 /// Runtime-generated window/tray icon: white down-arrow on a black
 /// rounded square with a red outline (matches assets/icon.ico).
@@ -184,6 +186,11 @@ pub struct App {
 
     pub show_panel: bool,
     pub show_settings: bool,
+    /// Slide-out settings drawer animation, 0 = closed, 1 = open.
+    settings_anim: f32,
+    /// Main-window size while the drawer is closed — the base the
+    /// open animation grows from (tracks user resizes).
+    closed_size: egui::Vec2,
     pub show_downloads: bool,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
@@ -247,6 +254,8 @@ impl App {
             tray_failed: false,
             show_panel: false,
             show_settings: false,
+            settings_anim: 0.0,
+            closed_size: egui::vec2(400.0, 540.0),
             show_downloads: false,
             show_about: false,
             confirm_hide_icon: false,
@@ -464,6 +473,10 @@ impl App {
             t._tray.set_visible(false).ok();
         }
         self.settings_dirty = true;
+        // The settings drawer lives in the main window — it
+        // closes (instantly) when the window goes away.
+        self.show_settings = false;
+        self.settings_anim = 0.0;
         self.show_panel = false;
     }
 
@@ -853,7 +866,10 @@ impl App {
                     self.toast(format!("Could not open folder: {e}"), ToastKind::Error);
                 }
             } else if ev.id == ids.6 {
+                // Settings is a drawer in the main window now —
+                // opening it means showing the window too.
                 self.show_settings = true;
+                self.show_panel = true;
             } else if ev.id == ids.7 {
                 self.confirm_hide_icon = true;
             } else if ev.id == ids.8 {
@@ -906,10 +922,57 @@ impl eframe::App for App {
             }
         }
 
-        // Root viewport = the control panel.
+        // Settings drawer slide (0.2.1): animate 0<->1 over
+        // ~220 ms; while it moves, the window itself grows/shrinks
+        // by the drawer width so the panel never gets squeezed.
+        // Once settled, sizing is the user's again.
+        {
+            let target = if self.show_settings { 1.0 } else { 0.0 };
+            if (self.settings_anim - target).abs() > 0.0005 && self.show_panel {
+                let dt = ctx.input(|i| i.stable_dt).clamp(0.001, 0.1);
+                let step = dt / 0.22;
+                self.settings_anim = if target > self.settings_anim {
+                    (self.settings_anim + step).min(1.0)
+                } else {
+                    (self.settings_anim - step).max(0.0)
+                };
+                let e = 1.0 - (1.0 - self.settings_anim).powi(3); // ease-out cubic
+                let w = self.closed_size.x + SETTINGS_DRAWER_W * e;
+                let target_h = self.closed_size.y.max(580.0);
+                let h = self.closed_size.y + (target_h - self.closed_size.y) * e;
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+                ctx.request_repaint();
+            } else if self.settings_anim == 0.0 && self.show_panel {
+                // Fully closed: follow the user's window size as
+                // the base the next open-animation grows from.
+                if let Some(r) = ctx.input(|i| i.viewport().inner_rect) {
+                    self.closed_size = r.size();
+                }
+            }
+        }
+
+        // Root viewport = the control panel (+ settings drawer).
         if self.show_panel {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             egui::CentralPanel::default().show(ctx, |ui| {
+                if self.settings_anim > 0.001 {
+                    let e = 1.0 - (1.0 - self.settings_anim).powi(3);
+                    let resp = egui::SidePanel::right("settings-drawer")
+                        .exact_width(SETTINGS_DRAWER_W * e)
+                        .resizable(false)
+                        .frame(
+                            egui::Frame::NONE
+                                .fill(egui::Color32::from_rgb(0x0B, 0x0B, 0x0B))
+                                .inner_margin(egui::Margin::same(10)),
+                        )
+                        .show_inside(ui, |ui| {
+                            self.settings_drawer_ui(ui);
+                        });
+                    // Hairline on the drawer's left edge.
+                    let r = resp.response.rect;
+                    ui.painter()
+                        .vline(r.left(), r.y_range(), egui::Stroke::new(1.0_f32, HAIRLINE));
+                }
                 self.panel_ui(ui);
             });
             if ctx.input(|i| i.viewport().close_requested()) && !self.exit_requested {
@@ -922,7 +985,14 @@ impl eframe::App for App {
                 match self.settings.close_action {
                     CloseAction::Ask => self.confirm_close = true,
                     CloseAction::Exit => self.exit_requested = true,
-                    CloseAction::Tray => self.show_panel = false,
+                    CloseAction::Tray => {
+                        // The drawer lives in this window; it
+                        // closes with it (instantly — the window
+                        // is going away anyway).
+                        self.show_settings = false;
+                        self.settings_anim = 0.0;
+                        self.show_panel = false;
+                    }
                     CloseAction::Taskbar => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
                     }
@@ -936,7 +1006,6 @@ impl eframe::App for App {
         }
 
         self.popup_ui(ctx);
-        self.settings_ui(ctx);
         self.downloads_ui(ctx);
         self.toasts_ui(ctx);
         self.about_ui(ctx);

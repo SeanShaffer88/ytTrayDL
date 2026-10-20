@@ -157,6 +157,20 @@ pub fn current_clipboard_text() -> Option<String> {
     }
 }
 
+/// Show a fatal startup error the user can actually see. A tray
+/// app has no console, so without this a failed start looks like
+/// "double-clicking does nothing".
+pub fn fatal_error_box(title: &str, message: &str) {
+    #[cfg(windows)]
+    {
+        windows_impl::fatal_error_box(title, message)
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("{title}: {message}");
+    }
+}
+
 /// True when this process was asked (by a later launch) to show
 /// itself before `setup` ran — handled inside setup on Windows;
 /// always false elsewhere.

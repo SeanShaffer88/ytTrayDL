@@ -36,8 +36,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage, HWND_MESSAGE, MSG,
-    WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
+    MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage, HWND_MESSAGE,
+    MB_ICONERROR, MB_OK, MSG, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
 };
 
 const CF_UNICODETEXT: u32 = 13;
@@ -288,7 +288,9 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         }
         let result = if enabled {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let value = format!("\"{}\"", exe.display());
+            // `--background`: autostart goes straight to the tray;
+            // only manual launches open the control panel.
+            let value = format!("\"{}\" --background", exe.display());
             let bytes = wide(&value);
             let rc = RegSetValueExW(
                 hkey,
@@ -368,6 +370,17 @@ fn shell_execute(target: &str) -> Result<(), String> {
         } else {
             Err(format!("ShellExecute failed ({})", rc as isize))
         }
+    }
+}
+
+pub fn fatal_error_box(title: &str, message: &str) {
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            wide(message).as_ptr(),
+            wide(title).as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 

@@ -14,6 +14,25 @@
 //! - [`platform`] — Win32 clipboard listener, single-instance,
 //!   autostart, shell helpers (with non-Windows fallbacks).
 
+/// Append one line to the local diagnostic log
+/// (`<config dir>/yttraydl.log`). A tray app has no console, so
+/// startup milestones, panics and fatal errors land here — local
+/// only, never sent anywhere. Best-effort: logging never panics
+/// and never blocks the app.
+pub fn diag_log(message: &str) {
+    use std::io::Write;
+    let dir = settings::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let line = format!("[{}] {message}\n", history::now_unix());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("yttraydl.log"))
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 pub mod dedupe;
 pub mod download;
 pub mod history;

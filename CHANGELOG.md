@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.1 — 2026-10-20
+
+### Fixed
+
+- **First launch looked like nothing happened.** A manual launch
+  (double-click, Start menu) now opens the control panel so the
+  app is visibly alive. Only Start-with-Windows launches go
+  straight to the tray (the Run entry now passes `--background`).
+  Root cause of the field report: v0.1.0 started fully hidden and
+  only auto-opened the panel when yt-dlp was missing; with yt-dlp
+  present the only trace was a tray icon that Windows 11 tucks
+  into the hidden-icons overflow by default.
+- If tray-icon creation fails, the control panel opens instead of
+  leaving an invisible process.
+
+### Added
+
+- Local diagnostic log at `%APPDATA%\ytTrayDL\yttraydl.log`:
+  launch milestones, yt-dlp/ffmpeg detection, tray creation, and
+  panics are recorded (local only, never sent anywhere).
+- A fatal startup failure now shows an error dialog naming the
+  log file, instead of exiting silently.
+
 ## 0.1.0 — 2026-10-20
 
 > Renamed before first publication: the working title

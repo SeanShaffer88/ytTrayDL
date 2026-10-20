@@ -648,10 +648,14 @@ pub struct SettingsOutcome {
 }
 
 impl App {
-    pub fn settings_ui(&mut self, ctx: &egui::Context) {
-        if !self.show_settings {
-            return;
-        }
+    /// The settings drawer — rendered inside the main window
+    /// (right side panel), sliding out as the window grows; see
+    /// the animation in `App::update`. Until 0.2.1 this was a
+    /// separate window; SEAN asked for the slide-out instead.
+    /// Content lays out at a fixed width and is clipped to the
+    /// drawer's current width, so mid-slide it reads as a
+    /// physical drawer rather than reflowing text.
+    pub fn settings_drawer_ui(&mut self, ui: &mut egui::Ui) {
         let mut settings = std::mem::take(&mut self.settings);
         let mut rule_ignore = std::mem::take(&mut self.rule_input_ignore);
         let mut rule_auto = std::mem::take(&mut self.rule_input_auto);
@@ -659,7 +663,7 @@ impl App {
         let mut rule_url = std::mem::take(&mut self.rule_input_url);
         let mut tab = self.settings_tab;
         let mut reset_armed = self.reset_armed;
-        let mut open = true;
+        let mut close = false;
         let mut outcome = SettingsOutcome::default();
         let bin_info: Option<(String, String, String)> = self.bin.as_ref().map(|b| {
             (
@@ -674,71 +678,71 @@ impl App {
         let fetching_ffmpeg = self.ffmpeg_fetch_rx.is_some();
         let autostart_now = platform::Platform::autostart_enabled();
 
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("yttraydl-settings"),
-            egui::ViewportBuilder::default()
-                .with_title("ytTrayDL — Settings")
-                .with_inner_size([570.0, 590.0])
-                .with_min_inner_size([500.0, 430.0]),
-            |ctx, _class| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    open = false;
+        ui.set_clip_rect(ui.available_rect_before_wrap());
+        ui.set_min_width(SETTINGS_DRAWER_W - 28.0);
+        // Condensed layout (0.2.1): tighter row spacing than
+        // egui's default throughout the drawer.
+        ui.style_mut().spacing.item_spacing = egui::vec2(6.0, 3.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Settings").strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("✕")
+                    .on_hover_text("Close settings (the window shrinks back)")
+                    .clicked()
+                {
+                    close = true;
                 }
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        for (i, name) in ["General", "Downloads", "Domains & rules", "yt-dlp"]
-                            .iter()
-                            .enumerate()
-                        {
-                            if ui
-                                .selectable_label(tab == i, *name)
-                                .on_hover_text("Switch settings section")
-                                .clicked()
-                            {
-                                tab = i;
-                            }
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new("Settings save automatically")
-                                    .color(TEXT_FAINT)
-                                    .small(),
-                            );
-                        });
-                    });
-                    ui.separator();
-                    // Condensed layout (0.2.1): tighter row spacing
-                    // than egui's default throughout Settings.
-                    ui.style_mut().spacing.item_spacing = egui::vec2(6.0, 3.0);
-                    egui::ScrollArea::vertical().show(ui, |ui| match tab {
-                        0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
-                        1 => settings_downloads(ui, &mut settings, &mut outcome),
-                        2 => settings_domains(
-                            ui,
-                            &mut settings,
-                            &mut outcome,
-                            &mut rule_ignore,
-                            &mut rule_auto,
-                            &mut rule_allow,
-                            &mut rule_url,
-                        ),
-                        _ => settings_ytdlp(
-                            ui,
-                            &mut settings,
-                            &mut outcome,
-                            &bin_info,
-                            FfmpegUi {
-                                ok: ffmpeg_ok,
-                                managed: ffmpeg_managed,
-                                fetching: fetching_ffmpeg,
-                            },
-                            fetching,
-                            &mut reset_armed,
-                        ),
-                    });
-                });
-            },
-        );
+            });
+        });
+        ui.horizontal(|ui| {
+            for (i, name) in ["General", "Downloads", "Domains & rules", "yt-dlp"]
+                .iter()
+                .enumerate()
+            {
+                if ui
+                    .selectable_label(tab == i, *name)
+                    .on_hover_text("Switch settings section")
+                    .clicked()
+                {
+                    tab = i;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new("Settings save automatically")
+                        .color(TEXT_FAINT)
+                        .small(),
+                );
+            });
+        });
+        ui.separator();
+        egui::ScrollArea::vertical().show(ui, |ui| match tab {
+            0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
+            1 => settings_downloads(ui, &mut settings, &mut outcome),
+            2 => settings_domains(
+                ui,
+                &mut settings,
+                &mut outcome,
+                &mut rule_ignore,
+                &mut rule_auto,
+                &mut rule_allow,
+                &mut rule_url,
+            ),
+            _ => settings_ytdlp(
+                ui,
+                &mut settings,
+                &mut outcome,
+                &bin_info,
+                FfmpegUi {
+                    ok: ffmpeg_ok,
+                    managed: ffmpeg_managed,
+                    fetching: fetching_ffmpeg,
+                },
+                fetching,
+                &mut reset_armed,
+            ),
+        });
 
         self.settings = settings;
         self.rule_input_ignore = rule_ignore;
@@ -747,7 +751,9 @@ impl App {
         self.rule_input_url = rule_url;
         self.settings_tab = tab;
         self.reset_armed = reset_armed;
-        self.show_settings = open;
+        if close {
+            self.show_settings = false;
+        }
 
         if outcome.changed {
             self.settings_dirty = true;

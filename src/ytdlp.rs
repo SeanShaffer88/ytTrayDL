@@ -111,6 +111,53 @@ pub fn ffmpeg_available(settings: &Settings, exe_dir: Option<&std::path::Path>) 
 pub const YTDLP_WINDOWS_URL: &str =
     "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 
+/// Where the in-app ffmpeg install downloads from: the GyanD
+/// "essentials" build — the Windows build ffmpeg.org itself
+/// links to. The URL redirects to the current versioned package
+/// (a zip with `bin/ffmpeg.exe` + `bin/ffprobe.exe` inside a
+/// top-level folder). ~110 MB; static, no DLLs needed.
+pub const FFMPEG_WINDOWS_URL: &str =
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+
+/// Find ffmpeg.exe (+ ffprobe.exe when present) inside an
+/// extracted ffmpeg distribution tree. Handles the packaged
+/// layout (`<root>/bin/ffmpeg.exe`), the package nested one
+/// level down (`<root>/<package>/bin/ffmpeg.exe`), and a bare
+/// `ffmpeg.exe` sitting directly in the tree. Pure filesystem
+/// scan, depth-limited — unit-tested.
+pub fn find_ffmpeg_exes(
+    root: &std::path::Path,
+) -> Option<(std::path::PathBuf, Option<std::path::PathBuf>)> {
+    let exe_name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let probe_name = if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
+    // Candidates in preference order: root/bin, root/*/bin, root.
+    let mut bin_dirs: Vec<std::path::PathBuf> = vec![root.join("bin"), root.to_path_buf()];
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                bin_dirs.insert(1, p.join("bin"));
+            }
+        }
+    }
+    for dir in bin_dirs {
+        let ffmpeg = dir.join(exe_name);
+        if ffmpeg.is_file() {
+            let probe = dir.join(probe_name);
+            return Some((ffmpeg, probe.is_file().then_some(probe)));
+        }
+    }
+    None
+}
+
 /// Build the argument vector for a download (excluding argv[0]).
 /// Order matters to yt-dlp only in that later options can override
 /// earlier ones; user `extra_args` go last so they win.
@@ -209,9 +256,25 @@ pub fn build_download_args(
         }
     }
 
+    // Effective ffmpeg location: the user's explicit path wins;
+    // otherwise the managed copy (Settings' bin folder) is passed
+    // explicitly — a yt-dlp installed elsewhere would never look
+    // in ytTrayDL's folder on its own. When neither exists we pass
+    // nothing and yt-dlp falls back to its own search (beside
+    // itself, then PATH).
     if !settings.ffmpeg_path.as_os_str().is_empty() {
         args.push("--ffmpeg-location".into());
         args.push(settings.ffmpeg_path.to_string_lossy().to_string());
+    } else {
+        let managed = Settings::managed_bin_dir().join(if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        });
+        if managed.is_file() {
+            args.push("--ffmpeg-location".into());
+            args.push(managed.to_string_lossy().to_string());
+        }
     }
 
     let cookies = settings.cookies_from_browser.trim();
@@ -454,6 +517,45 @@ mod tests {
 
     fn settings() -> Settings {
         Settings::default()
+    }
+
+    #[test]
+    fn find_ffmpeg_exes_handles_packaged_layouts() {
+        let exe = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        let probe = if cfg!(windows) {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        };
+        let base = std::env::temp_dir().join(format!("yttraydl-ff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // Nothing there yet.
+        std::fs::create_dir_all(&base).unwrap();
+        assert!(find_ffmpeg_exes(&base).is_none());
+
+        // Packaged layout: <root>/<package>/bin/ffmpeg.exe (+probe).
+        let bin = base.join("ffmpeg-9.0-essentials_build").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(exe), b"x").unwrap();
+        let (found, found_probe) = find_ffmpeg_exes(&base).unwrap();
+        assert_eq!(found, bin.join(exe));
+        assert!(found_probe.is_none(), "no ffprobe in tree yet");
+        std::fs::write(bin.join(probe), b"x").unwrap();
+        let (_, found_probe) = find_ffmpeg_exes(&base).unwrap();
+        assert_eq!(found_probe, Some(bin.join(probe)));
+
+        // Bare layout: ffmpeg.exe directly in the root also works.
+        let bare = base.join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join(exe), b"x").unwrap();
+        assert_eq!(find_ffmpeg_exes(&bare).unwrap().0, bare.join(exe));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

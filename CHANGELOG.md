@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 — 2026-10-20
+
+- **Exit fixed (field report).** Tray-menu Exit appeared to do
+  nothing — the quit relied on the window stack unwinding after a
+  graceful close, and that handshake could stall invisibly. Exit
+  is now deterministic: running downloads are cancelled (their
+  yt-dlp children are killed), settings/history are saved, the
+  exit is written to the diagnostic log, and the process ends.
+  The close-choice logic also never intercepts a close while an
+  exit is already in progress.
+- **Installer build.** Releases now also ship
+  `ytTrayDL-Setup-v0.2.1-windows-x64.exe` (Inno Setup): per-user
+  install, Start-menu entry, optional desktop shortcut and
+  start-with-Windows, standard uninstaller that keeps your
+  `%APPDATA%\ytTrayDL` data. The portable zip remains available.
+- **Settings condensed.** Smaller window (570×590), tighter row
+  spacing, and the Notifications and Advanced sections are now
+  collapsible (collapsed by default).
+
 ## 0.2.0 — 2026-10-20
 
 ### Added

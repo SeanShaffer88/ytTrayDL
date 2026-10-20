@@ -21,7 +21,7 @@ use yttraydl::platform::{PlatformEvent, PlatformSetup};
 use yttraydl::rules::{decide, Decision};
 #[cfg(windows)]
 use yttraydl::settings::DefaultAction;
-use yttraydl::settings::{Preset, Settings};
+use yttraydl::settings::{CloseAction, Preset, Settings};
 use yttraydl::url_detect::{extract_urls, host_of};
 use yttraydl::ytdlp::{self, VideoInfo, YtDlpBinary};
 
@@ -187,6 +187,10 @@ pub struct App {
     pub show_downloads: bool,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
+    /// The "closing the window — what should happen?" dialog.
+    pub confirm_close: bool,
+    /// The dialog's "remember my choice" checkbox state.
+    pub close_remember: bool,
     settings_tab: usize,
     pub exit_requested: bool,
 
@@ -195,6 +199,7 @@ pub struct App {
     info_tx: Sender<InfoResult>,
     info_rx: Receiver<InfoResult>,
     ytdlp_fetch_rx: Option<Receiver<FetchResult>>,
+    ffmpeg_fetch_rx: Option<Receiver<FetchResult>>,
 
     pub toasts: Vec<Toast>,
     pub last_ignored: Vec<(String, String)>,
@@ -245,6 +250,8 @@ impl App {
             show_downloads: false,
             show_about: false,
             confirm_hide_icon: false,
+            confirm_close: false,
+            close_remember: false,
             settings_tab: 0,
             exit_requested: false,
             popup_queue: VecDeque::new(),
@@ -252,6 +259,7 @@ impl App {
             info_tx,
             info_rx,
             ytdlp_fetch_rx: None,
+            ffmpeg_fetch_rx: None,
             toasts: Vec::new(),
             last_ignored: Vec::new(),
             rule_input_ignore: String::new(),
@@ -431,6 +439,34 @@ impl App {
         self.toast("Downloading yt-dlp from GitHub…", ToastKind::Info);
     }
 
+    pub fn start_ffmpeg_download(&mut self) {
+        if self.ffmpeg_fetch_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ffmpeg_fetch_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(yttraydl::download_managed_ffmpeg());
+        });
+        self.toast("Downloading ffmpeg (about 110 MB)…", ToastKind::Info);
+    }
+
+    /// Hide EVERYTHING — panel and tray icon — while the app keeps
+    /// running in the background. Callers are responsible for
+    /// having explained recall first (the tray-menu confirm dialog,
+    /// or the close-choice dialog which spells it out inline).
+    /// Recall: relaunch the exe, Ctrl+Alt+G, or `--show`.
+    pub fn hide_entirely(&mut self) {
+        self.settings.tray_icon_visible = false;
+        self.tray_visible = false;
+        #[cfg(windows)]
+        if let Some(t) = &self.tray {
+            t._tray.set_visible(false).ok();
+        }
+        self.settings_dirty = true;
+        self.show_panel = false;
+    }
+
     // ---------- per-frame processing ----------
 
     fn process_platform_events(&mut self) {
@@ -562,6 +598,29 @@ impl App {
                     }
                     Err(e) => {
                         self.toast(format!("yt-dlp download failed: {e}"), ToastKind::Error);
+                    }
+                }
+            }
+        }
+    }
+
+    fn process_ffmpeg_fetch(&mut self) {
+        if let Some(rx) = &self.ffmpeg_fetch_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ffmpeg_fetch_rx = None;
+                match result {
+                    Ok(path) => {
+                        self.relocalize_binaries();
+                        self.toast(
+                            format!(
+                                "ffmpeg installed at {} — merging and MP3 conversion are available",
+                                path.display()
+                            ),
+                            ToastKind::Success,
+                        );
+                    }
+                    Err(e) => {
+                        self.toast(format!("ffmpeg download failed: {e}"), ToastKind::Error);
                     }
                 }
             }
@@ -833,6 +892,7 @@ impl eframe::App for App {
         self.process_info_results();
         self.process_download_events();
         self.process_ytdlp_fetch();
+        self.process_ffmpeg_fetch();
         self.process_tray_events();
         self.ensure_version();
         self.activate_next_popup();
@@ -852,7 +912,19 @@ impl eframe::App for App {
                 self.panel_ui(ui);
             });
             if ctx.input(|i| i.viewport().close_requested()) {
-                self.show_panel = false;
+                // Closing the main window is a choice, not a
+                // reflex: the user's saved CloseAction decides
+                // (Ask = show the choice dialog). See
+                // `close_choice_ui` in gui_windows.
+                match self.settings.close_action {
+                    CloseAction::Ask => self.confirm_close = true,
+                    CloseAction::Exit => self.exit_requested = true,
+                    CloseAction::Tray => self.show_panel = false,
+                    CloseAction::Taskbar => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
+                    }
+                    CloseAction::Hide => self.hide_entirely(),
+                }
             }
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -866,6 +938,7 @@ impl eframe::App for App {
         self.toasts_ui(ctx);
         self.about_ui(ctx);
         self.hide_icon_confirm_ui(ctx);
+        self.close_choice_ui(ctx);
 
         if self.settings_dirty {
             self.settings_dirty = false;

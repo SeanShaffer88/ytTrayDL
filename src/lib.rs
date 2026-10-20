@@ -65,6 +65,23 @@ pub fn fetch_info(
     ytdlp::parse_info_json(json_line).ok()
 }
 
+/// A command-line tool Windows ships in System32 (curl.exe and
+/// tar.exe both arrived with Windows 10 1803) — resolved to the
+/// full path when present, else the bare name for PATH lookup.
+fn bundled_tool(name: &str) -> std::path::PathBuf {
+    if cfg!(windows) {
+        let system32 = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+        let p = std::path::PathBuf::from(system32)
+            .join("System32")
+            .join(format!("{name}.exe"));
+        if p.is_file() {
+            return p;
+        }
+        return std::path::PathBuf::from(format!("{name}.exe"));
+    }
+    std::path::PathBuf::from(name)
+}
+
 /// Download the official standalone yt-dlp.exe into the managed bin
 /// folder using Windows' bundled curl.exe. Blocking; call on a
 /// worker thread. Only supported on Windows builds.
@@ -77,20 +94,7 @@ pub fn download_managed_ytdlp() -> Result<std::path::PathBuf, String> {
         "yt-dlp"
     });
     let tmp = dir.join("yt-dlp.download");
-    let curl = if cfg!(windows) {
-        // curl.exe ships in System32 on Windows 10 1803+ / Windows 11.
-        let system32 = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-        let p = std::path::PathBuf::from(system32)
-            .join("System32")
-            .join("curl.exe");
-        if p.is_file() {
-            p
-        } else {
-            std::path::PathBuf::from("curl.exe")
-        }
-    } else {
-        std::path::PathBuf::from("curl")
-    };
+    let curl = bundled_tool("curl");
     let status = std::process::Command::new(&curl)
         .args([
             "-L",
@@ -106,5 +110,75 @@ pub fn download_managed_ytdlp() -> Result<std::path::PathBuf, String> {
         return Err(format!("download failed (curl exit {status})"));
     }
     std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+    Ok(target)
+}
+
+/// Download the GyanD essentials ffmpeg build into the managed
+/// bin folder: bundled curl.exe fetches the zip, bundled tar.exe
+/// (bsdtar) unpacks it, and ffmpeg.exe + ffprobe.exe are moved
+/// into place. Blocking; call on a worker thread. Windows only.
+/// Returns the installed ffmpeg.exe path.
+pub fn download_managed_ffmpeg() -> Result<std::path::PathBuf, String> {
+    if !cfg!(windows) {
+        return Err("the in-app ffmpeg install is only supported on Windows".into());
+    }
+    let dir = settings::Settings::managed_bin_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let zip_path = dir.join("ffmpeg.download.zip");
+    let extract_dir = dir.join("ffmpeg-extract");
+    let _ = std::fs::remove_file(&zip_path);
+    let _ = std::fs::remove_dir_all(&extract_dir);
+
+    let curl = bundled_tool("curl");
+    let status = std::process::Command::new(&curl)
+        .args([
+            "-L",
+            "--fail",
+            "-o",
+            &zip_path.to_string_lossy(),
+            ytdlp::FFMPEG_WINDOWS_URL,
+        ])
+        .status()
+        .map_err(|e| format!("could not run curl: {e}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&zip_path);
+        return Err(format!("ffmpeg download failed (curl exit {status})"));
+    }
+
+    std::fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
+    let tar = bundled_tool("tar");
+    let status = std::process::Command::new(&tar)
+        .args([
+            "-xf",
+            &zip_path.to_string_lossy(),
+            "-C",
+            &extract_dir.to_string_lossy(),
+        ])
+        .status()
+        .map_err(|e| format!("could not run tar: {e}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&zip_path);
+        let _ = std::fs::remove_dir_all(&extract_dir);
+        return Err(format!(
+            "could not unpack the ffmpeg archive (tar exit {status})"
+        ));
+    }
+
+    let found = ytdlp::find_ffmpeg_exes(&extract_dir);
+    let (ffmpeg_src, probe_src) = match found {
+        Some(pair) => pair,
+        None => {
+            let _ = std::fs::remove_file(&zip_path);
+            let _ = std::fs::remove_dir_all(&extract_dir);
+            return Err("the downloaded archive did not contain ffmpeg.exe where expected".into());
+        }
+    };
+    let target = dir.join("ffmpeg.exe");
+    std::fs::rename(&ffmpeg_src, &target).map_err(|e| format!("installing ffmpeg.exe: {e}"))?;
+    if let Some(probe) = probe_src {
+        let _ = std::fs::rename(probe, dir.join("ffprobe.exe"));
+    }
+    let _ = std::fs::remove_file(&zip_path);
+    let _ = std::fs::remove_dir_all(&extract_dir);
     Ok(target)
 }

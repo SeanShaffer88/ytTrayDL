@@ -60,10 +60,22 @@ open the download folder, and more. Left-click opens the control panel.
 
 ## Quick start
 
-1. Download or build `yttraydl.exe` (see *Building*).
-2. Run it. If yt-dlp is missing, the panel opens with an **Install yt-dlp**
+Two ways to get it from the
+[Releases page](https://github.com/SeanShaffer88/ytTrayDL/releases):
+
+- **Installer** — `ytTrayDL-Setup-vX.Y.Z-windows-x64.exe`: per-user
+  install (no admin) to `%LOCALAPPDATA%\Programs\ytTrayDL`, with a
+  Start-menu entry, optional desktop shortcut and start-with-Windows,
+  and a standard uninstaller. Your settings/history in
+  `%APPDATA%\ytTrayDL` are kept on uninstall.
+- **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip`: unzip anywhere
+  and run `yttraydl.exe`. Nothing is installed.
+
+Then:
+
+1. Run it. If yt-dlp is missing, the panel opens with an **Install yt-dlp**
    button.
-3. Copy any supported link and try it.
+2. Copy any supported link and try it.
 
 Optional: enable **Start with Windows** in Settings (per-user, no admin
 needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button

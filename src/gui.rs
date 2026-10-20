@@ -979,9 +979,24 @@ impl eframe::App for App {
                 // Closing the main window is a choice, not a
                 // reflex: the user's saved CloseAction decides
                 // (Ask = show the choice dialog). See
-                // `close_choice_ui` in gui_windows. A close that
-                // arrives while an exit is already in progress is
-                // never intercepted.
+                // `close_choice_ui` in gui_windows.
+                //
+                // Field fix (0.2.2): an unanswered close request
+                // closes the window anyway — egui only holds it
+                // open when the app sends `CancelClose` in
+                // response. The 0.2.0/0.2.1 code reacted (opened
+                // the dialog, hid the panel…) but never vetoed,
+                // so the X button simply exited the app. Every
+                // non-exit action now vetoes first, then acts.
+                // (Exit is the one action that wants the close —
+                // and it ends the process itself, deterministically.)
+                let veto = matches!(
+                    self.settings.close_action,
+                    CloseAction::Ask | CloseAction::Tray | CloseAction::Taskbar | CloseAction::Hide
+                );
+                if veto {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
                 match self.settings.close_action {
                     CloseAction::Ask => self.confirm_close = true,
                     CloseAction::Exit => self.exit_requested = true,

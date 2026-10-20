@@ -1887,7 +1887,13 @@ impl App {
             }
             match action {
                 CloseAction::Exit => self.exit_requested = true,
-                CloseAction::Tray => self.show_panel = false,
+                CloseAction::Tray => {
+                    // Same as the X-button path: the drawer
+                    // closes with the window.
+                    self.show_settings = false;
+                    self.settings_anim = 0.0;
+                    self.show_panel = false;
+                }
                 CloseAction::Taskbar => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
                 }

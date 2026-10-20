@@ -182,10 +182,12 @@ impl App {
         ui.horizontal(|ui| {
             if ui
                 .button("⚙ Settings…")
-                .on_hover_text("All ytTrayDL settings")
+                .on_hover_text("Show/hide the settings drawer")
                 .clicked()
             {
-                self.show_settings = true;
+                // A toggle (SEAN, 0.2.2): the button slides the
+                // drawer out and slides it back in.
+                self.show_settings = !self.show_settings;
             }
             let active = self.downloads.active_count();
             let label = if active > 0 {

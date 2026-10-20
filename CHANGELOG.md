@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 — 2026-10-20
+
+### Added
+
+- **Install ffmpeg from inside the app** (SEAN's request). When
+  ffmpeg is missing, the control panel and Settings → yt-dlp offer
+  "⬇ Install ffmpeg": it downloads the GyanD essentials build
+  (the Windows build ffmpeg.org links to, ~110 MB) from gyan.dev
+  using Windows' bundled curl.exe, unpacks it with the bundled
+  tar.exe, and puts ffmpeg.exe + ffprobe.exe in
+  `%APPDATA%\ytTrayDL\bin` next to the managed yt-dlp. No new
+  dependencies were added. The managed ffmpeg is now also passed
+  to yt-dlp explicitly (`--ffmpeg-location`) when no custom path
+  is set, so an in-app install takes effect even when yt-dlp
+  itself lives elsewhere.
+- **Closing the main window asks what to do** (SEAN's request):
+  Exit / Minimize to tray / Minimize to taskbar / Hide entirely
+  (keeps running in the background; Ctrl+Alt+G, relaunching, or
+  `--show` brings it back). A "Remember my choice" checkbox in
+  the dialog — and the "When I close the main window" setting in
+  Settings → General — controls it; the default is to ask.
+
 ## 0.1.2 — 2026-10-20
 
 ### Fixed

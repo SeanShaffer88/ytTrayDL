@@ -58,6 +58,25 @@ open the download folder, and more. Left-click opens the control panel.
   PC except the requests yt-dlp itself makes. Settings live in
   `%APPDATA%\ytTrayDL`.
 
+## Screenshots
+
+The control panel — status, manual link downloads, recent activity:
+
+![Control panel](docs/screenshots/panel.png)
+
+The popup when a link is copied — title, uploader, duration, quality
+presets, and per-domain rules without opening the app:
+
+![Link detected popup](docs/screenshots/popup.png)
+
+Settings slide out from the side of the main window:
+
+![Settings drawer](docs/screenshots/settings.png)
+
+The Downloads window — queue, per-file progress, speed and ETA:
+
+![Downloads window](docs/screenshots/downloads.png)
+
 ## Quick start
 
 Two ways to get it from the

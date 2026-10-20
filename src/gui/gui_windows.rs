@@ -97,7 +97,22 @@ impl App {
                     if self.ffmpeg_ok {
                         ui.label(egui::RichText::new("ffmpeg found — merging and MP3 conversion available.").color(TEXT_DIM));
                     } else {
-                        ui.label(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail. Put ffmpeg.exe next to ytTrayDL or on PATH.").color(ACCENT));
+                        ui.label(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail.").color(ACCENT));
+                        ui.horizontal(|ui| {
+                            let busy = self.ffmpeg_fetch_rx.is_some();
+                            if ui
+                                .add_enabled(!busy, egui::Button::new(if busy { "Downloading…" } else { "⬇ Install ffmpeg" }))
+                                .on_hover_text("Download the GyanD essentials build (about 110 MB) from gyan.dev into %APPDATA%\\ytTrayDL\\bin — the same folder as the managed yt-dlp")
+                                .clicked()
+                            {
+                                self.start_ffmpeg_download();
+                            }
+                            ui.label(
+                                egui::RichText::new("or put ffmpeg.exe next to ytTrayDL or on PATH")
+                                    .small()
+                                    .color(TEXT_DIM),
+                            );
+                        });
                     }
                 }
                 None => {
@@ -622,6 +637,7 @@ pub struct SettingsOutcome {
     pub changed: bool,
     pub relocalize: bool,
     pub install_ytdlp: bool,
+    pub install_ffmpeg: bool,
     pub set_autostart: Option<bool>,
     pub confirm_hide_icon: bool,
     pub clear_history: bool,
@@ -653,7 +669,9 @@ impl App {
             )
         });
         let ffmpeg_ok = self.ffmpeg_ok;
+        let ffmpeg_managed = Settings::managed_bin_dir().join("ffmpeg.exe").is_file();
         let fetching = self.ytdlp_fetch_rx.is_some();
+        let fetching_ffmpeg = self.ffmpeg_fetch_rx.is_some();
         let autostart_now = platform::Platform::autostart_enabled();
 
         ctx.show_viewport_immediate(
@@ -706,7 +724,11 @@ impl App {
                             &mut settings,
                             &mut outcome,
                             &bin_info,
-                            ffmpeg_ok,
+                            FfmpegUi {
+                                ok: ffmpeg_ok,
+                                managed: ffmpeg_managed,
+                                fetching: fetching_ffmpeg,
+                            },
                             fetching,
                             &mut reset_armed,
                         ),
@@ -732,6 +754,9 @@ impl App {
         }
         if outcome.install_ytdlp {
             self.start_ytdlp_download();
+        }
+        if outcome.install_ffmpeg {
+            self.start_ffmpeg_download();
         }
         if let Some(target) = outcome.set_autostart {
             match platform::Platform::set_autostart(target) {
@@ -867,6 +892,22 @@ fn settings_general(
     {
         out.set_autostart = Some(autostart);
     }
+    ui.horizontal(|ui| {
+        ui.label("When I close the main window:")
+            .on_hover_text("What the window's X button does. 'Ask every time' shows a choice dialog with a remember option.");
+        let mut action = s.close_action;
+        egui::ComboBox::from_id_salt("close-action")
+            .selected_text(action.label())
+            .show_ui(ui, |ui| {
+                for a in CloseAction::ALL {
+                    ui.selectable_value(&mut action, a, a.label());
+                }
+            });
+        if action != s.close_action {
+            s.close_action = action;
+            out.changed = true;
+        }
+    });
     ui.horizontal(|ui| {
         ui.label("Popup position:");
         let mut pos = s.popup_position;
@@ -1206,12 +1247,20 @@ fn settings_domains(
     });
 }
 
+/// ffmpeg state for the yt-dlp settings tab (bundled so the
+/// tab function stays inside clippy's argument limit).
+pub struct FfmpegUi {
+    pub ok: bool,
+    pub managed: bool,
+    pub fetching: bool,
+}
+
 fn settings_ytdlp(
     ui: &mut egui::Ui,
     s: &mut Settings,
     out: &mut SettingsOutcome,
     bin_info: &Option<(String, String, String)>,
-    ffmpeg_ok: bool,
+    ffmpeg: FfmpegUi,
     fetching: bool,
     reset_armed: &mut bool,
 ) {
@@ -1268,12 +1317,28 @@ fn settings_ytdlp(
 
     ui.add_space(8.0);
     ui.label(egui::RichText::new("ffmpeg").strong());
-    ui.label(if ffmpeg_ok {
+    ui.label(if ffmpeg.ok {
         "Found — merging and MP3 conversion are available."
     } else {
-        "Not found — downloads that need merging (most best-quality) and MP3 conversion will fail. Install ffmpeg and put it on PATH, next to ytTrayDL, or choose it here."
+        "Not found — downloads that need merging (most best-quality) and MP3 conversion will fail. Install it here, put it on PATH, next to ytTrayDL, or choose it below."
     });
     ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                !ffmpeg.fetching,
+                egui::Button::new(if ffmpeg.fetching {
+                    "Downloading…"
+                } else if ffmpeg.managed {
+                    "Update ffmpeg (managed copy)"
+                } else {
+                    "⬇ Install ffmpeg"
+                }),
+            )
+            .on_hover_text("Downloads the GyanD essentials build (about 110 MB) from gyan.dev into %APPDATA%\\ytTrayDL\\bin and unpacks ffmpeg.exe + ffprobe.exe there")
+            .clicked()
+        {
+            out.install_ffmpeg = true;
+        }
         if ui
             .button("Choose ffmpeg.exe…")
             .on_hover_text("Point ytTrayDL at ffmpeg.exe")
@@ -1687,6 +1752,131 @@ impl App {
             self.confirm_hide_icon = false;
         } else if cancel || !open {
             self.confirm_hide_icon = false;
+        }
+    }
+
+    // ---------------- Close-window choice ----------------
+
+    /// Shown when the main window is closed and the saved
+    /// CloseAction is "Ask". Offers all four outcomes plus Cancel,
+    /// with a "remember my choice" checkbox; the choice can be
+    /// changed later in Settings → General.
+    pub fn close_choice_ui(&mut self, ctx: &egui::Context) {
+        if !self.confirm_close {
+            return;
+        }
+        let mut open = true;
+        let mut remember = self.close_remember;
+        let mut chosen: Option<CloseAction> = None;
+        let mut cancel = false;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("yttraydl-close-choice"),
+            egui::ViewportBuilder::default()
+                .with_title("Close ytTrayDL?")
+                .with_inner_size([470.0, 330.0])
+                .with_min_inner_size([470.0, 330.0])
+                .with_max_inner_size([470.0, 330.0])
+                .with_always_on_top(),
+            |ctx, _class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    open = false;
+                }
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "ytTrayDL keeps watching your clipboard unless you exit.",
+                        )
+                        .strong(),
+                    );
+                    ui.add_space(8.0);
+                    if ui
+                        .add(
+                            egui::Button::new("Exit ytTrayDL")
+                                .fill(ACCENT_DARK)
+                                .min_size(egui::vec2(200.0, 0.0)),
+                        )
+                        .on_hover_text("Quit completely — clipboard monitoring stops")
+                        .clicked()
+                    {
+                        chosen = Some(CloseAction::Exit);
+                    }
+                    ui.label(
+                        egui::RichText::new("Stops monitoring until you launch it again.")
+                            .small()
+                            .color(TEXT_DIM),
+                    );
+                    ui.add_space(4.0);
+                    if ui
+                        .button("Minimize to tray")
+                        .on_hover_text("Close the window; the tray icon stays for one-click reopening")
+                        .clicked()
+                    {
+                        chosen = Some(CloseAction::Tray);
+                    }
+                    ui.label(
+                        egui::RichText::new("Keeps running; reopen from the tray icon near the clock.")
+                            .small()
+                            .color(TEXT_DIM),
+                    );
+                    ui.add_space(4.0);
+                    if ui
+                        .button("Minimize to taskbar")
+                        .on_hover_text("Keep the window, minimized to the taskbar like a normal app")
+                        .clicked()
+                    {
+                        chosen = Some(CloseAction::Taskbar);
+                    }
+                    ui.label(
+                        egui::RichText::new("Keeps running; click its taskbar button to bring it back.")
+                            .small()
+                            .color(TEXT_DIM),
+                    );
+                    ui.add_space(4.0);
+                    if ui
+                        .button("Hide entirely — keep running in the background")
+                        .on_hover_text("No window, no tray icon. Ctrl+Alt+G or relaunching brings ytTrayDL back")
+                        .clicked()
+                    {
+                        chosen = Some(CloseAction::Hide);
+                    }
+                    ui.label(
+                        egui::RichText::new("No window and no tray icon. Bring it back any time with Ctrl+Alt+G, by launching ytTrayDL again, or with --show. Monitoring and downloads keep working.")
+                            .small()
+                            .color(TEXT_DIM),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut remember, "Remember my choice")
+                            .on_hover_text("Apply this choice every time the window closes. Change it later in Settings → General.");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Cancel").on_hover_text("Keep the window open").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+                });
+            },
+        );
+        self.close_remember = remember;
+        if cancel || !open {
+            self.confirm_close = false;
+            return;
+        }
+        if let Some(action) = chosen {
+            self.confirm_close = false;
+            if remember {
+                self.settings.close_action = action;
+                self.settings_dirty = true;
+            }
+            match action {
+                CloseAction::Exit => self.exit_requested = true,
+                CloseAction::Tray => self.show_panel = false,
+                CloseAction::Taskbar => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
+                }
+                CloseAction::Hide => self.hide_entirely(),
+                CloseAction::Ask => {}
+            }
         }
     }
 }

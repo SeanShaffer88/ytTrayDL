@@ -218,6 +218,16 @@ impl DownloadManager {
         }
     }
 
+    /// Cancel everything (app exit): queued jobs are dropped,
+    /// running jobs get their cancel flag — their workers kill
+    /// the yt-dlp child within ~120 ms.
+    pub fn cancel_all(&mut self) {
+        self.queue.clear();
+        for r in &self.running {
+            r.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
     pub fn active_count(&self) -> usize {
         self.queue.len() + self.running.len()
     }

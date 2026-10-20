@@ -859,6 +859,7 @@ impl App {
             } else if ev.id == ids.8 {
                 self.show_about = true;
             } else if ev.id == ids.9 {
+                yttraydl::diag_log("exit requested via tray menu");
                 self.exit_requested = true;
             }
         }
@@ -911,11 +912,13 @@ impl eframe::App for App {
             egui::CentralPanel::default().show(ctx, |ui| {
                 self.panel_ui(ui);
             });
-            if ctx.input(|i| i.viewport().close_requested()) {
+            if ctx.input(|i| i.viewport().close_requested()) && !self.exit_requested {
                 // Closing the main window is a choice, not a
                 // reflex: the user's saved CloseAction decides
                 // (Ask = show the choice dialog). See
-                // `close_choice_ui` in gui_windows.
+                // `close_choice_ui` in gui_windows. A close that
+                // arrives while an exit is already in progress is
+                // never intercepted.
                 match self.settings.close_action {
                     CloseAction::Ask => self.confirm_close = true,
                     CloseAction::Exit => self.exit_requested = true,
@@ -950,9 +953,22 @@ impl eframe::App for App {
         }
 
         if self.exit_requested {
+            // Deterministic exit. The graceful path (sending
+            // ViewportCommand::Close and waiting for the window
+            // stack to unwind) failed in the field — the tray
+            // Exit click appeared to do nothing. So: cancel any
+            // running downloads (workers kill their yt-dlp child
+            // within ~120 ms; give them a beat), persist state,
+            // log, and end the process. No handshake left to stall.
+            let active = self.downloads.active_count();
+            self.downloads.cancel_all();
+            if active > 0 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
             let _ = self.settings.save();
             let _ = self.history.save();
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            yttraydl::diag_log(&format!("exiting (active downloads cancelled: {active})"));
+            std::process::exit(0);
         }
 
         ctx.request_repaint_after(Duration::from_millis(200));

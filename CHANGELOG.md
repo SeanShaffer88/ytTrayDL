@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.3 — 2026-10-20
+
+- **Tray icon clicks behave the way Windows users expect**
+  (SEAN): a single left-click opens the window (and focuses
+  it); the menu appears on right-click only. Before, left-click
+  both toggled the window *and* popped the menu.
+- **Better field diagnostics for the exit reports.** The
+  diagnostic log now records the app version at launch and every
+  tray-menu click by name, so a click that "does nothing" can be
+  traced: either it reached the app (and the log shows it) or it
+  never arrived (stale instance / event problem). Note: if an
+  older ytTrayDL is still running, launching a newer copy just
+  wakes the old one — exit the old copy first (Task Manager if
+  its Exit won't respond) before judging the new build.
+
 ## 0.2.2 — 2026-10-20
 
 - **X button fixed (field report).** Clicking the main window's

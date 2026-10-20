@@ -16,13 +16,22 @@ use yttraydl::download::{DownloadEvent, DownloadManager, JobState};
 use yttraydl::settings::{Preset, Settings};
 
 fn write_fake_ytdlp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    // Write to a temp name, sync, then rename into place: executing
+    // a file that was just written in place can race the writer and
+    // fail with ETXTBSY ("Text file busy") under parallel load —
+    // this flaked the suite twice before the rename pattern.
+    let tmp = dir.join("fake-yt-dlp.tmp");
     let path = dir.join("fake-yt-dlp");
-    let mut f = std::fs::File::create(&path).unwrap();
-    writeln!(f, "#!/bin/sh").unwrap();
-    f.write_all(body.as_bytes()).unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    {
+        let mut f = std::fs::File::create(&tmp).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+    }
+    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
     perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
+    std::fs::set_permissions(&tmp, perms).unwrap();
+    std::fs::rename(&tmp, &path).unwrap();
     path
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "yttraydl"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.80"
 authors = ["Sean Shaffer"]
@@ -22,10 +22,17 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 egui = { version = "0.33", default-features = false, features = ["default_fonts"] }
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "accesskit"] }
+# Renderer: glow (OpenGL), deliberately NOT wgpu. The 0.1.0/0.1.1
+# builds shipped wgpu with no backend feature enabled, which
+# panicked at startup on a real Windows PC ("No wgpu backend
+# feature that is implemented for the target platform was
+# enabled") — a silent death for a console-less tray app. Glow
+# runs on effectively every Windows 10/11 machine and is more
+# than enough for this UI.
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
 
 [target.'cfg(not(windows))'.dependencies]
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "x11"] }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit", "x11"] }
 
 [target.'cfg(windows)'.dependencies]
 # The tray icon and native file dialogs are Windows-only surface in

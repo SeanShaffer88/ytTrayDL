@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 — 2026-10-20
+
+- **X button fixed (field report).** Clicking the main window's
+  X exited the app instead of showing the close-choice dialog:
+  the app reacted to the close request but never sent egui's
+  `CancelClose` veto, and an unanswered close request closes the
+  window anyway. (This bug was present since the dialog's
+  introduction in 0.2.0.) Every non-exit close action now vetoes
+  the close first, then acts — Ask shows the dialog, Tray /
+  Taskbar / Hide do what they say, Exit still quits.
+- **Settings button toggles.** The panel's ⚙ Settings button now
+  slides the drawer out *and* back in, instead of only opening.
+
 ## 0.2.1 — 2026-10-20
 
 - **Exit fixed (field report).** Tray-menu Exit appeared to do

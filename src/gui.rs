@@ -263,6 +263,18 @@ impl App {
             first_frame: true,
             open_panel_on_start: show_on_launch,
         };
+        yttraydl::diag_log(&format!(
+            "ui start: yt-dlp {} (source: {}), ffmpeg {}",
+            match &app.bin {
+                Some(b) => b.path.display().to_string(),
+                None => "not found".to_string(),
+            },
+            app.bin
+                .as_ref()
+                .map(|b| format!("{:?}", b.source))
+                .unwrap_or_else(|| "-".to_string()),
+            if app.ffmpeg_ok { "found" } else { "missing" },
+        ));
         if app.bin.is_none() {
             // First-run honesty: without yt-dlp nothing can download.
             // Open the panel so the one-click install is in front of
@@ -655,8 +667,12 @@ impl App {
 
         let icon = match tray_icon::Icon::from_rgba(app_icon_data().rgba, 64, 64) {
             Ok(i) => i,
-            Err(_) => {
+            Err(e) => {
+                yttraydl::diag_log(&format!("tray icon creation failed: {e}"));
                 self.tray_failed = true;
+                // Never strand the user with an invisible app:
+                // if the tray can't exist, the panel must.
+                self.show_panel = true;
                 return;
             }
         };
@@ -667,14 +683,14 @@ impl App {
             .build()
         {
             Ok(t) => t,
-            Err(_) => {
-                // No tray available (e.g. Linux dev build without an
-                // app-indicator host). The panel still works; tray
-                // features are Windows-verified functionality.
+            Err(e) => {
+                yttraydl::diag_log(&format!("tray creation failed: {e}"));
                 self.tray_failed = true;
+                self.show_panel = true;
                 return;
             }
         };
+        yttraydl::diag_log("tray created");
         if !self.tray_visible {
             tray.set_visible(false).ok();
         }

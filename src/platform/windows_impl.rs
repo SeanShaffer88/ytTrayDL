@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, GetClipboardData, GetClipboardSequenceNumber,
     OpenClipboard, RemoveClipboardFormatListener,
@@ -27,17 +27,19 @@ use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
-    INFINITE,
+    CreateEventW, CreateMutexW, GetCurrentProcessId, OpenEventW, SetEvent, WaitForSingleObject,
+    EVENT_MODIFY_STATE, INFINITE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage, HWND_MESSAGE,
-    MB_ICONERROR, MB_OK, MSG, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GetCursorPos,
+    GetMessageW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
+    PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, ShowWindow,
+    TranslateMessage, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG, SW_SHOW, WM_CLIPBOARDUPDATE,
+    WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
 };
 
 const CF_UNICODETEXT: u32 = 13;
@@ -343,6 +345,48 @@ pub fn autostart_enabled() -> bool {
         );
         RegCloseKey(hkey);
         rc == 0
+    }
+}
+
+/// Find this process's main window (title "ytTrayDL") and, if
+/// it is hidden, show + foreground it at the OS level. The
+/// tray-icon handler calls this directly (0.2.6): restoring
+/// the window must not wait for egui to schedule the frame
+/// that would process a queued "show" request.
+pub fn show_main_window() -> bool {
+    struct Search {
+        pid: u32,
+        found: HWND,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let search = &mut *(lparam as *mut Search);
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid != search.pid {
+                return 1; // keep enumerating
+            }
+            let mut buf = [0u16; 64];
+            let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if len > 0 && String::from_utf16_lossy(&buf[..len as usize]) == "ytTrayDL" {
+                search.found = hwnd;
+                return 0; // stop
+            }
+            1
+        }
+    }
+    unsafe {
+        let mut search = Search {
+            pid: GetCurrentProcessId(),
+            found: std::ptr::null_mut(),
+        };
+        let _ = EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
+        if search.found.is_null() || IsWindowVisible(search.found) != 0 {
+            return false;
+        }
+        ShowWindow(search.found, SW_SHOW);
+        SetForegroundWindow(search.found);
+        true
     }
 }
 

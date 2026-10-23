@@ -181,6 +181,10 @@ pub struct TrayHandles {
 enum TrayUiEvent {
     Icon(tray_icon::TrayIconEvent),
     Menu(tray_icon::menu::MenuEvent),
+    /// The handler toggled the main window's visibility at OS
+    /// level (0.2.8); the app adopts the result as its
+    /// `show_panel` state so the two never diverge.
+    WindowToggled(bool),
 }
 
 /// Sender half shared with the static event handlers; the
@@ -191,6 +195,12 @@ enum TrayUiEvent {
 /// `send` errors were being swallowed by `let _ =`.
 #[cfg(windows)]
 static TRAY_EVENT_TX: std::sync::Mutex<Option<Sender<TrayUiEvent>>> = std::sync::Mutex::new(None);
+
+/// Last tray left-click toggle time (0.2.8): Windows delivers
+/// a second Up event for a double-click, which must not
+/// toggle the window twice.
+#[cfg(windows)]
+static LAST_TRAY_TOGGLE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
 
 /// Tray-delivery diagnostic counters (0.2.6): handler sends
 /// vs app drains, so the log proves which leg is alive.
@@ -286,13 +296,27 @@ fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
     match name {
         "exit" => {
             yttraydl::diag_log("exit requested via tray menu (handler)");
-            // Drop the handles first: process::exit skips
-            // destructors, and an undropped tray icon would
-            // linger as a ghost in the notification area.
-            let taken = with_tray_handles_mut(|slot| slot.take());
-            drop(taken);
-            yttraydl::diag_log("exiting (tray menu, handler)");
-            std::process::exit(0);
+            // Route the exit through the app's graceful
+            // shutdown AND arm a forced fallback (0.2.8). Do
+            // NOT drop the tray handles here: this handler runs
+            // inside muda's menu dispatch, which holds a
+            // RefCell borrow on its menu state — dropping muda
+            // objects there panicked with "RefCell already
+            // borrowed" in the field (0.2.7 log) and aborted
+            // the process mid-exit. If the app's loop is
+            // healthy it exits gracefully (cancelling
+            // downloads, saving state) long before the
+            // fallback fires; if it is wedged, the fallback
+            // still guarantees the click works.
+            forward_tray_event(TrayUiEvent::Menu(tray_icon::menu::MenuEvent {
+                id: event.id.clone(),
+            }));
+            std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(750));
+                yttraydl::diag_log("exiting (tray menu, forced fallback)");
+                std::process::exit(0);
+            });
+            true
         }
         "monitoring toggle" => {
             let mut s = Settings::load();
@@ -971,17 +995,52 @@ impl App {
                     if matches!(event, tray_icon::TrayIconEvent::Click { .. }) {
                         yttraydl::diag_log(&format!("tray icon event (handler): {event:?}"));
                     }
-                    forward_tray_event(TrayUiEvent::Icon(event));
                     if is_left_up {
-                        // OS-level restore (0.2.6): show the
-                        // window directly instead of waiting for
-                        // the egui frame that would process the
-                        // queued "show" — that frame may be
-                        // exactly what's not running.
-                        let shown = platform::show_main_window();
-                        yttraydl::diag_log(&format!(
-                            "tray left-click: show_main_window -> {shown}"
-                        ));
+                        // Toggle the window (0.2.8): a single
+                        // left-click shows the window when it's
+                        // hidden and hides it when it's shown —
+                        // at OS level, in the handler, reading
+                        // the window's real visibility so the
+                        // toggle can never diverge from what the
+                        // user sees. The app is told the result
+                        // (WindowToggled) to adopt as its state.
+                        // A double-click delivers a second Up
+                        // within milliseconds — debounce it, or
+                        // the window would toggle twice and look
+                        // like nothing happened (seen in the
+                        // 0.2.7 field log).
+                        let now = Instant::now();
+                        let debounced = {
+                            let mut last = LAST_TRAY_TOGGLE.lock().unwrap();
+                            if last
+                                .is_some_and(|t| now.duration_since(t) < Duration::from_millis(350))
+                            {
+                                true
+                            } else {
+                                *last = Some(now);
+                                false
+                            }
+                        };
+                        if debounced {
+                            yttraydl::diag_log("tray left-click: toggle debounced (double-click)");
+                        } else {
+                            match platform::toggle_main_window() {
+                                Some(visible) => {
+                                    yttraydl::diag_log(&format!(
+                                        "tray left-click: toggle -> visible={visible}"
+                                    ));
+                                    forward_tray_event(TrayUiEvent::WindowToggled(visible));
+                                }
+                                None => {
+                                    yttraydl::diag_log(
+                                        "tray left-click: toggle -> window not found; forwarding",
+                                    );
+                                    forward_tray_event(TrayUiEvent::Icon(event));
+                                }
+                            }
+                        }
+                    } else {
+                        forward_tray_event(TrayUiEvent::Icon(event));
                     }
                     wake.request_repaint();
                 },
@@ -1141,6 +1200,17 @@ impl App {
                 match ev {
                     TrayUiEvent::Icon(e) => icon_events.push(e),
                     TrayUiEvent::Menu(e) => menu_events.push(e),
+                    TrayUiEvent::WindowToggled(visible) => {
+                        // Adopt the handler's OS-level toggle
+                        // (0.2.8) so app state and the real
+                        // window can never diverge.
+                        TRAY_DRAINED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.show_panel = visible;
+                        if visible {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        }
+                        yttraydl::diag_log(&format!("tray toggle adopted: panel={visible}"));
+                    }
                 }
             }
         }
@@ -1170,12 +1240,14 @@ impl App {
             }
         }
         for ev in menu_events {
-            // Since 0.2.7 only the actions that need live app
-            // state are forwarded here (exit, the toggles, open
-            // folder and hide icon execute in the handler —
-            // see handle_tray_menu_direct). This line is the
-            // consumption marker for the forwarded set.
-            let (item_name, id_download_clipboard, id_downloads, id_settings, id_about) =
+            // Forwarded here: the actions that need live app
+            // state, plus Exit — which the handler routes
+            // through this graceful path with a forced
+            // fallback if no pass ever runs (0.2.8; the
+            // toggles, open folder and hide icon execute fully
+            // in the handler — see handle_tray_menu_direct).
+            // This line is the consumption marker.
+            let (item_name, id_download_clipboard, id_downloads, id_settings, id_about, id_exit) =
                 match with_tray_handles(|t| {
                     (
                         tray_item_name(t, &ev.id),
@@ -1183,6 +1255,7 @@ impl App {
                         t.id_downloads.clone(),
                         t.id_settings.clone(),
                         t.id_about.clone(),
+                        t.id_exit.clone(),
                     )
                 }) {
                     Some(fields) => fields,
@@ -1214,6 +1287,13 @@ impl App {
             } else if ev.id == id_about {
                 self.show_about = true;
                 self.show_panel = true;
+            } else if ev.id == id_exit {
+                // Graceful half of the handler's exit route
+                // (0.2.8): the full shutdown below cancels
+                // downloads and saves state; the handler's
+                // forced fallback only fires if this never runs.
+                yttraydl::diag_log("exit requested via tray menu");
+                self.exit_requested = true;
             }
         }
     }

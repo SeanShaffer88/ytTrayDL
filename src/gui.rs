@@ -151,12 +151,16 @@ pub struct TrayHandles {
     monitoring: tray_icon::menu::CheckMenuItem,
     auto_mode: tray_icon::menu::CheckMenuItem,
     autostart: tray_icon::menu::CheckMenuItem,
+    /// Pause all / Resume all (one item; its label follows the
+    /// queue state — see `sync_tray`).
+    pause_all: tray_icon::menu::MenuItem,
     id_monitoring: tray_icon::menu::MenuId,
     id_auto: tray_icon::menu::MenuId,
     id_autostart: tray_icon::menu::MenuId,
     id_download_clipboard: tray_icon::menu::MenuId,
     id_downloads: tray_icon::menu::MenuId,
     id_open_folder: tray_icon::menu::MenuId,
+    id_pause_all: tray_icon::menu::MenuId,
     id_settings: tray_icon::menu::MenuId,
     id_hide_icon: tray_icon::menu::MenuId,
     id_about: tray_icon::menu::MenuId,
@@ -256,6 +260,8 @@ fn tray_item_name(t: &TrayHandles, id: &tray_icon::menu::MenuId) -> &'static str
         "downloads"
     } else if *id == t.id_open_folder {
         "open download folder"
+    } else if *id == t.id_pause_all {
+        "pause all downloads"
     } else if *id == t.id_settings {
         "settings"
     } else if *id == t.id_hide_icon {
@@ -444,6 +450,10 @@ pub struct App {
 
     tray_failed: bool,
     tray_visible: bool,
+    /// Whether the tray's pause-all item currently reads
+    /// "Resume all downloads" (kept in sync by `sync_tray`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    tray_pause_label_resume: bool,
     /// Receiving end of the handler-fed tray event channel
     /// (0.2.4); created by `ensure_tray` together with the
     /// handlers.
@@ -536,6 +546,7 @@ impl App {
             version_requested_for: None,
             version_rx: None,
             tray_failed: false,
+            tray_pause_label_resume: false,
             tray_event_rx: None,
             show_panel: false,
             show_settings: false,
@@ -646,6 +657,22 @@ impl App {
     fn pump_downloads(&mut self) {
         let bin = self.bin_path();
         self.downloads.pump(&self.settings, bin.as_deref());
+    }
+
+    /// Pause everything pausable, or — when nothing is active
+    /// but jobs are paused — resume everything. Used by the
+    /// tray item (Windows); the Downloads window has its own
+    /// separate Pause all / Resume all buttons.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn toggle_pause_all(&mut self) {
+        if self.downloads.active_count() > 0 {
+            self.downloads.pause_all();
+            yttraydl::diag_log("pause all downloads");
+        } else if self.downloads.has_paused() {
+            self.downloads.resume_all();
+            self.pump_downloads();
+            yttraydl::diag_log("resume all downloads");
+        }
     }
 
     /// Route a clipboard/manual URL through dedupe + the decision
@@ -821,6 +848,34 @@ impl App {
         for ev in events {
             if let DownloadEvent::Finished(job) = ev {
                 finished_any = true;
+                if job.state == JobState::Paused {
+                    // Not a finish: no history entry, no toast.
+                    // The pump below refills the freed slot.
+                    continue;
+                }
+                if job.state == JobState::Failed && job.attempts < self.settings.auto_retry_attempts
+                {
+                    // Auto-retry with the original preset; the
+                    // failure is not recorded as final yet.
+                    let next = job.attempts + 1;
+                    self.downloads.enqueue_with_attempts(
+                        job.url.clone(),
+                        job.title.clone(),
+                        job.preset,
+                        job.use_archive,
+                        next,
+                    );
+                    self.toast(
+                        format!(
+                            "Download failed — retrying (attempt {} of {}): {}",
+                            next + 1,
+                            self.settings.auto_retry_attempts + 1,
+                            job.title
+                        ),
+                        ToastKind::Info,
+                    );
+                    continue;
+                }
                 let (status, error) = match job.state {
                     JobState::Done => (HistoryStatus::Completed, None),
                     JobState::Cancelled => (HistoryStatus::Cancelled, None),
@@ -859,6 +914,14 @@ impl App {
                                 format!("Download finished: {}", job.title),
                                 ToastKind::Success,
                             );
+                        }
+                        if self.settings.open_folder_on_finish {
+                            let folder = job
+                                .final_file
+                                .as_ref()
+                                .and_then(|f| f.parent().map(|p| p.to_path_buf()))
+                                .unwrap_or_else(|| self.settings.download_folder.clone());
+                            let _ = yttraydl::platform::open_path(&folder);
                         }
                     }
                     JobState::Failed => {
@@ -1090,6 +1153,7 @@ impl App {
         let download_clipboard = MenuItem::new("Download from clipboard", true, None);
         let downloads = MenuItem::new("Downloads\u{2026}", true, None);
         let open_folder = MenuItem::new("Open download folder", true, None);
+        let pause_all = MenuItem::new("Pause all downloads", true, None);
         let settings_item = MenuItem::new("Settings\u{2026}", true, None);
         let autostart = CheckMenuItem::new(
             "Start with Windows",
@@ -1108,6 +1172,7 @@ impl App {
             download_clipboard.id().clone(),
             downloads.id().clone(),
             open_folder.id().clone(),
+            pause_all.id().clone(),
             settings_item.id().clone(),
             hide_icon.id().clone(),
             about.id().clone(),
@@ -1122,6 +1187,7 @@ impl App {
             &download_clipboard,
             &downloads,
             &open_folder,
+            &pause_all,
             &PredefinedMenuItem::separator(),
             &settings_item,
             &autostart,
@@ -1171,16 +1237,18 @@ impl App {
                 monitoring,
                 auto_mode,
                 autostart,
+                pause_all,
                 id_monitoring: ids.0,
                 id_auto: ids.1,
                 id_autostart: ids.2,
                 id_download_clipboard: ids.3,
                 id_downloads: ids.4,
                 id_open_folder: ids.5,
-                id_settings: ids.6,
-                id_hide_icon: ids.7,
-                id_about: ids.8,
-                id_exit: ids.9,
+                id_pause_all: ids.6,
+                id_settings: ids.7,
+                id_hide_icon: ids.8,
+                id_about: ids.9,
+                id_exit: ids.10,
             });
         });
     }
@@ -1247,20 +1315,28 @@ impl App {
             // toggles, open folder and hide icon execute fully
             // in the handler — see handle_tray_menu_direct).
             // This line is the consumption marker.
-            let (item_name, id_download_clipboard, id_downloads, id_settings, id_about, id_exit) =
-                match with_tray_handles(|t| {
-                    (
-                        tray_item_name(t, &ev.id),
-                        t.id_download_clipboard.clone(),
-                        t.id_downloads.clone(),
-                        t.id_settings.clone(),
-                        t.id_about.clone(),
-                        t.id_exit.clone(),
-                    )
-                }) {
-                    Some(fields) => fields,
-                    None => continue,
-                };
+            let (
+                item_name,
+                id_download_clipboard,
+                id_downloads,
+                id_settings,
+                id_about,
+                id_exit,
+                id_pause_all,
+            ) = match with_tray_handles(|t| {
+                (
+                    tray_item_name(t, &ev.id),
+                    t.id_download_clipboard.clone(),
+                    t.id_downloads.clone(),
+                    t.id_settings.clone(),
+                    t.id_about.clone(),
+                    t.id_exit.clone(),
+                    t.id_pause_all.clone(),
+                )
+            }) {
+                Some(fields) => fields,
+                None => continue,
+            };
             yttraydl::diag_log(&format!("tray menu click: {item_name}"));
             if ev.id == id_download_clipboard {
                 match platform::current_clipboard_text() {
@@ -1287,6 +1363,8 @@ impl App {
             } else if ev.id == id_about {
                 self.show_about = true;
                 self.show_panel = true;
+            } else if ev.id == id_pause_all {
+                self.toggle_pause_all();
             } else if ev.id == id_exit {
                 // Graceful half of the handler's exit route
                 // (0.2.8): the full shutdown below cancels
@@ -1300,6 +1378,19 @@ impl App {
 
     #[cfg(windows)]
     fn sync_tray(&mut self) {
+        // Pause-all label follows the queue state: it offers
+        // Resume only when nothing is active and jobs are paused.
+        let want_resume = self.downloads.active_count() == 0 && self.downloads.has_paused();
+        if want_resume != self.tray_pause_label_resume {
+            self.tray_pause_label_resume = want_resume;
+            with_tray_handles(|t| {
+                t.pause_all.set_text(if want_resume {
+                    "Resume all downloads"
+                } else {
+                    "Pause all downloads"
+                });
+            });
+        }
         with_tray_handles(|t| {
             t._tray.set_tooltip(Some(self.downloads.summary())).ok();
             t.monitoring.set_checked(self.settings.monitoring_enabled);

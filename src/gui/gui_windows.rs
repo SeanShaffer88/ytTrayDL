@@ -370,7 +370,10 @@ impl App {
         let Some(mut popup) = self.active_popup.take() else {
             return;
         };
-        let size = egui::vec2(400.0, 268.0);
+        let is_playlist = popup.info.as_ref().is_some_and(|i| i.is_playlist());
+        // Playlist links get an extra choice row, so the popup
+        // grows a little once the probe says "this is a playlist".
+        let size = egui::vec2(400.0, if is_playlist { 302.0 } else { 268.0 });
         let pos = match self.settings.popup_position {
             PopupPosition::BottomRight => bottom_right(ctx, size, 0.0),
             PopupPosition::TopRight => {
@@ -402,7 +405,6 @@ impl App {
         };
         let mut action = Action::None;
         let mut interacted = false;
-        let playlists_allowed = self.settings.allow_playlists;
         let bin_missing = self.bin.is_none();
         let custom_format = self.settings.custom_format.clone();
         let timeout_secs = self.settings.popup_timeout_secs;
@@ -446,8 +448,8 @@ impl App {
                             }
                             meta.push(popup.host.clone());
                             if info.is_playlist() {
-                                meta.push(if playlists_allowed {
-                                    "playlist".into()
+                                meta.push(if popup.playlist_all {
+                                    "whole playlist".into()
                                 } else {
                                     "playlist — first item only".into()
                                 });
@@ -517,6 +519,28 @@ impl App {
                     {
                         popup.always_auto_domain = always;
                         interacted = true;
+                    }
+
+                    if is_playlist {
+                        ui.horizontal(|ui| {
+                            ui.label("Playlist:");
+                            if ui
+                                .selectable_label(!popup.playlist_all, "Just this video")
+                                .on_hover_text("Download only the linked/first item")
+                                .clicked()
+                            {
+                                popup.playlist_all = false;
+                                interacted = true;
+                            }
+                            if ui
+                                .selectable_label(popup.playlist_all, "Whole playlist")
+                                .on_hover_text("Download every item in the playlist, one by one")
+                                .clicked()
+                            {
+                                popup.playlist_all = true;
+                                interacted = true;
+                            }
+                        });
                     }
 
                     ui.add_space(6.0);
@@ -595,7 +619,17 @@ impl App {
                     .as_ref()
                     .map(|i| i.display_title())
                     .unwrap_or_else(|| popup.url.clone());
-                self.start_download(&popup.url, &title, popup.preset, popup.already_downloaded);
+                if popup.info.as_ref().is_some_and(|i| i.is_playlist()) {
+                    self.start_download_pl(
+                        &popup.url,
+                        &title,
+                        popup.preset,
+                        popup.already_downloaded,
+                        Some(popup.playlist_all),
+                    );
+                } else {
+                    self.start_download(&popup.url, &title, popup.preset, popup.already_downloaded);
+                }
             }
             Action::IgnoreUrl => {
                 self.settings.ignored_urls.push(popup.url.clone());
@@ -659,6 +693,9 @@ pub struct SettingsOutcome {
     pub open_config_dir: bool,
     pub pick_ytdlp: bool,
     pub pick_ffmpeg: bool,
+    pub check_ytdlp_update: bool,
+    pub export_settings: bool,
+    pub import_settings: bool,
 }
 
 impl App {
@@ -675,6 +712,8 @@ impl App {
         let mut rule_auto = std::mem::take(&mut self.rule_input_auto);
         let mut rule_allow = std::mem::take(&mut self.rule_input_allow);
         let mut rule_url = std::mem::take(&mut self.rule_input_url);
+        let mut rule_preset_domain = std::mem::take(&mut self.rule_input_preset_domain);
+        let mut rule_preset_choice = self.rule_preset_choice;
         let mut tab = self.settings_tab;
         let mut reset_armed = self.reset_armed;
         let mut close = false;
@@ -742,16 +781,21 @@ impl App {
                 &mut rule_auto,
                 &mut rule_allow,
                 &mut rule_url,
+                &mut rule_preset_domain,
+                &mut rule_preset_choice,
             ),
             _ => settings_ytdlp(
                 ui,
                 &mut settings,
                 &mut outcome,
                 &bin_info,
-                FfmpegUi {
-                    ok: ffmpeg_ok,
-                    managed: ffmpeg_managed,
-                    fetching: fetching_ffmpeg,
+                ToolsUi {
+                    ffmpeg_ok,
+                    ffmpeg_managed,
+                    ffmpeg_fetching: fetching_ffmpeg,
+                    update_checking: self.ytdlp_check_rx.is_some(),
+                    latest: self.ytdlp_latest.clone(),
+                    current_version: self.ytdlp_version.clone(),
                 },
                 fetching,
                 &mut reset_armed,
@@ -763,6 +807,8 @@ impl App {
         self.rule_input_auto = rule_auto;
         self.rule_input_allow = rule_allow;
         self.rule_input_url = rule_url;
+        self.rule_input_preset_domain = rule_preset_domain;
+        self.rule_preset_choice = rule_preset_choice;
         self.settings_tab = tab;
         self.reset_armed = reset_armed;
         if close {
@@ -828,6 +874,54 @@ impl App {
                 self.settings.ffmpeg_path = f;
                 self.settings_dirty = true;
                 self.relocalize_binaries();
+            }
+        }
+        if outcome.check_ytdlp_update {
+            self.start_ytdlp_update_check();
+        }
+        if outcome.export_settings {
+            if let Some(path) = pick_save_json("yttraydl-settings.json") {
+                match serde_json::to_string_pretty(&self.settings) {
+                    Ok(text) => match std::fs::write(&path, text) {
+                        Ok(()) => {
+                            self.toast("Settings exported.", ToastKind::Success);
+                        }
+                        Err(e) => {
+                            self.toast(
+                                format!("Could not write the settings file: {e}"),
+                                ToastKind::Error,
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        self.toast(format!("Export failed: {e}"), ToastKind::Error);
+                    }
+                }
+            }
+        }
+        if outcome.import_settings {
+            if let Some(path) = pick_file("JSON settings", "json") {
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => match Settings::from_json(&text) {
+                        Ok(new_settings) => {
+                            self.settings = new_settings;
+                            self.settings_dirty = true;
+                            let _ =
+                                platform::Platform::set_autostart(self.settings.start_with_windows);
+                            self.relocalize_binaries();
+                            self.toast(
+                                "Settings imported — they apply now and are saved.",
+                                ToastKind::Success,
+                            );
+                        }
+                        Err(e) => {
+                            self.toast(format!("Import failed: {e}"), ToastKind::Error);
+                        }
+                    },
+                    Err(e) => {
+                        self.toast(format!("Could not read that file: {e}"), ToastKind::Error);
+                    }
+                }
             }
         }
     }
@@ -1008,6 +1102,16 @@ fn settings_general(
             {
                 out.changed = true;
             }
+            if ui
+                .checkbox(
+                    &mut s.sound_on_finish,
+                    "Play a sound when a download finishes",
+                )
+                .on_hover_text("The standard Windows notification sound. Off by default.")
+                .changed()
+            {
+                out.changed = true;
+            }
         });
 }
 
@@ -1127,7 +1231,10 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             }
         });
     }
-    if ui.checkbox(&mut s.allow_playlists, "Download whole playlists").on_hover_text("Off (default): a playlist link downloads just the linked/first item. On: the entire playlist, item by item.").changed() {
+    if ui.checkbox(&mut s.allow_playlists, "Download whole playlists").on_hover_text("Off (default): a playlist link downloads just the linked/first item. On: the entire playlist, item by item. Either way, the popup lets you choose per download.").changed() {
+        out.changed = true;
+    }
+    if ui.checkbox(&mut s.sponsorblock_remove, "Remove sponsored segments (SponsorBlock)").on_hover_text("yt-dlp cuts SponsorBlock-marked segments — sponsors, self-promos, interaction reminders — out of the downloaded file. Needs ffmpeg.").changed() {
         out.changed = true;
     }
     if ui.checkbox(&mut s.skip_already_downloaded, "Skip videos already downloaded before").on_hover_text("Uses a yt-dlp download archive stored with your ytTrayDL settings, so re-copying an old link doesn't fetch it twice").changed() {
@@ -1188,8 +1295,51 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
     });
     ui.horizontal(|ui| {
         ui.label("Cookies from browser:");
-        if ui.add(egui::TextEdit::singleline(&mut s.cookies_from_browser).desired_width(140.0).hint_text("chrome / firefox / edge…")).on_hover_text("For members-only or age-restricted videos you're signed in to. yt-dlp reads the browser's cookies at download time; ytTrayDL never sees or stores them. Leave empty for none.").changed() {
+        const COOKIE_BROWSERS: [(&str, &str); 8] = [
+            ("", "Off"),
+            ("chrome", "Chrome"),
+            ("edge", "Edge"),
+            ("firefox", "Firefox"),
+            ("brave", "Brave"),
+            ("opera", "Opera"),
+            ("vivaldi", "Vivaldi"),
+            ("chromium", "Chromium"),
+        ];
+        let current = s.cookies_from_browser.trim().to_lowercase();
+        let known = COOKIE_BROWSERS.iter().any(|(v, _)| *v == current);
+        let selected_label = if !known {
+            "Custom…"
+        } else {
+            COOKIE_BROWSERS
+                .iter()
+                .find(|(v, _)| *v == current)
+                .map(|(_, l)| *l)
+                .unwrap_or("Off")
+        };
+        let mut picked: Option<String> = None;
+        egui::ComboBox::from_id_salt("cookies-browser")
+            .selected_text(selected_label)
+            .show_ui(ui, |ui| {
+                for (v, l) in COOKIE_BROWSERS {
+                    if ui
+                        .selectable_label(current == v, l)
+                        .on_hover_text("For members-only or age-restricted videos you're signed in to. yt-dlp reads the browser's cookies at download time; ytTrayDL never sees or stores them.")
+                        .clicked()
+                    {
+                        picked = Some(v.to_string());
+                    }
+                }
+            });
+        if let Some(v) = picked {
+            s.cookies_from_browser = v;
             out.changed = true;
+        }
+        if !known {
+            // A value outside the preset list (typed in an older
+            // version or by hand): keep it editable as raw text.
+            if ui.add(egui::TextEdit::singleline(&mut s.cookies_from_browser).desired_width(120.0)).on_hover_text("Custom --cookies-from-browser value").changed() {
+                out.changed = true;
+            }
         }
     });
         });
@@ -1243,6 +1393,7 @@ fn domain_list_editor(
     ui.add_space(6.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn settings_domains(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -1251,6 +1402,8 @@ fn settings_domains(
     rule_auto: &mut String,
     rule_allow: &mut String,
     rule_url: &mut String,
+    rule_preset_domain: &mut String,
+    rule_preset_choice: &mut Preset,
 ) {
     ui.label(egui::RichText::new("Rules are checked in this order: ignored links → ignored domains → already-downloaded → scope → auto-download domains → your default action.").color(TEXT_DIM).small());
     ui.add_space(6.0);
@@ -1273,6 +1426,67 @@ fn settings_domains(
         out,
     );
     domain_list_editor(ui, "allow", "✓ Allowed domains — count as supported", "Extra domains treated as supported sites (also the only sites that count under 'Only my allow list' scope).", &mut s.allowed_domains, rule_allow, out);
+
+    // Per-domain quality pins.
+    ui.label(egui::RichText::new("🎚 Quality by domain").strong());
+    ui.label(
+        egui::RichText::new("Links from these domains start with the pinned quality instead of your global default — in the popup (you can still change it there) and in auto-downloads.")
+            .color(TEXT_DIM)
+            .small(),
+    );
+    let mut remove_preset: Option<String> = None;
+    for dp in s.domain_presets.iter() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(dp.domain.clone()).monospace());
+            ui.label(egui::RichText::new(format!("→ {}", dp.preset.label())).color(TEXT_DIM));
+            if ui
+                .small_button("✕")
+                .on_hover_text("Remove this quality pin")
+                .clicked()
+            {
+                remove_preset = Some(dp.domain.clone());
+            }
+        });
+    }
+    if let Some(d) = remove_preset {
+        s.domain_presets.retain(|dp| dp.domain != d);
+        out.changed = true;
+    }
+    ui.horizontal(|ui| {
+        let resp = ui
+            .add(
+                egui::TextEdit::singleline(rule_preset_domain)
+                    .hint_text("example.com")
+                    .desired_width(160.0),
+            )
+            .on_hover_text("Domain to pin — subdomains included, like the other rules");
+        egui::ComboBox::from_id_salt("domain-preset-choice")
+            .selected_text(rule_preset_choice.label())
+            .show_ui(ui, |ui| {
+                for p in Preset::ALL {
+                    ui.selectable_value(rule_preset_choice, p, p.label());
+                }
+            });
+        let add = ui
+            .button("Add")
+            .on_hover_text("Pin this quality for the domain")
+            .clicked();
+        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (add || enter) && !rule_preset_domain.trim().is_empty() {
+            let d = yttraydl::settings::normalize_domain(rule_preset_domain);
+            if !d.is_empty() {
+                s.domain_presets.retain(|dp| dp.domain != d);
+                s.domain_presets.push(yttraydl::settings::DomainPreset {
+                    domain: d,
+                    preset: *rule_preset_choice,
+                });
+                s.domain_presets.sort_by(|a, b| a.domain.cmp(&b.domain));
+                out.changed = true;
+            }
+            rule_preset_domain.clear();
+        }
+    });
+    ui.add_space(6.0);
 
     ui.label(egui::RichText::new("🚫 Ignored links").strong());
     ui.label(
@@ -1320,12 +1534,18 @@ fn settings_domains(
     });
 }
 
-/// ffmpeg state for the yt-dlp settings tab (bundled so the
+/// Tool state for the yt-dlp settings tab (bundled so the
 /// tab function stays inside clippy's argument limit).
-pub struct FfmpegUi {
-    pub ok: bool,
-    pub managed: bool,
-    pub fetching: bool,
+pub struct ToolsUi {
+    pub ffmpeg_ok: bool,
+    pub ffmpeg_managed: bool,
+    pub ffmpeg_fetching: bool,
+    /// An update check is in flight.
+    pub update_checking: bool,
+    /// Result of the last update check: the latest release tag.
+    pub latest: Option<Result<String, String>>,
+    /// Version of the yt-dlp copy currently in use, if known.
+    pub current_version: Option<String>,
 }
 
 fn settings_ytdlp(
@@ -1333,7 +1553,7 @@ fn settings_ytdlp(
     s: &mut Settings,
     out: &mut SettingsOutcome,
     bin_info: &Option<(String, String, String)>,
-    ffmpeg: FfmpegUi,
+    tools: ToolsUi,
     fetching: bool,
     reset_armed: &mut bool,
 ) {
@@ -1387,10 +1607,58 @@ fn settings_ytdlp(
             }
         });
     }
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                !tools.update_checking,
+                egui::Button::new(if tools.update_checking {
+                    "Checking…"
+                } else {
+                    "Check for yt-dlp updates"
+                }),
+            )
+            .on_hover_text("Asks GitHub for the newest yt-dlp release and compares it with the copy ytTrayDL is using. Runs only when you click — ytTrayDL never phones home on its own.")
+            .clicked()
+        {
+            out.check_ytdlp_update = true;
+        }
+        match &tools.latest {
+            Some(Ok(tag)) => {
+                let current = tools.current_version.as_deref().unwrap_or("");
+                if current == tag.as_str() {
+                    ui.label(
+                        egui::RichText::new("You're on the latest version.")
+                            .color(TEXT_DIM)
+                            .small(),
+                    );
+                } else if current.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("Latest release: {tag}"))
+                            .color(TEXT_DIM)
+                            .small(),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!("Newer yt-dlp available: {tag}"))
+                            .color(ACCENT)
+                            .small(),
+                    );
+                }
+            }
+            Some(Err(e)) => {
+                ui.label(
+                    egui::RichText::new(format!("Update check failed: {e}"))
+                        .color(ACCENT)
+                        .small(),
+                );
+            }
+            None => {}
+        }
+    });
 
     ui.add_space(8.0);
     ui.label(egui::RichText::new("ffmpeg").strong());
-    ui.label(if ffmpeg.ok {
+    ui.label(if tools.ffmpeg_ok {
         "Found — merging and MP3 conversion are available."
     } else {
         "Not found — downloads that need merging (most best-quality) and MP3 conversion will fail. Install it here, put it on PATH, next to ytTrayDL, or choose it below."
@@ -1398,10 +1666,10 @@ fn settings_ytdlp(
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
-                !ffmpeg.fetching,
-                egui::Button::new(if ffmpeg.fetching {
+                !tools.ffmpeg_fetching,
+                egui::Button::new(if tools.ffmpeg_fetching {
                     "Downloading…"
-                } else if ffmpeg.managed {
+                } else if tools.ffmpeg_managed {
                     "Update ffmpeg (managed copy)"
                 } else {
                     "⬇ Install ffmpeg"
@@ -1447,6 +1715,22 @@ fn settings_ytdlp(
             .clicked()
         {
             out.clear_history = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui
+            .button("Export settings…")
+            .on_hover_text("Save all settings — including domain rules and quality pins — to a JSON file you can keep or move to another PC")
+            .clicked()
+        {
+            out.export_settings = true;
+        }
+        if ui
+            .button("Import settings…")
+            .on_hover_text("Replace all current settings with the contents of an exported settings file")
+            .clicked()
+        {
+            out.import_settings = true;
         }
     });
 

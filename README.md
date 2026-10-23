@@ -8,6 +8,15 @@ downloads quietly in the background with your defaults while you keep working.
 
 ![ytTrayDL icon](assets/icon.png)
 
+## TL;DR
+
+ytTrayDL watches your clipboard for video links and downloads them
+with yt-dlp: it asks first (a popup with a quality choice) or
+downloads silently with your defaults — your rules per site, no
+duplicates, nothing leaves your PC. Free and open source (MIT),
+for Windows 10/11, in 64-bit and 32-bit builds, as an installer
+or a portable zip.
+
 ## How it works
 
 1. Run `yttraydl.exe`. The control panel opens; close it and the
@@ -23,7 +32,8 @@ downloads quietly in the background with your defaults while you keep working.
     (and failures are always reported, never silent).
 
 Right-click the tray icon to pause monitoring, switch modes, open Settings,
-open the download folder, and more. Left-click opens the control panel.
+open the download folder, and more. Left-click toggles the control panel —
+click once to show it, click again to hide it.
 
 ## Highlights
 
@@ -126,6 +136,7 @@ Settings, start-with-Windows, hide icon, About, Exit.
 | Argument | Effect |
 | --- | --- |
 | `yttraydl.exe --show` (or `--settings`) | If already running: restore the tray icon and open Settings. If not running: start with the panel open. |
+| `yttraydl.exe --background` | Start in the tray without opening the panel (used by Start-with-Windows). |
 | `yttraydl.exe https://…` | Treat the URL like a copied link (opens the download popup). |
 
 ## Building
@@ -136,8 +147,8 @@ fully unit-tested; the tray/Win32 parts compile for Windows.
 
 ```powershell
 cargo build --release          # produces target\release\yttraydl.exe
-cargo test                     # library tests
-cargo clippy --all-targets     # lint gate (also run for the Windows target in CI)
+cargo test                     # full test suite (unit + end-to-end)
+cargo clippy --all-targets     # lint gate (CI also lints/checks both Windows targets, x86_64 and i686)
 ```
 
 Windows 10 and 11 are the target platforms. A release is a single
@@ -146,13 +157,18 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.1.0. The core library is covered by unit tests and the whole crate
+v0.2.8. The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
-for `x86_64-pc-windows-msvc` in CI. Runtime behaviour on a real Windows
-machine (tray interaction, clipboard listener, popup placement) is the
-release gate and is tracked in [docs/DESIGN.md](docs/DESIGN.md#verification-matrix)
-with Verified / Partially verified / Unverified labels — nothing is
-claimed as runtime-verified until it has run on a real PC.
+and linted for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
+in CI. Runtime behaviour on a real Windows machine is tracked in
+[docs/DESIGN.md](docs/DESIGN.md#verification-matrix) with Verified /
+Partially verified / Unverified labels — nothing is claimed as
+runtime-verified until it has run on a real PC. Current state: the
+tray menu and its actions are verified on a real PC (v0.2.7 field
+test, October 2026), and the v0.2.8 left-click toggle builds on the
+same verified mechanism; the installer, the in-app ffmpeg install,
+the close-choice dialog, and an end-to-end download still await a
+full on-machine pass.
 
 ## License
 

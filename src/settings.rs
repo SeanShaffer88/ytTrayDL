@@ -175,6 +175,15 @@ impl Container {
     }
 }
 
+/// A per-domain quality pin (Settings → Domains & rules).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DomainPreset {
+    /// Bare lowercase host (see `normalize_domain`); matches
+    /// subdomains like every other domain rule.
+    pub domain: String,
+    pub preset: Preset,
+}
+
 /// Where the download popup appears.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -218,6 +227,10 @@ pub struct Settings {
     pub allowed_domains: Vec<String>,
     /// Specific URLs the user chose to never be asked about again.
     pub ignored_urls: Vec<String>,
+    /// Per-domain quality pins: links from these domains use the
+    /// pinned preset instead of the global default (the popup
+    /// still lets the user change it per download).
+    pub domain_presets: Vec<DomainPreset>,
 
     // --- Deduplication ---
     /// Re-copying the same URL within this window does not re-trigger.
@@ -244,6 +257,10 @@ pub struct Settings {
     /// Automatically retry a failed download this many times
     /// (with its original preset) before giving up. 0 = off.
     pub auto_retry_attempts: u32,
+    /// Remove SponsorBlock-marked segments (sponsor, self-promo,
+    /// interaction reminders…) from downloads via yt-dlp's
+    /// `--sponsorblock-remove all`. Needs ffmpeg.
+    pub sponsorblock_remove: bool,
     /// Extra yt-dlp arguments, split like a command line. Power-user
     /// escape hatch, shown verbatim in Settings.
     pub extra_args: String,
@@ -259,6 +276,9 @@ pub struct Settings {
 
     // --- Notifications / popup ---
     pub notify_on_complete: bool,
+    /// Play the Windows notification sound when a download
+    /// finishes successfully.
+    pub sound_on_finish: bool,
     /// Open the download folder in Explorer when a download
     /// finishes successfully.
     pub open_folder_on_finish: bool,
@@ -284,6 +304,7 @@ impl Default for Settings {
             auto_domains: Vec::new(),
             allowed_domains: Vec::new(),
             ignored_urls: Vec::new(),
+            domain_presets: Vec::new(),
             dedupe_window_secs: 300,
             skip_already_downloaded: true,
             download_folder: default_download_folder(),
@@ -299,11 +320,13 @@ impl Default for Settings {
             max_concurrent_downloads: 2,
             rate_limit_kbps: 0,
             auto_retry_attempts: 0,
+            sponsorblock_remove: false,
             extra_args: String::new(),
             cookies_from_browser: String::new(),
             ytdlp_path: PathBuf::new(),
             ffmpeg_path: PathBuf::new(),
             notify_on_complete: true,
+            sound_on_finish: false,
             open_folder_on_finish: false,
             notify_on_error: true,
             notify_on_auto_start: false,
@@ -385,6 +408,16 @@ impl Settings {
         }
     }
 
+    /// Parse settings from JSON text (the Import feature), with
+    /// the same normalization `load` applies. The caller replaces
+    /// the live settings with the result.
+    pub fn from_json(text: &str) -> Result<Self, String> {
+        let mut s: Settings =
+            serde_json::from_str(text).map_err(|e| format!("not a valid settings file: {e}"))?;
+        s.normalize();
+        Ok(s)
+    }
+
     pub fn save(&self) -> std::io::Result<()> {
         let dir = config_dir();
         std::fs::create_dir_all(&dir)?;
@@ -408,6 +441,12 @@ impl Settings {
         norm(&mut self.ignored_domains);
         norm(&mut self.auto_domains);
         norm(&mut self.allowed_domains);
+        for dp in &mut self.domain_presets {
+            dp.domain = normalize_domain(&dp.domain);
+        }
+        self.domain_presets.retain(|dp| !dp.domain.is_empty());
+        self.domain_presets.sort_by(|a, b| a.domain.cmp(&b.domain));
+        self.domain_presets.dedup_by(|a, b| a.domain == b.domain);
         self.ignored_urls.retain(|u| !u.trim().is_empty());
         self.max_concurrent_downloads = self.max_concurrent_downloads.clamp(1, 8);
         if self.filename_template.trim().is_empty() {

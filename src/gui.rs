@@ -157,12 +157,29 @@ pub struct PopupRequest {
     /// just the linked item); starts from the global setting,
     /// the user can flip it in the popup for playlist links.
     pub playlist_all: bool,
+    /// Per-download output folder chosen in the popup;
+    /// `None` = the settings download folder.
+    pub folder: Option<std::path::PathBuf>,
     pub shown_at: Instant,
     pub last_interaction: Instant,
 }
 
 type InfoResult = (String, Option<VideoInfo>, bool);
 type FetchResult = Result<std::path::PathBuf, String>;
+/// Watcher poll result: (subscription URL, newest entries) per sub.
+type WatchResult = Vec<(String, Vec<yttraydl::ytdlp::PlaylistEntry>)>;
+/// Thumbnail fetch result: (source URL, decoded (w, h, RGBA)).
+type ThumbResult = (String, Option<(u32, u32, Vec<u8>)>);
+
+/// A final download failure surfaced in the panel with a Retry
+/// button (0.4.0). `job_id` refers to the finished-list entry
+/// the retry requeues.
+#[derive(Clone)]
+pub struct FailureNotice {
+    pub job_id: u64,
+    pub title: String,
+    pub error: String,
+}
 
 #[cfg(windows)]
 pub struct TrayHandles {
@@ -522,6 +539,31 @@ pub struct App {
     /// Last taskbar-progress value sent to the platform layer
     /// (-2 = never sent, -1 = cleared, 0..=1000 = fraction).
     taskbar_sent: i32,
+    /// The most recent final download failure, shown as a panel
+    /// banner with a one-click Retry (0.4.0).
+    pub failure_notice: Option<FailureNotice>,
+    /// "Save for later" links parked from the popup (0.4.0),
+    /// persisted via `saved.rs`.
+    pub saved_links: Vec<yttraydl::saved::SavedLink>,
+    /// Channel-watcher bookkeeping (seen ids + last poll).
+    watch_data: yttraydl::saved::WatchData,
+    /// In-flight watcher poll: per-subscription newest entries.
+    watch_rx: Option<Receiver<WatchResult>>,
+    /// Watcher subscription editor inputs (Settings → Domains).
+    pub rule_input_watch_url: String,
+    pub rule_watch_preset: Preset,
+    /// Set by Settings ("Check watched channels now").
+    pub watch_check_now: bool,
+    /// In-flight popup thumbnail fetch: (for URL, decoded RGBA).
+    thumb_rx: Option<Receiver<ThumbResult>>,
+    /// The decoded popup thumbnail, keyed by its source URL.
+    pub popup_thumb: Option<(String, egui::TextureHandle)>,
+    /// The queue had active work at some point since it last
+    /// drained (gates the queue-empty action so it never fires
+    /// on a merely idle app).
+    had_active_downloads: bool,
+    /// The low-disk toast has fired for the current low spell.
+    disk_warned: bool,
     pub reset_armed: bool,
     manual_url: String,
     first_frame: bool,
@@ -604,6 +646,17 @@ impl App {
             ytdlp_check_rx: None,
             ytdlp_latest: None,
             taskbar_sent: -2,
+            failure_notice: None,
+            saved_links: yttraydl::saved::load_saved(),
+            watch_data: yttraydl::saved::WatchData::load(),
+            watch_rx: None,
+            rule_input_watch_url: String::new(),
+            rule_watch_preset: Preset::default(),
+            watch_check_now: false,
+            thumb_rx: None,
+            popup_thumb: None,
+            had_active_downloads: false,
+            disk_warned: false,
             reset_armed: false,
             manual_url: String::new(),
             first_frame: true,
@@ -707,7 +760,73 @@ impl App {
         }
     }
 
+    /// `start_download_pl` plus a per-download output folder
+    /// (from the popup's folder picker).
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_download_full(
+        &mut self,
+        url: &str,
+        title: &str,
+        preset: Preset,
+        force: bool,
+        playlist_all: Option<bool>,
+        output_dir: Option<std::path::PathBuf>,
+    ) {
+        if self.bin.is_none() {
+            self.toast(
+                "yt-dlp is not installed yet — open ytTrayDL to install it.",
+                ToastKind::Error,
+            );
+            self.show_panel = true;
+            return;
+        }
+        let use_archive = self.settings.skip_already_downloaded && !force;
+        self.downloads.enqueue_job(
+            url.to_string(),
+            title.to_string(),
+            preset,
+            use_archive,
+            0,
+            playlist_all,
+            output_dir,
+        );
+        self.pump_downloads();
+    }
+
     fn pump_downloads(&mut self) {
+        // Low-disk guard: while the download drive is under the
+        // user's threshold, don't START queued jobs (running
+        // ones finish). One toast per low spell.
+        if self.settings.low_disk_threshold_mb > 0 && self.downloads.active_count() > 0 {
+            let threshold = self
+                .settings
+                .low_disk_threshold_mb
+                .saturating_mul(1024 * 1024);
+            // The folder may not exist yet; query the nearest
+            // existing ancestor.
+            let mut probe = self.settings.download_folder.clone();
+            while !probe.exists() {
+                if !probe.pop() {
+                    break;
+                }
+            }
+            if let Some(free) = yttraydl::platform::free_disk_bytes(&probe) {
+                if free < threshold {
+                    if !self.disk_warned {
+                        self.disk_warned = true;
+                        self.toast(
+                            format!(
+                                "Low disk space ({} free) — new downloads are paused until space frees up.",
+                                yttraydl::ytdlp::format_bytes(free)
+                            ),
+                            ToastKind::Error,
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+        self.disk_warned = false;
         let bin = self.bin_path();
         self.downloads.pump(&self.settings, bin.as_deref());
     }
@@ -770,6 +889,7 @@ impl App {
                 .unwrap_or(self.settings.default_preset),
             always_auto_domain: false,
             playlist_all: self.settings.allow_playlists,
+            folder: None,
             shown_at: Instant::now(),
             last_interaction: Instant::now(),
         });
@@ -990,6 +1110,196 @@ impl App {
                 }
             }
         }
+        // Kick off the active popup's thumbnail fetch (once).
+        if self.thumb_rx.is_none() {
+            if let Some(thumb_url) = self
+                .active_popup
+                .as_ref()
+                .and_then(|p| p.info.as_ref())
+                .and_then(|i| i.thumbnail.clone())
+            {
+                if self
+                    .popup_thumb
+                    .as_ref()
+                    .map(|(u, _)| u != &thumb_url)
+                    .unwrap_or(true)
+                {
+                    self.spawn_thumb_fetch(thumb_url);
+                }
+            }
+        }
+    }
+
+    /// Fetch + decode a popup thumbnail on a worker thread
+    /// (curl for the bytes, the `image` crate for JPEG/PNG).
+    fn spawn_thumb_fetch(&mut self, url: String) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.thumb_rx = Some(rx);
+        std::thread::spawn(move || {
+            let decoded = yttraydl::fetch_url_bytes(&url).and_then(|bytes| {
+                let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+                let (w, h) = img.dimensions();
+                Some((w, h, img.into_raw()))
+            });
+            let _ = tx.send((url, decoded));
+        });
+    }
+
+    fn process_thumbs(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.thumb_rx {
+            if let Ok((url, decoded)) = rx.try_recv() {
+                self.thumb_rx = None;
+                if let Some((w, h, rgba)) = decoded {
+                    let img =
+                        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                    let handle = ctx.load_texture("popup-thumb", img, egui::TextureOptions::LINEAR);
+                    self.popup_thumb = Some((url, handle));
+                }
+            }
+        }
+    }
+
+    // ---------- channel watcher ----------
+
+    /// Poll every subscription once (worker threads run the
+    /// yt-dlp flat probes). No-op while a poll is in flight.
+    fn start_watch_check(&mut self) {
+        if self.watch_rx.is_some() || self.settings.subscriptions.is_empty() {
+            return;
+        }
+        let Some(bin) = self.bin_path() else {
+            return;
+        };
+        let settings = self.settings.clone();
+        let subs = settings.subscriptions.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.watch_rx = Some(rx);
+        std::thread::spawn(move || {
+            let results: Vec<(String, Vec<yttraydl::ytdlp::PlaylistEntry>)> = subs
+                .iter()
+                .map(|sub| {
+                    (
+                        sub.url.clone(),
+                        yttraydl::fetch_playlist_entries(&bin, &settings, &sub.url, 10),
+                    )
+                })
+                .collect();
+            let _ = tx.send(results);
+        });
+    }
+
+    fn process_watch(&mut self) {
+        // Manual "check now" from Settings.
+        if self.watch_check_now {
+            self.watch_check_now = false;
+            self.start_watch_check();
+        }
+        // Scheduled poll when the interval has elapsed.
+        if self.watch_rx.is_none()
+            && self.settings.watch_interval_mins > 0
+            && !self.settings.subscriptions.is_empty()
+        {
+            let due = self.watch_data.last_check_unix == 0
+                || yttraydl::history::now_unix()
+                    >= self.watch_data.last_check_unix as i64
+                        + i64::from(self.settings.watch_interval_mins) * 60;
+            if due {
+                self.start_watch_check();
+            }
+        }
+        if let Some(rx) = &self.watch_rx {
+            if let Ok(results) = rx.try_recv() {
+                self.watch_rx = None;
+                self.watch_data.last_check_unix = yttraydl::history::now_unix().max(0) as u64;
+                let mut new_count = 0usize;
+                for (sub_url, entries) in results {
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    let ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
+                    let fresh = self.watch_data.record_poll(&sub_url, &ids);
+                    if fresh.is_empty() {
+                        continue;
+                    }
+                    let preset = self
+                        .settings
+                        .subscriptions
+                        .iter()
+                        .find(|s| s.url == sub_url)
+                        .map(|s| s.preset)
+                        .unwrap_or(self.settings.default_preset);
+                    for entry in entries.iter().filter(|e| fresh.contains(&e.id)) {
+                        let title = if entry.title.is_empty() {
+                            entry.url.clone()
+                        } else {
+                            entry.title.clone()
+                        };
+                        self.start_download(&entry.url, &title, preset, false);
+                        new_count += 1;
+                    }
+                }
+                let _ = self.watch_data.save();
+                if new_count > 0 {
+                    self.toast(
+                        format!(
+                            "Channel watcher: {new_count} new upload{} downloading.",
+                            if new_count == 1 { "" } else { "s" }
+                        ),
+                        ToastKind::Success,
+                    );
+                }
+            }
+        }
+    }
+
+    // ---------- save for later ----------
+
+    /// Park a link in the saved list (popup "Later" button).
+    pub fn save_link_for_later(&mut self, url: &str, title: &str) {
+        if self.saved_links.iter().any(|l| l.url == url) {
+            self.toast("That link is already in your saved list.", ToastKind::Info);
+            return;
+        }
+        self.saved_links.push(yttraydl::saved::SavedLink {
+            url: url.to_string(),
+            title: title.to_string(),
+            saved_at_unix: yttraydl::history::now_unix(),
+        });
+        let _ = yttraydl::saved::save_saved(&self.saved_links);
+        self.toast("Saved for later.", ToastKind::Success);
+    }
+
+    pub fn remove_saved_link(&mut self, index: usize) {
+        if index < self.saved_links.len() {
+            self.saved_links.remove(index);
+            let _ = yttraydl::saved::save_saved(&self.saved_links);
+        }
+    }
+
+    /// Download a saved link now (and drop it from the list).
+    pub fn download_saved_link(&mut self, index: usize) {
+        if index >= self.saved_links.len() {
+            return;
+        }
+        let link = self.saved_links.remove(index);
+        let _ = yttraydl::saved::save_saved(&self.saved_links);
+        let preset = yttraydl::rules::preset_for_url(&link.url, &self.settings)
+            .unwrap_or(self.settings.default_preset);
+        let title = if link.title.is_empty() {
+            link.url.clone()
+        } else {
+            link.title.clone()
+        };
+        self.start_download(&link.url, &title, preset, false);
+    }
+
+    /// Retry the failure shown in the panel banner.
+    pub fn retry_failure_notice(&mut self) {
+        if let Some(notice) = self.failure_notice.take() {
+            if self.downloads.requeue_finished(notice.job_id).is_some() {
+                self.pump_downloads();
+            }
+        }
     }
 
     fn process_download_events(&mut self) {
@@ -1008,13 +1318,14 @@ impl App {
                     // Auto-retry with the original preset; the
                     // failure is not recorded as final yet.
                     let next = job.attempts + 1;
-                    self.downloads.enqueue_full(
+                    self.downloads.enqueue_job(
                         job.url.clone(),
                         job.title.clone(),
                         job.preset,
                         job.use_archive,
                         next,
                         job.playlist_all,
+                        job.output_dir.clone(),
                     );
                     self.toast(
                         format!(
@@ -1077,9 +1388,39 @@ impl App {
                                 .unwrap_or_else(|| self.settings.download_folder.clone());
                             let _ = yttraydl::platform::open_path(&folder);
                         }
+                        // Post-download command (user-configured,
+                        // placeholders substituted here).
+                        let cmd = self.settings.post_download_command.trim();
+                        if !cmd.is_empty() {
+                            if let Some(file) = &job.final_file {
+                                let dir = file
+                                    .parent()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let line = cmd
+                                    .replace("{file}", &file.to_string_lossy())
+                                    .replace("{dir}", &dir)
+                                    .replace("{url}", &job.url)
+                                    .replace("{title}", &job.title);
+                                yttraydl::platform::run_shell_command(&line);
+                            }
+                        }
                     }
                     JobState::Failed => {
                         self.seen.forget(&job.url);
+                        // Panel banner with one-click retry (the
+                        // job is in the finished list under this id).
+                        self.failure_notice = Some(FailureNotice {
+                            job_id: job.id,
+                            title: if job.title.is_empty() {
+                                job.url.clone()
+                            } else {
+                                job.title.clone()
+                            },
+                            error: error
+                                .clone()
+                                .unwrap_or_else(|| "yt-dlp reported an error".to_string()),
+                        });
                         if self.settings.notify_on_error {
                             self.toast(
                                 format!(
@@ -1099,6 +1440,28 @@ impl App {
         }
         if finished_any {
             self.pump_downloads();
+        }
+        // Queue-empty action: fires once when a queue that had
+        // active work drains completely (nothing queued, running
+        // or paused).
+        if self.downloads.active_count() > 0 {
+            self.had_active_downloads = true;
+        } else if self.had_active_downloads && !self.downloads.has_paused() {
+            self.had_active_downloads = false;
+            match self.settings.queue_empty_action {
+                yttraydl::settings::QueueEmptyAction::Nothing => {}
+                yttraydl::settings::QueueEmptyAction::Sound => {
+                    yttraydl::platform::play_notification_sound();
+                }
+                yttraydl::settings::QueueEmptyAction::Sleep => {
+                    yttraydl::diag_log("queue empty — sleeping the PC (user setting)");
+                    yttraydl::platform::suspend_system();
+                }
+                yttraydl::settings::QueueEmptyAction::ExitApp => {
+                    yttraydl::diag_log("queue empty — exiting (user setting)");
+                    self.exit_requested = true;
+                }
+            }
         }
     }
 
@@ -1573,6 +1936,8 @@ impl eframe::App for App {
         self.process_ytdlp_fetch();
         self.process_ffmpeg_fetch();
         self.process_ytdlp_check();
+        self.process_thumbs(ctx);
+        self.process_watch();
         self.process_dropped_files(ctx);
         self.sync_taskbar_progress();
         self.process_tray_events(ctx);
@@ -1610,13 +1975,20 @@ impl eframe::App for App {
         {
             let target = if self.show_settings { 1.0 } else { 0.0 };
             if (self.settings_anim - target).abs() > 0.0005 && self.show_panel {
-                let dt = ctx.input(|i| i.stable_dt).clamp(0.001, 0.1);
-                let step = dt / 0.22;
-                self.settings_anim = if target > self.settings_anim {
-                    (self.settings_anim + step).min(1.0)
+                if !self.settings.animate_settings_drawer {
+                    // Animation off (user setting): snap straight
+                    // to the end state; the resize below runs once
+                    // with the final width.
+                    self.settings_anim = target;
                 } else {
-                    (self.settings_anim - step).max(0.0)
-                };
+                    let dt = ctx.input(|i| i.stable_dt).clamp(0.001, 0.1);
+                    let step = dt / 0.22;
+                    self.settings_anim = if target > self.settings_anim {
+                        (self.settings_anim + step).min(1.0)
+                    } else {
+                        (self.settings_anim - step).max(0.0)
+                    };
+                }
                 let e = 1.0 - (1.0 - self.settings_anim).powi(3); // ease-out cubic
                 let w = self.closed_size.x + SETTINGS_DRAWER_W * e;
                 // SEAN (0.2.5): opening Settings expands the

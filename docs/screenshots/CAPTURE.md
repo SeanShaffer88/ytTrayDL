@@ -4,14 +4,21 @@ Screenshots must be real captures from a Windows run (Win+Shift+S,
 drag around the window, save with the exact filename into this
 folder). Captured so far: `settings.png` and `hide-icon.png`
 (v0.2.5, 2026-10-23); `panel.png` and `popup.png` (v0.2.7,
-2026-10-23) — all four are in the README. Still owed:
-`downloads.png`; it joins the README when captured.
+2026-10-23). Refreshed from a v0.4.0 run (2026-10-23):
+`panel.png`, `settings.png`, `hide-icon.png`, plus the three
+remaining Settings tabs (`settings-downloads.png`,
+`settings-domains.png`, `settings-ytdlp.png`) — all seven are
+in the README. Still owed: `downloads.png`; it joins the
+README when captured.
 
 | File | What to capture |
 | --- | --- |
 | `panel.png` | The main window on its own (Settings closed), default size, showing the yt-dlp/ffmpeg status lines. Bonus: one recent download in the activity area. |
 | `popup.png` | The "Link detected" popup right after copying a real video link, once the title/uploader/duration have filled in. |
 | `settings.png` | The main window with the Settings drawer fully slid out, General tab visible. |
+| `settings-downloads.png` | The same window, Downloads tab visible. |
+| `settings-domains.png` | The same window, Domains & rules tab visible. |
+| `settings-ytdlp.png` | The same window, yt-dlp tab visible. |
 | `downloads.png` | The Downloads window with at least one active or finished download showing progress/state. |
 | `hide-icon.png` | The "Hide the tray icon?" confirmation dialog. |
 

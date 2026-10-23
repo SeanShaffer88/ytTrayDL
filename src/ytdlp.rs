@@ -169,6 +169,20 @@ pub fn build_download_args(
     url: &str,
     use_archive: bool,
 ) -> Vec<String> {
+    build_download_args_with_playlist(settings, preset, url, use_archive, None)
+}
+
+/// `build_download_args` with a per-download playlist choice:
+/// `Some(true)` downloads the whole playlist, `Some(false)`
+/// only the linked item, `None` follows the global
+/// `Settings::allow_playlists`.
+pub fn build_download_args_with_playlist(
+    settings: &Settings,
+    preset: Preset,
+    url: &str,
+    use_archive: bool,
+    playlist_override: Option<bool>,
+) -> Vec<String> {
     // Machine-parseable, line-at-a-time progress; resume partial
     // downloads instead of restarting them; don't let a page's own
     // timestamps confuse file sorting.
@@ -231,7 +245,7 @@ pub fn build_download_args(
         args.push(Settings::archive_path().to_string_lossy().to_string());
     }
 
-    if settings.allow_playlists {
+    if playlist_override.unwrap_or(settings.allow_playlists) {
         args.push("--yes-playlist".into());
     } else {
         args.push("--no-playlist".into());
@@ -242,6 +256,13 @@ pub fn build_download_args(
     if settings.rate_limit_kbps > 0 {
         args.push("--limit-rate".into());
         args.push(format!("{}K", settings.rate_limit_kbps));
+    }
+
+    // SponsorBlock: cut the marked segments (sponsor, self-promo,
+    // interaction reminders, …) from the downloaded file.
+    if settings.sponsorblock_remove {
+        args.push("--sponsorblock-remove".into());
+        args.push("all".into());
     }
 
     if settings.embed_metadata {
@@ -590,6 +611,48 @@ mod tests {
         assert!(args.contains(&"-x".to_string()));
         assert!(args.contains(&"mp3".to_string()));
         assert!(!args.contains(&"--merge-output-format".to_string()));
+    }
+
+    #[test]
+    fn sponsorblock_arg_only_when_enabled() {
+        let args = build_download_args(&settings(), Preset::Best, "https://youtu.be/x", true);
+        assert!(!args.contains(&"--sponsorblock-remove".to_string()));
+        let mut s = settings();
+        s.sponsorblock_remove = true;
+        let args = build_download_args(&s, Preset::Best, "https://youtu.be/x", true);
+        let pos = args
+            .iter()
+            .position(|a| a == "--sponsorblock-remove")
+            .unwrap();
+        assert_eq!(args[pos + 1], "all");
+    }
+
+    #[test]
+    fn playlist_override_beats_global_setting() {
+        // Global off + per-download "whole playlist".
+        let args = build_download_args_with_playlist(
+            &settings(),
+            Preset::Best,
+            "https://youtu.be/x",
+            true,
+            Some(true),
+        );
+        assert!(args.contains(&"--yes-playlist".to_string()));
+        assert!(!args.contains(&"--no-playlist".to_string()));
+        // Global on + per-download "just this video".
+        let mut s = settings();
+        s.allow_playlists = true;
+        let args = build_download_args_with_playlist(
+            &s,
+            Preset::Best,
+            "https://youtu.be/x",
+            true,
+            Some(false),
+        );
+        assert!(args.contains(&"--no-playlist".to_string()));
+        // No override follows the global setting.
+        let args = build_download_args(&s, Preset::Best, "https://youtu.be/x", true);
+        assert!(args.contains(&"--yes-playlist".to_string()));
     }
 
     #[test]

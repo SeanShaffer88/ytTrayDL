@@ -10,8 +10,24 @@
 //! 5. Host matches an auto-download domain           → AutoDownload
 //! 6. The global default action                      → Prompt / AutoDownload
 
-use crate::settings::{domain_matches, DefaultAction, DetectionScope, Settings};
+use crate::settings::{domain_matches, DefaultAction, DetectionScope, Preset, Settings};
 use crate::url_detect::{host_of, is_known_site, normalize_url};
+
+/// The per-domain quality pin for a URL, if one applies
+/// (Settings → Domains & rules → Quality by domain). Used as
+/// the starting preset for both the popup and auto-downloads;
+/// `None` means "use the global default preset".
+pub fn preset_for_url(url: &str, settings: &Settings) -> Option<Preset> {
+    let host = host_of(url);
+    if host.is_empty() {
+        return None;
+    }
+    settings
+        .domain_presets
+        .iter()
+        .find(|dp| domain_matches(&host, &dp.domain))
+        .map(|dp| dp.preset)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -188,6 +204,21 @@ mod tests {
             decide("https://obscure-site.example/v/9", &s, false),
             Decision::Prompt
         );
+    }
+
+    #[test]
+    fn domain_preset_pin_matches_subdomains() {
+        let mut s = settings();
+        s.domain_presets = vec![crate::settings::DomainPreset {
+            domain: "youtube.com".into(),
+            preset: Preset::P720,
+        }];
+        assert_eq!(
+            preset_for_url("https://music.youtube.com/watch?v=1", &s),
+            Some(Preset::P720)
+        );
+        assert_eq!(preset_for_url("https://vimeo.com/123", &s), None);
+        assert_eq!(preset_for_url("not a url", &s), None);
     }
 
     #[test]

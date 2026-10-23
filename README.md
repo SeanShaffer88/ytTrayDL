@@ -207,7 +207,7 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.4.0. The core library is covered by unit tests and the whole crate
+v0.4.1. The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
 and linted for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
 in CI. Runtime behaviour on a real Windows machine is tracked in
@@ -220,10 +220,13 @@ same verified mechanism; the v0.2.9 queue controls and popup
 positions and the v0.3.0 additions (quality pins, popup playlist
 choice, taskbar progress, drag-and-drop, import/export, update
 check) are logic-tested but not yet field-verified, as are the
-v0.4.0 additions (channel watcher, subtitles-only, audio formats,
-popup thumbnail/size/folder, saved list, failure banner,
-queue-empty actions, disk guard, post-download command,
-portable mode), and the
+behaviours of the v0.4.0 additions (channel watcher,
+subtitles-only, audio formats, popup thumbnail/size/folder,
+saved list, failure banner, queue-empty actions, disk guard,
+post-download command, portable mode) — their Settings
+screens are photographed rendering on a real PC from a
+v0.4.0 run, and v0.4.1 fixes the blank window that run found
+when restoring from the tray with Settings open — and the
 installer, the in-app ffmpeg install, the close-choice dialog, and
 an end-to-end download still await a full on-machine pass.
 

@@ -157,6 +157,22 @@ pub fn current_clipboard_text() -> Option<String> {
     }
 }
 
+/// Show and foreground the main window (titled "ytTrayDL") at
+/// the OS level, if it exists and is currently hidden. Used by
+/// the tray-icon event handler: restoring the window must not
+/// depend on egui running a frame first. Returns true when a
+/// hidden window was found and shown.
+pub fn show_main_window() -> bool {
+    #[cfg(windows)]
+    {
+        windows_impl::show_main_window()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Show a fatal startup error the user can actually see. A tray
 /// app has no console, so without this a failed start looks like
 /// "double-clicking does nothing".

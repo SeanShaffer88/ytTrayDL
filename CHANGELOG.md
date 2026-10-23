@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4 — 2026-10-23
+
+- **Fixed: tray icon and tray menu clicks never reached the
+  app.** Root cause found from a 0.2.3 diagnostic log: the app
+  polled tray-icon's global event receivers, which delivered
+  nothing in this eframe setup — the icon rendered and the
+  menu opened, but no click (icon or menu, including Exit)
+  ever arrived. The app now uses the integration the tray
+  library documents for winit-based apps: registered event
+  handlers that forward clicks into the app's own queue and
+  wake the UI immediately. Side benefit: tray clicks now
+  respond instantly instead of within the ~200 ms poll.
+
 ## 0.2.3 — 2026-10-20
 
 - **Tray icon clicks behave the way Windows users expect**

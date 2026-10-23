@@ -2,10 +2,10 @@
 
 Screenshots must be real captures from a Windows run (Win+Shift+S,
 drag around the window, save with the exact filename into this
-folder). Captured so far (from v0.2.5, 2026-10-23): `panel.png`,
-`settings.png`, `hide-icon.png` — all three are in the README.
-Still owed: `popup.png` and `downloads.png`; they join the README
-when captured.
+folder). Captured so far: `settings.png` and `hide-icon.png`
+(v0.2.5, 2026-10-23); `panel.png` and `popup.png` (v0.2.7,
+2026-10-23) — all four are in the README. Still owed:
+`downloads.png`; it joins the README when captured.
 
 | File | What to capture |
 | --- | --- |

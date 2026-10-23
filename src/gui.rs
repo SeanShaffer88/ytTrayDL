@@ -201,6 +201,189 @@ static TRAY_SEND_ERRS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 #[cfg(windows)]
 static TRAY_DRAINED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// The live tray icon + menu items, shared between `App`
+// (which creates and syncs them) and the tray event handlers
+// (which, since 0.2.7, EXECUTE most tray actions directly —
+// see `handle_tray_menu_direct`). tray-icon/muda handles are
+// `Rc`-based and thread-affine: creation (in `update`) and
+// handler dispatch (from winit's message pump) both happen
+// on the main thread, so a thread-local cell is the correct
+// sharing mechanism. If a handler ever ran on another
+// thread it would see an empty cell and fall back to
+// forwarding the event to the app — a safe degradation.
+#[cfg(windows)]
+thread_local! {
+    static TRAY_HANDLES: std::cell::RefCell<Option<TrayHandles>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Read access to the shared tray handles, when they exist
+/// on this thread.
+#[cfg(windows)]
+fn with_tray_handles<R>(f: impl FnOnce(&TrayHandles) -> R) -> Option<R> {
+    TRAY_HANDLES.with(|cell| cell.borrow().as_ref().map(f))
+}
+
+/// Mutable access to the shared tray-handles slot (install /
+/// remove the handles themselves).
+#[cfg(windows)]
+fn with_tray_handles_mut<R>(f: impl FnOnce(&mut Option<TrayHandles>) -> R) -> R {
+    TRAY_HANDLES.with(|cell| f(&mut cell.borrow_mut()))
+}
+
+/// Human name for a tray menu item id (diagnostics).
+#[cfg(windows)]
+fn tray_item_name(t: &TrayHandles, id: &tray_icon::menu::MenuId) -> &'static str {
+    if *id == t.id_monitoring {
+        "monitoring toggle"
+    } else if *id == t.id_auto {
+        "auto-download toggle"
+    } else if *id == t.id_autostart {
+        "autostart toggle"
+    } else if *id == t.id_download_clipboard {
+        "download from clipboard"
+    } else if *id == t.id_downloads {
+        "downloads"
+    } else if *id == t.id_open_folder {
+        "open download folder"
+    } else if *id == t.id_settings {
+        "settings"
+    } else if *id == t.id_hide_icon {
+        "hide tray icon"
+    } else if *id == t.id_about {
+        "about"
+    } else if *id == t.id_exit {
+        "exit"
+    } else {
+        "unknown"
+    }
+}
+
+/// Execute a tray-menu action IN THE HANDLER (0.2.7).
+///
+/// Why: the 0.2.5/0.2.6 field logs prove the handlers fire
+/// for every click, while egui passes may never run again
+/// once the tray's modal context menu has been shown —
+/// eframe 0.33's repaint scheduling (delay dedup +
+/// cumulative-pass staleness in its winit runner) is left
+/// disarmed by the menu's nested message loop: winit keeps
+/// dispatching window messages (handlers keep logging) but
+/// no further pass is scheduled, so anything queued for
+/// `update()` waits forever. Actions that only need Win32,
+/// the registry, or the settings FILE therefore run here,
+/// where the click actually arrives. The app picks the
+/// file-level changes up via its settings-mtime reload.
+/// Returns true when the action was fully handled here;
+/// false means "forward it to the app" (actions that need
+/// live app state: popup, downloads window, settings
+/// drawer, about).
+#[cfg(windows)]
+fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
+    let name = match with_tray_handles(|t| tray_item_name(t, &event.id)) {
+        Some(n) => n,
+        None => return false,
+    };
+    match name {
+        "exit" => {
+            yttraydl::diag_log("exit requested via tray menu (handler)");
+            // Drop the handles first: process::exit skips
+            // destructors, and an undropped tray icon would
+            // linger as a ghost in the notification area.
+            let taken = with_tray_handles_mut(|slot| slot.take());
+            drop(taken);
+            yttraydl::diag_log("exiting (tray menu, handler)");
+            std::process::exit(0);
+        }
+        "monitoring toggle" => {
+            let mut s = Settings::load();
+            s.monitoring_enabled = !s.monitoring_enabled;
+            let v = s.monitoring_enabled;
+            match s.save() {
+                Ok(()) => {
+                    with_tray_handles(|t| t.monitoring.set_checked(v));
+                    yttraydl::diag_log(&format!(
+                        "tray menu click: monitoring toggle -> {v} (handler)"
+                    ));
+                }
+                Err(e) => yttraydl::diag_log(&format!(
+                    "tray monitoring toggle: settings save failed: {e}"
+                )),
+            }
+            true
+        }
+        "auto-download toggle" => {
+            let mut s = Settings::load();
+            let now_auto = s.default_action != DefaultAction::AutoDownload;
+            s.default_action = if now_auto {
+                DefaultAction::AutoDownload
+            } else {
+                DefaultAction::Prompt
+            };
+            match s.save() {
+                Ok(()) => {
+                    with_tray_handles(|t| t.auto_mode.set_checked(now_auto));
+                    yttraydl::diag_log(&format!(
+                        "tray menu click: auto-download toggle -> {now_auto} (handler)"
+                    ));
+                }
+                Err(e) => yttraydl::diag_log(&format!(
+                    "tray auto-download toggle: settings save failed: {e}"
+                )),
+            }
+            true
+        }
+        "autostart toggle" => {
+            let target = !platform::Platform::autostart_enabled();
+            match platform::Platform::set_autostart(target) {
+                Ok(()) => {
+                    with_tray_handles(|t| t.autostart.set_checked(target));
+                    let mut s = Settings::load();
+                    s.start_with_windows = target;
+                    let _ = s.save();
+                    yttraydl::diag_log(&format!(
+                        "tray menu click: autostart toggle -> {target} (handler)"
+                    ));
+                }
+                Err(e) => {
+                    yttraydl::diag_log(&format!("tray autostart toggle failed: {e}"));
+                }
+            }
+            true
+        }
+        "open download folder" => {
+            let folder = Settings::load().download_folder;
+            let _ = std::fs::create_dir_all(&folder);
+            match platform::open_path(&folder) {
+                Ok(()) => {
+                    yttraydl::diag_log("tray menu click: open download folder (handler)");
+                }
+                Err(e) => {
+                    yttraydl::diag_log(&format!("tray open folder failed: {e}"));
+                }
+            }
+            true
+        }
+        "hide tray icon" => {
+            with_tray_handles(|t| {
+                t._tray.set_visible(false).ok();
+            });
+            let mut s = Settings::load();
+            s.tray_icon_visible = false;
+            let _ = s.save();
+            yttraydl::diag_log("tray menu click: hide tray icon (handler)");
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Current mtime of the settings file, if it exists (0.2.7).
+fn settings_file_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(Settings::settings_path())
+        .and_then(|m| m.modified())
+        .ok()
+}
+
 /// Forward one handler-produced event into the app channel,
 /// counting the send and logging failures (never silent).
 #[cfg(windows)]
@@ -235,11 +418,6 @@ pub struct App {
     version_requested_for: Option<std::path::PathBuf>,
     version_rx: Option<Receiver<String>>,
 
-    #[cfg(windows)]
-    tray: Option<TrayHandles>,
-    #[cfg(not(windows))]
-    #[allow(dead_code)]
-    tray: Option<()>,
     tray_failed: bool,
     tray_visible: bool,
     /// Receiving end of the handler-fed tray event channel
@@ -292,6 +470,12 @@ pub struct App {
     frames: u64,
     #[cfg_attr(not(windows), allow(dead_code))]
     last_heartbeat: Instant,
+    /// Settings-file mtime tracking (0.2.7): the tray handlers
+    /// apply toggles to the settings file directly, so the app
+    /// reloads the file when it changes on disk instead of
+    /// overwriting the handler's newer state on its next save.
+    settings_mtime: Option<std::time::SystemTime>,
+    last_settings_check: Instant,
 }
 
 impl App {
@@ -327,7 +511,6 @@ impl App {
             ytdlp_version: None,
             version_requested_for: None,
             version_rx: None,
-            tray: None,
             tray_failed: false,
             tray_event_rx: None,
             show_panel: false,
@@ -359,6 +542,8 @@ impl App {
             open_panel_on_start: show_on_launch,
             frames: 0,
             last_heartbeat: Instant::now(),
+            settings_mtime: settings_file_mtime(),
+            last_settings_check: Instant::now(),
         };
         yttraydl::diag_log(&format!(
             "ui start: yt-dlp {} (source: {}), ffmpeg {}",
@@ -549,9 +734,9 @@ impl App {
         self.settings.tray_icon_visible = false;
         self.tray_visible = false;
         #[cfg(windows)]
-        if let Some(t) = &self.tray {
+        with_tray_handles(|t| {
             t._tray.set_visible(false).ok();
-        }
+        });
         self.settings_dirty = true;
         // The settings drawer lives in the main window — it
         // closes (instantly) when the window goes away.
@@ -576,9 +761,9 @@ impl App {
                     self.settings.tray_icon_visible = true;
                     self.tray_visible = true;
                     #[cfg(windows)]
-                    if let Some(t) = &self.tray {
+                    with_tray_handles(|t| {
                         t._tray.set_visible(true).ok();
-                    }
+                    });
                     self.settings_dirty = true;
                     self.show_settings = true;
                     self.show_panel = true;
@@ -751,7 +936,8 @@ impl App {
 
     #[cfg(windows)]
     fn ensure_tray(&mut self, ctx: &egui::Context) {
-        if self.tray.is_some() || self.tray_failed {
+        let tray_exists = with_tray_handles(|_| ()).is_some();
+        if tray_exists || self.tray_failed {
             return;
         }
         // 0.2.4: install the tray event handlers BEFORE the
@@ -804,7 +990,18 @@ impl App {
             tray_icon::menu::MenuEvent::set_event_handler(Some(
                 move |event: tray_icon::menu::MenuEvent| {
                     yttraydl::diag_log(&format!("tray menu event (handler): id={:?}", event.id));
+                    // 0.2.7: most actions execute HERE, in the
+                    // handler — they cannot wait for an egui
+                    // pass that may never be scheduled again
+                    // (see handle_tray_menu_direct).
+                    if handle_tray_menu_direct(&event) {
+                        return;
+                    }
                     forward_tray_event(TrayUiEvent::Menu(event));
+                    // Give the forwarded action a visible home
+                    // right now; the app applies it on its
+                    // next pass.
+                    platform::show_main_window();
                     wake.request_repaint();
                 },
             ));
@@ -909,21 +1106,23 @@ impl App {
         if !self.tray_visible {
             tray.set_visible(false).ok();
         }
-        self.tray = Some(TrayHandles {
-            _tray: tray,
-            monitoring,
-            auto_mode,
-            autostart,
-            id_monitoring: ids.0,
-            id_auto: ids.1,
-            id_autostart: ids.2,
-            id_download_clipboard: ids.3,
-            id_downloads: ids.4,
-            id_open_folder: ids.5,
-            id_settings: ids.6,
-            id_hide_icon: ids.7,
-            id_about: ids.8,
-            id_exit: ids.9,
+        with_tray_handles_mut(|slot| {
+            *slot = Some(TrayHandles {
+                _tray: tray,
+                monitoring,
+                auto_mode,
+                autostart,
+                id_monitoring: ids.0,
+                id_auto: ids.1,
+                id_autostart: ids.2,
+                id_download_clipboard: ids.3,
+                id_downloads: ids.4,
+                id_open_folder: ids.5,
+                id_settings: ids.6,
+                id_hide_icon: ids.7,
+                id_about: ids.8,
+                id_exit: ids.9,
+            });
         });
     }
 
@@ -971,79 +1170,26 @@ impl App {
             }
         }
         for ev in menu_events {
-            let ids = match &self.tray {
-                Some(t) => (
-                    t.id_monitoring.clone(),
-                    t.id_auto.clone(),
-                    t.id_autostart.clone(),
-                    t.id_download_clipboard.clone(),
-                    t.id_downloads.clone(),
-                    t.id_open_folder.clone(),
-                    t.id_settings.clone(),
-                    t.id_hide_icon.clone(),
-                    t.id_about.clone(),
-                    t.id_exit.clone(),
-                ),
-                None => continue,
-            };
-            // Log every tray-menu click by name (0.2.3): when a
-            // click "does nothing" in the field, this line is how
-            // we learn whether the event ever reached the app.
-            let item_name = if ev.id == ids.0 {
-                "monitoring toggle"
-            } else if ev.id == ids.1 {
-                "auto-download toggle"
-            } else if ev.id == ids.2 {
-                "autostart toggle"
-            } else if ev.id == ids.3 {
-                "download from clipboard"
-            } else if ev.id == ids.4 {
-                "downloads"
-            } else if ev.id == ids.5 {
-                "open download folder"
-            } else if ev.id == ids.6 {
-                "settings"
-            } else if ev.id == ids.7 {
-                "hide tray icon"
-            } else if ev.id == ids.8 {
-                "about"
-            } else if ev.id == ids.9 {
-                "exit"
-            } else {
-                "unknown"
-            };
-            yttraydl::diag_log(&format!("tray menu click: {item_name}"));
-            if ev.id == ids.0 {
-                self.settings.monitoring_enabled = !self.settings.monitoring_enabled;
-                let v = self.settings.monitoring_enabled;
-                if let Some(t) = &self.tray {
-                    t.monitoring.set_checked(v);
-                }
-                self.settings_dirty = true;
-            } else if ev.id == ids.1 {
-                let now_auto = self.settings.default_action != DefaultAction::AutoDownload;
-                self.settings.default_action = if now_auto {
-                    DefaultAction::AutoDownload
-                } else {
-                    DefaultAction::Prompt
+            // Since 0.2.7 only the actions that need live app
+            // state are forwarded here (exit, the toggles, open
+            // folder and hide icon execute in the handler —
+            // see handle_tray_menu_direct). This line is the
+            // consumption marker for the forwarded set.
+            let (item_name, id_download_clipboard, id_downloads, id_settings, id_about) =
+                match with_tray_handles(|t| {
+                    (
+                        tray_item_name(t, &ev.id),
+                        t.id_download_clipboard.clone(),
+                        t.id_downloads.clone(),
+                        t.id_settings.clone(),
+                        t.id_about.clone(),
+                    )
+                }) {
+                    Some(fields) => fields,
+                    None => continue,
                 };
-                if let Some(t) = &self.tray {
-                    t.auto_mode.set_checked(now_auto);
-                }
-                self.settings_dirty = true;
-            } else if ev.id == ids.2 {
-                let target = !platform::Platform::autostart_enabled();
-                match platform::Platform::set_autostart(target) {
-                    Ok(()) => {
-                        if let Some(t) = &self.tray {
-                            t.autostart.set_checked(target);
-                        }
-                        self.settings.start_with_windows = target;
-                        self.settings_dirty = true;
-                    }
-                    Err(e) => self.toast(format!("Autostart change failed: {e}"), ToastKind::Error),
-                }
-            } else if ev.id == ids.3 {
+            yttraydl::diag_log(&format!("tray menu click: {item_name}"));
+            if ev.id == id_download_clipboard {
                 match platform::current_clipboard_text() {
                     Some(text) => {
                         let urls = extract_urls(&text);
@@ -1057,38 +1203,29 @@ impl App {
                     }
                     None => self.toast("Clipboard is empty or not text.", ToastKind::Info),
                 }
-            } else if ev.id == ids.4 {
+            } else if ev.id == id_downloads {
                 self.show_downloads = true;
-            } else if ev.id == ids.5 {
-                let folder = self.settings.download_folder.clone();
-                let _ = std::fs::create_dir_all(&folder);
-                if let Err(e) = platform::open_path(&folder) {
-                    self.toast(format!("Could not open folder: {e}"), ToastKind::Error);
-                }
-            } else if ev.id == ids.6 {
+                self.show_panel = true;
+            } else if ev.id == id_settings {
                 // Settings is a drawer in the main window now —
                 // opening it means showing the window too.
                 self.show_settings = true;
                 self.show_panel = true;
-            } else if ev.id == ids.7 {
-                self.confirm_hide_icon = true;
-            } else if ev.id == ids.8 {
+            } else if ev.id == id_about {
                 self.show_about = true;
-            } else if ev.id == ids.9 {
-                yttraydl::diag_log("exit requested via tray menu");
-                self.exit_requested = true;
+                self.show_panel = true;
             }
         }
     }
 
     #[cfg(windows)]
     fn sync_tray(&mut self) {
-        if let Some(t) = &self.tray {
+        with_tray_handles(|t| {
             t._tray.set_tooltip(Some(self.downloads.summary())).ok();
             t.monitoring.set_checked(self.settings.monitoring_enabled);
             t.auto_mode
                 .set_checked(self.settings.default_action == DefaultAction::AutoDownload);
-        }
+        });
     }
 }
 
@@ -1111,6 +1248,22 @@ impl eframe::App for App {
         self.process_ytdlp_fetch();
         self.process_ffmpeg_fetch();
         self.process_tray_events(ctx);
+
+        // Settings-file reload (0.2.7): the tray handlers apply
+        // toggles directly to the settings file (they cannot
+        // wait for this loop). When the file changes on disk,
+        // adopt it wholesale — the alternative is this app's
+        // next save silently reverting the user's tray clicks.
+        if self.last_settings_check.elapsed() >= Duration::from_secs(1) {
+            self.last_settings_check = Instant::now();
+            let disk_mtime = settings_file_mtime();
+            if disk_mtime.is_some() && disk_mtime != self.settings_mtime {
+                self.settings_mtime = disk_mtime;
+                self.settings = Settings::load();
+                self.tray_visible = self.settings.tray_icon_visible;
+                yttraydl::diag_log("settings reloaded (changed outside the UI)");
+            }
+        }
         self.ensure_version();
         self.activate_next_popup();
         self.sync_tray();
@@ -1240,6 +1393,10 @@ impl eframe::App for App {
                 .set_window(Duration::from_secs(self.settings.dedupe_window_secs));
             if let Err(e) = self.settings.save() {
                 self.toast(format!("Saving settings failed: {e}"), ToastKind::Error);
+            } else {
+                // Our own save must not look like an external
+                // change to the reload check above.
+                self.settings_mtime = settings_file_mtime();
             }
         }
 
@@ -1275,11 +1432,14 @@ impl eframe::App for App {
                 self.last_heartbeat = Instant::now();
                 use std::sync::atomic::Ordering;
                 yttraydl::diag_log(&format!(
-                    "hb: frames={} sends={} send_errs={} drained={} panel={}",
+                    "hb: frames={} sends={} send_errs={} drained={} pending={} panel={}",
                     self.frames,
                     TRAY_SENDS.load(Ordering::Relaxed),
                     TRAY_SEND_ERRS.load(Ordering::Relaxed),
                     TRAY_DRAINED.load(Ordering::Relaxed),
+                    TRAY_SENDS
+                        .load(Ordering::Relaxed)
+                        .saturating_sub(TRAY_DRAINED.load(Ordering::Relaxed)),
                     self.show_panel
                 ));
             }

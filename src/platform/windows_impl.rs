@@ -492,3 +492,106 @@ fn close_listener() {
         }
     }
 }
+
+// ---------------- notification sound + taskbar progress ----------------
+
+use windows_sys::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+};
+use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows_sys::Win32::UI::Shell::{
+    TaskbarList as CLSID_TASKBAR_LIST, TBPF_NOPROGRESS, TBPF_NORMAL,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK;
+
+/// Play the standard Windows notification sound (Settings →
+/// General → Notifications → "Play a sound when a download
+/// finishes").
+pub fn play_notification_sound() {
+    unsafe {
+        let _ = MessageBeep(MB_ICONASTERISK);
+    }
+}
+
+/// IID of ITaskbarList3 ({EA1AFB91-9E28-4B86-90E9-9E9F8A5EEF75}).
+/// windows-sys ships the CLSID and the TBPFLAG constants but not
+/// the interface itself, so the few vtbl slots used here are
+/// called by index (ITaskbarList3 : ITaskbarList2 : ITaskbarList
+/// : IUnknown — Release = 2, HrInit = 3, SetProgressValue = 9,
+/// SetProgressState = 10).
+const IID_ITASKBAR_LIST3: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xea1afb91_9e28_4b86_90e9_9e9f8a5eef75);
+
+thread_local! {
+    /// The ITaskbarList3 object pointer (as usize), created
+    /// lazily. COM apartment rules: the object must be used
+    /// from the thread that created it — every caller runs on
+    /// the GUI thread, and the thread-local enforces that.
+    static TASKBAR_LIST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TASKBAR_INITED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn taskbar_list3() -> Option<*mut std::ffi::c_void> {
+    let cached = TASKBAR_LIST.with(|c| c.get());
+    if cached != 0 {
+        return Some(cached as *mut std::ffi::c_void);
+    }
+    unsafe {
+        // Best-effort COM init for this thread; eframe/winit may
+        // already have initialized an apartment (an RPC_E_CHANGED_MODE
+        // result is fine — an apartment exists either way).
+        let _ = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
+        let hr = CoCreateInstance(
+            &CLSID_TASKBAR_LIST,
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            &IID_ITASKBAR_LIST3,
+            &mut obj,
+        );
+        if hr < 0 || obj.is_null() {
+            return None;
+        }
+        TASKBAR_LIST.with(|c| c.set(obj as usize));
+        Some(obj)
+    }
+}
+
+/// Read vtbl slot `slot` of a COM object as a function pointer.
+unsafe fn vtbl_fn<T: Copy>(obj: *mut std::ffi::c_void, slot: usize) -> T {
+    let vtbl = *(obj as *const *const usize);
+    std::mem::transmute_copy(&*vtbl.add(slot))
+}
+
+/// Set (or clear, with `None`) the main window's taskbar-button
+/// progress bar.
+pub fn set_taskbar_progress(frac: Option<f64>) {
+    let Some(hwnd) = find_main_window() else {
+        return;
+    };
+    let Some(obj) = taskbar_list3() else {
+        return;
+    };
+    unsafe {
+        if !TASKBAR_INITED.with(|c| c.get()) {
+            type HrInitFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> i32;
+            let hr_init: HrInitFn = vtbl_fn(obj, 3);
+            let _ = hr_init(obj);
+            TASKBAR_INITED.with(|c| c.set(true));
+        }
+        type SetStateFn = unsafe extern "system" fn(*mut std::ffi::c_void, HWND, i32) -> i32;
+        let set_state: SetStateFn = vtbl_fn(obj, 10);
+        match frac {
+            Some(f) => {
+                type SetValueFn =
+                    unsafe extern "system" fn(*mut std::ffi::c_void, HWND, u64, u64) -> i32;
+                let set_value: SetValueFn = vtbl_fn(obj, 9);
+                let _ = set_state(obj, hwnd, TBPF_NORMAL);
+                let _ = set_value(obj, hwnd, (f.clamp(0.0, 1.0) * 1000.0) as u64, 1000);
+            }
+            None => {
+                let _ = set_state(obj, hwnd, TBPF_NOPROGRESS);
+            }
+        }
+    }
+}

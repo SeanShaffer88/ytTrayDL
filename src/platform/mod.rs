@@ -226,6 +226,58 @@ pub fn set_taskbar_progress(frac: Option<f64>) {
     }
 }
 
+/// Free bytes available to the current user on the volume
+/// holding `path` (the low-disk-space guard). `None` when the
+/// volume can't be queried.
+pub fn free_disk_bytes(path: &Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        windows_impl::free_disk_bytes(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Put the PC to sleep (the queue-empty action). Returns whether
+/// the request was issued. No-op (false) off Windows.
+pub fn suspend_system() -> bool {
+    #[cfg(windows)]
+    {
+        windows_impl::suspend_system()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Run a user-configured command line through the system shell
+/// (`cmd /C` on Windows, `sh -c` elsewhere), detached. Used by
+/// the post-download command; the command is the user's own
+/// setting, and placeholders are substituted by the caller.
+pub fn run_shell_command(line: &str) {
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", line]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("sh");
+        c.args(["-c", line]);
+        c
+    };
+    let _ = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// True when this process was asked (by a later launch) to show
 /// itself before `setup` ran — handled inside setup on Windows;
 /// always false elsewhere.

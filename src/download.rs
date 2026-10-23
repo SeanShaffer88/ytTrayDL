@@ -9,7 +9,7 @@
 //! `max_concurrent_downloads` jobs run at once; the rest wait.
 
 use crate::settings::{Preset, Settings};
-use crate::ytdlp::{build_download_args_with_playlist, parse_progress_line, ProgressEvent};
+use crate::ytdlp::{build_download_args_full, parse_progress_line, ProgressEvent};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -57,6 +57,9 @@ pub struct Job {
     /// = whole playlist, `Some(false)` = just the linked item,
     /// `None` = follow the global setting.
     pub playlist_all: Option<bool>,
+    /// Per-download output folder from the popup; `None` = the
+    /// settings download folder.
+    pub output_dir: Option<PathBuf>,
     pub error: Option<String>,
     /// Last few output lines, kept for the error tooltip/details.
     pub tail_lines: Vec<String>,
@@ -172,6 +175,30 @@ impl DownloadManager {
         attempts: u32,
         playlist_all: Option<bool>,
     ) -> u64 {
+        self.enqueue_job(
+            url,
+            title,
+            preset,
+            use_archive,
+            attempts,
+            playlist_all,
+            None,
+        )
+    }
+
+    /// The fullest enqueue: everything `enqueue_full` takes plus
+    /// a per-download output folder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enqueue_job(
+        &mut self,
+        url: String,
+        title: String,
+        preset: Preset,
+        use_archive: bool,
+        attempts: u32,
+        playlist_all: Option<bool>,
+        output_dir: Option<PathBuf>,
+    ) -> u64 {
         // De-duplicate identical in-flight URLs: a second request for
         // the same URL+preset just returns the existing job id.
         for r in &self.running {
@@ -201,6 +228,7 @@ impl DownloadManager {
             use_archive,
             attempts,
             playlist_all,
+            output_dir,
             error: None,
             tail_lines: Vec::new(),
         });
@@ -221,12 +249,13 @@ impl DownloadManager {
             let pause = Arc::new(AtomicBool::new(false));
             let tx = self.tx.clone();
             let bin = bin.to_path_buf();
-            let args = build_download_args_with_playlist(
+            let args = build_download_args_full(
                 settings,
                 job.preset,
                 &job.url,
                 job.use_archive,
                 job.playlist_all,
+                job.output_dir.as_deref(),
             );
             let shared = Arc::new(Mutex::new(job.clone()));
             let thread_shared = shared;
@@ -360,13 +389,14 @@ impl DownloadManager {
     pub fn requeue_finished(&mut self, id: u64) -> Option<u64> {
         let pos = self.finished.iter().position(|j| j.id == id)?;
         let old = self.finished.remove(pos);
-        Some(self.enqueue_full(
+        Some(self.enqueue_job(
             old.url,
             old.title,
             old.preset,
             old.use_archive,
             0,
             old.playlist_all,
+            old.output_dir,
         ))
     }
 
@@ -691,6 +721,7 @@ mod tests {
             use_archive: true,
             attempts: 0,
             playlist_all: None,
+            output_dir: None,
             error: None,
             tail_lines: Vec::new(),
         };

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.9 — 2026-10-23
+
+- **Full queue management in the Downloads window.** Reorder
+  queued downloads with ↑/↓ (each waiting row shows its place,
+  "#2 in queue"), pause and resume individual downloads —
+  pausing keeps the partial file and resuming continues it
+  instead of restarting — retry failed or cancelled downloads
+  with their original quality, remove finished entries or
+  clear the finished list, and Pause all / Resume all /
+  Cancel all for the whole queue. The tray menu gains a
+  Pause all / Resume all item too.
+- **More popup positions**: Top-left, Bottom-left, and Center
+  of the screen join Bottom-right, Top-right, and Near the
+  mouse cursor in Settings → General.
+- **New download options** (Settings → Downloads): a speed
+  limit (KB/s, passed to yt-dlp as `--limit-rate`) and
+  auto-retry — failed downloads retry up to N times with
+  their original quality before giving up (a manual cancel
+  is never retried).
+- **Open the download folder when a download finishes** —
+  a new option with the notification settings (off by
+  default).
+
 ## 0.2.8 — 2026-10-23
 
 - **Single left-click on the tray icon now toggles the

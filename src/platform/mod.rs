@@ -173,6 +173,21 @@ pub fn show_main_window() -> bool {
     }
 }
 
+/// Toggle the main window's visibility at the OS level
+/// (0.2.8). Returns the NEW visibility (`Some(true)` = now
+/// shown, `Some(false)` = now hidden), or `None` when the
+/// window doesn't exist.
+pub fn toggle_main_window() -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows_impl::toggle_main_window()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Show a fatal startup error the user can actually see. A tray
 /// app has no console, so without this a failed start looks like
 /// "double-clicking does nothing".

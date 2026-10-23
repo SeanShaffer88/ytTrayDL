@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.0 — 2026-10-23
+
+- **Quality by domain.** Settings → Domains & rules gains
+  per-domain quality pins: links from a pinned domain start
+  with that quality in the popup (still changeable there)
+  and use it for auto-downloads, instead of the global
+  default.
+- **A playlist choice in every popup.** When a copied link
+  is a playlist, the popup now asks: "Just this video" or
+  "Whole playlist" — per download, whatever the global
+  playlist setting says.
+- **SponsorBlock removal** (Settings → Downloads): yt-dlp
+  cuts SponsorBlock-marked segments (sponsors, self-promos,
+  interaction reminders) from the downloaded file.
+- **Taskbar progress.** The Windows taskbar button shows
+  overall download progress while the queue is active.
+- **Drag-and-drop.** Drop a text file of links (`.txt`,
+  `.url`, …) onto the panel and the links are processed
+  exactly like copied links.
+- **Finish sound** (Settings → General → Notifications):
+  the standard Windows notification sound when a download
+  completes. Off by default.
+- **Export / import settings** (Settings → yt-dlp): all
+  settings — domain rules and quality pins included — as a
+  JSON file, for backup or moving to another PC. Importing
+  applies immediately.
+- **Check for yt-dlp updates** (Settings → yt-dlp): compares
+  the yt-dlp copy in use with the latest GitHub release and
+  tells you where you stand. Runs only when clicked.
+- **Cookies from browser is now a dropdown** (Chrome, Edge,
+  Firefox, Brave, Opera, Vivaldi, Chromium); a custom value
+  from an older version stays editable as text.
+
 ## 0.2.9 — 2026-10-23
 
 - **Full queue management in the Downloads window.** Reorder

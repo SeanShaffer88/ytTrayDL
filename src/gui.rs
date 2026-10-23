@@ -163,6 +163,31 @@ pub struct TrayHandles {
     id_exit: tray_icon::menu::MenuId,
 }
 
+/// Tray UI events, delivered by the tray-icon / muda event
+/// handlers installed in `ensure_tray` (0.2.4).
+///
+/// Why handlers: the documented integration for winit-based
+/// apps (eframe is winit underneath) is
+/// `TrayIconEvent::set_event_handler` /
+/// `MenuEvent::set_event_handler` forwarding into the app's
+/// own queue. Polling the global `receiver()` channels never
+/// delivered a single event under eframe on a real machine —
+/// field-proven in 0.2.3, whose log shows a clean launch and
+/// zero tray clicks while the user clicked Exit on the menu;
+/// every "tray doesn't respond" report traces back to this.
+/// The handlers also wake the UI directly, so tray clicks act
+/// immediately instead of within the 200 ms repaint poll.
+#[cfg(windows)]
+enum TrayUiEvent {
+    Icon(tray_icon::TrayIconEvent),
+    Menu(tray_icon::menu::MenuEvent),
+}
+
+/// Sender half shared with the static event handlers; the
+/// receiver lives on `App`.
+#[cfg(windows)]
+static TRAY_EVENT_TX: std::sync::OnceLock<Sender<TrayUiEvent>> = std::sync::OnceLock::new();
+
 pub struct App {
     pub settings: Settings,
     pub settings_dirty: bool,
@@ -183,6 +208,14 @@ pub struct App {
     tray: Option<()>,
     tray_failed: bool,
     tray_visible: bool,
+    /// Receiving end of the handler-fed tray event channel
+    /// (0.2.4); created by `ensure_tray` together with the
+    /// handlers.
+    #[cfg(windows)]
+    tray_event_rx: Option<Receiver<TrayUiEvent>>,
+    #[cfg(not(windows))]
+    #[allow(dead_code)]
+    tray_event_rx: Option<()>,
 
     pub show_panel: bool,
     pub show_settings: bool,
@@ -252,6 +285,7 @@ impl App {
             version_rx: None,
             tray: None,
             tray_failed: false,
+            tray_event_rx: None,
             show_panel: false,
             show_settings: false,
             settings_anim: 0.0,
@@ -670,9 +704,43 @@ impl App {
     }
 
     #[cfg(windows)]
-    fn ensure_tray(&mut self, _ctx: &egui::Context) {
+    fn ensure_tray(&mut self, ctx: &egui::Context) {
         if self.tray.is_some() || self.tray_failed {
             return;
+        }
+        // 0.2.4: install the tray event handlers BEFORE the
+        // icon exists, so no click can race ahead of delivery
+        // setup. Each handler logs at the point of production
+        // (so a future "clicks do nothing" report localizes
+        // from the log alone), forwards into the app channel,
+        // and pokes the UI awake.
+        if self.tray_event_rx.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel::<TrayUiEvent>();
+            self.tray_event_rx = Some(rx);
+            let _ = TRAY_EVENT_TX.set(tx);
+            let wake = ctx.clone();
+            tray_icon::TrayIconEvent::set_event_handler(Some(
+                move |event: tray_icon::TrayIconEvent| {
+                    if matches!(event, tray_icon::TrayIconEvent::Click { .. }) {
+                        yttraydl::diag_log(&format!("tray icon event (handler): {event:?}"));
+                    }
+                    if let Some(tx) = TRAY_EVENT_TX.get() {
+                        let _ = tx.send(TrayUiEvent::Icon(event));
+                    }
+                    wake.request_repaint();
+                },
+            ));
+            let wake = ctx.clone();
+            tray_icon::menu::MenuEvent::set_event_handler(Some(
+                move |event: tray_icon::menu::MenuEvent| {
+                    yttraydl::diag_log(&format!("tray menu event (handler): id={:?}", event.id));
+                    if let Some(tx) = TRAY_EVENT_TX.get() {
+                        let _ = tx.send(TrayUiEvent::Menu(event));
+                    }
+                    wake.request_repaint();
+                },
+            ));
+            yttraydl::diag_log("tray event handlers installed");
         }
         use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
         let menu = Menu::new();
@@ -792,7 +860,28 @@ impl App {
     #[cfg(windows)]
     fn process_tray_events(&mut self, ctx: &egui::Context) {
         use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+        // Gather from every delivery route (0.2.4): the
+        // handler-fed app channel is primary; the global
+        // receivers are drained as a fallback — tray-icon
+        // documents that they receive nothing once handlers
+        // are installed, so no event can arrive twice.
+        let mut icon_events: Vec<TrayIconEvent> = Vec::new();
+        let mut menu_events: Vec<tray_icon::menu::MenuEvent> = Vec::new();
+        if let Some(rx) = &self.tray_event_rx {
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    TrayUiEvent::Icon(e) => icon_events.push(e),
+                    TrayUiEvent::Menu(e) => menu_events.push(e),
+                }
+            }
+        }
         while let Ok(ev) = TrayIconEvent::receiver().try_recv() {
+            icon_events.push(ev);
+        }
+        while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+            menu_events.push(ev);
+        }
+        for ev in icon_events {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
@@ -807,7 +896,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
         }
-        while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+        for ev in menu_events {
             let ids = match &self.tray {
                 Some(t) => (
                     t.id_monitoring.clone(),
@@ -821,7 +910,7 @@ impl App {
                     t.id_about.clone(),
                     t.id_exit.clone(),
                 ),
-                None => break,
+                None => continue,
             };
             // Log every tray-menu click by name (0.2.3): when a
             // click "does nothing" in the field, this line is how

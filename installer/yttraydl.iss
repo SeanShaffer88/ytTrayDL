@@ -10,6 +10,13 @@
 #ifndef AppVersion
   #define AppVersion "0.2.4"
 #endif
+; 32-bit builds (CI passes both): /DExeSourceDir=..\target\i686-pc-windows-msvc\release /DArchSuffix=x86
+#ifndef ExeSourceDir
+  #define ExeSourceDir "..\target\release"
+#endif
+#ifndef ArchSuffix
+  #define ArchSuffix "x64"
+#endif
 #define AppName "ytTrayDL"
 #define AppPublisher "Sean Shaffer"
 #define AppURL "https://github.com/SeanShaffer88/ytTrayDL"
@@ -29,7 +36,7 @@ DefaultGroupName=ytTrayDL
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=ytTrayDL-Setup-v{#AppVersion}-windows-x64
+OutputBaseFilename=ytTrayDL-Setup-v{#AppVersion}-windows-{#ArchSuffix}
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 LicenseFile=..\LICENSE
@@ -47,7 +54,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "startup"; Description: "Start ytTrayDL when Windows starts (tray, no window)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-Source: "..\target\release\yttraydl.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeSourceDir}\yttraydl.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 

@@ -89,6 +89,21 @@ pub fn pick_file(filter_name: &str, ext: &str) -> Option<std::path::PathBuf> {
     }
 }
 
+pub fn pick_save_json(default_name: &str) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        rfd::FileDialog::new()
+            .set_file_name(default_name)
+            .add_filter("JSON settings", &["json"])
+            .save_file()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = default_name;
+        None
+    }
+}
+
 pub fn pick_folder(initial: &std::path::Path) -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
@@ -138,6 +153,10 @@ pub struct PopupRequest {
     pub already_downloaded: bool,
     pub preset: Preset,
     pub always_auto_domain: bool,
+    /// Playlist choice for this download (whole playlist vs
+    /// just the linked item); starts from the global setting,
+    /// the user can flip it in the popup for playlist links.
+    pub playlist_all: bool,
     pub shown_at: Instant,
     pub last_interaction: Instant,
 }
@@ -494,6 +513,15 @@ pub struct App {
     pub rule_input_auto: String,
     pub rule_input_allow: String,
     pub rule_input_url: String,
+    pub rule_input_preset_domain: String,
+    pub rule_preset_choice: Preset,
+    /// yt-dlp update check (Settings → yt-dlp): the in-flight
+    /// request and its result ("latest release tag" lookup).
+    ytdlp_check_rx: Option<Receiver<Result<String, String>>>,
+    pub ytdlp_latest: Option<Result<String, String>>,
+    /// Last taskbar-progress value sent to the platform layer
+    /// (-2 = never sent, -1 = cleared, 0..=1000 = fraction).
+    taskbar_sent: i32,
     pub reset_armed: bool,
     manual_url: String,
     first_frame: bool,
@@ -571,6 +599,11 @@ impl App {
             rule_input_auto: String::new(),
             rule_input_allow: String::new(),
             rule_input_url: String::new(),
+            rule_input_preset_domain: String::new(),
+            rule_preset_choice: Preset::default(),
+            ytdlp_check_rx: None,
+            ytdlp_latest: None,
+            taskbar_sent: -2,
             reset_armed: false,
             manual_url: String::new(),
             first_frame: true,
@@ -634,6 +667,20 @@ impl App {
     }
 
     pub fn start_download(&mut self, url: &str, title: &str, preset: Preset, force: bool) {
+        self.start_download_pl(url, title, preset, force, None);
+    }
+
+    /// `start_download` with a per-download playlist choice
+    /// (from the popup): `Some(true)` = whole playlist,
+    /// `Some(false)` = just the linked item, `None` = global.
+    pub fn start_download_pl(
+        &mut self,
+        url: &str,
+        title: &str,
+        preset: Preset,
+        force: bool,
+        playlist_all: Option<bool>,
+    ) {
         if self.bin.is_none() {
             self.toast(
                 "yt-dlp is not installed yet — open ytTrayDL to install it.",
@@ -643,8 +690,14 @@ impl App {
             return;
         }
         let use_archive = self.settings.skip_already_downloaded && !force;
-        self.downloads
-            .enqueue(url.to_string(), title.to_string(), preset, use_archive);
+        self.downloads.enqueue_full(
+            url.to_string(),
+            title.to_string(),
+            preset,
+            use_archive,
+            0,
+            playlist_all,
+        );
         self.pump_downloads();
         if self.settings.notify_on_auto_start && title.is_empty() {
             self.toast(
@@ -690,7 +743,9 @@ impl App {
                     self.last_ignored.truncate(8);
                 }
                 Decision::AutoDownload => {
-                    self.start_download(url, "", self.settings.default_preset, false);
+                    let preset = yttraydl::rules::preset_for_url(url, &self.settings)
+                        .unwrap_or(self.settings.default_preset);
+                    self.start_download(url, "", preset, false);
                 }
                 Decision::Prompt => self.queue_popup(url),
             }
@@ -711,8 +766,10 @@ impl App {
             info: None,
             info_loading: false,
             already_downloaded: false,
-            preset: self.settings.default_preset,
+            preset: yttraydl::rules::preset_for_url(url, &self.settings)
+                .unwrap_or(self.settings.default_preset),
             always_auto_domain: false,
+            playlist_all: self.settings.allow_playlists,
             shown_at: Instant::now(),
             last_interaction: Instant::now(),
         });
@@ -774,6 +831,99 @@ impl App {
             let _ = tx.send(yttraydl::download_managed_ffmpeg());
         });
         self.toast("Downloading ffmpeg (about 110 MB)…", ToastKind::Info);
+    }
+
+    /// Ask GitHub for the latest yt-dlp release tag (worker
+    /// thread; the result lands in `self.ytdlp_latest` via
+    /// `process_ytdlp_check`). Only ever runs on demand.
+    pub fn start_ytdlp_update_check(&mut self) {
+        if self.ytdlp_check_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ytdlp_check_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(yttraydl::fetch_latest_ytdlp_tag());
+        });
+    }
+
+    fn process_ytdlp_check(&mut self) {
+        if let Some(rx) = &self.ytdlp_check_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ytdlp_check_rx = None;
+                self.ytdlp_latest = Some(result);
+            }
+        }
+    }
+
+    /// Files dropped onto the panel: read any text file
+    /// (`.txt`, `.url`, a list of links…) and route every URL
+    /// found through the normal dedupe + rules pipeline —
+    /// exactly as if the links had been copied one by one.
+    fn process_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if dropped.is_empty() {
+            return;
+        }
+        let mut found: Vec<String> = Vec::new();
+        for file in &dropped {
+            let Some(path) = &file.path else { continue };
+            let Ok(meta) = std::fs::metadata(path) else {
+                continue;
+            };
+            if !meta.is_file() || meta.len() > 1_048_576 {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&bytes);
+            found.extend(extract_urls(&text));
+        }
+        if found.is_empty() {
+            self.toast("No links found in the dropped file(s).", ToastKind::Info);
+            return;
+        }
+        let n = found.len();
+        if self.settings.monitoring_enabled {
+            for url in &found {
+                self.handle_detected_url(url, false);
+            }
+        } else {
+            for url in &found {
+                self.queue_popup(url);
+            }
+        }
+        self.toast(
+            format!("{n} link(s) dropped — processing them like copied links."),
+            ToastKind::Info,
+        );
+    }
+
+    /// Keep the taskbar button's progress bar in step with the
+    /// queue: the value is the mean completion across active
+    /// jobs (queued jobs count as 0%). Cleared when nothing is
+    /// active. Only talks to the OS when the value changes.
+    fn sync_taskbar_progress(&mut self) {
+        let active = self.downloads.active_count();
+        let target: i32 = if active == 0 {
+            -1
+        } else {
+            let sum: f64 = self
+                .downloads
+                .running_jobs()
+                .map(|j| j.percent as f64 / 100.0)
+                .sum();
+            ((sum / active as f64) * 1000.0) as i32
+        };
+        if target != self.taskbar_sent {
+            self.taskbar_sent = target;
+            if target < 0 {
+                yttraydl::platform::set_taskbar_progress(None);
+            } else {
+                yttraydl::platform::set_taskbar_progress(Some(target as f64 / 1000.0));
+            }
+        }
     }
 
     /// Hide EVERYTHING — panel and tray icon — while the app keeps
@@ -858,12 +1008,13 @@ impl App {
                     // Auto-retry with the original preset; the
                     // failure is not recorded as final yet.
                     let next = job.attempts + 1;
-                    self.downloads.enqueue_with_attempts(
+                    self.downloads.enqueue_full(
                         job.url.clone(),
                         job.title.clone(),
                         job.preset,
                         job.use_archive,
                         next,
+                        job.playlist_all,
                     );
                     self.toast(
                         format!(
@@ -908,6 +1059,9 @@ impl App {
                     JobState::Done => {
                         if job.already_downloaded {
                             self.seen.forget(&job.url);
+                        }
+                        if self.settings.sound_on_finish {
+                            yttraydl::platform::play_notification_sound();
                         }
                         if self.settings.notify_on_complete {
                             self.toast(
@@ -1418,6 +1572,9 @@ impl eframe::App for App {
         self.process_download_events();
         self.process_ytdlp_fetch();
         self.process_ffmpeg_fetch();
+        self.process_ytdlp_check();
+        self.process_dropped_files(ctx);
+        self.sync_taskbar_progress();
         self.process_tray_events(ctx);
 
         // Settings-file reload (0.2.7): the tray handlers apply

@@ -183,6 +183,9 @@ pub enum PopupPosition {
     BottomRight,
     NearCursor,
     TopRight,
+    TopLeft,
+    BottomLeft,
+    Center,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +238,12 @@ pub struct Settings {
     pub subtitle_languages: String,
     pub allow_playlists: bool,
     pub max_concurrent_downloads: usize,
+    /// Bandwidth cap for downloads in KiB/s (passed to yt-dlp as
+    /// `--limit-rate`). 0 = no limit.
+    pub rate_limit_kbps: u32,
+    /// Automatically retry a failed download this many times
+    /// (with its original preset) before giving up. 0 = off.
+    pub auto_retry_attempts: u32,
     /// Extra yt-dlp arguments, split like a command line. Power-user
     /// escape hatch, shown verbatim in Settings.
     pub extra_args: String,
@@ -250,6 +259,9 @@ pub struct Settings {
 
     // --- Notifications / popup ---
     pub notify_on_complete: bool,
+    /// Open the download folder in Explorer when a download
+    /// finishes successfully.
+    pub open_folder_on_finish: bool,
     pub notify_on_error: bool,
     pub notify_on_auto_start: bool,
     pub popup_position: PopupPosition,
@@ -285,11 +297,14 @@ impl Default for Settings {
             subtitle_languages: "en.*".to_string(),
             allow_playlists: false,
             max_concurrent_downloads: 2,
+            rate_limit_kbps: 0,
+            auto_retry_attempts: 0,
             extra_args: String::new(),
             cookies_from_browser: String::new(),
             ytdlp_path: PathBuf::new(),
             ffmpeg_path: PathBuf::new(),
             notify_on_complete: true,
+            open_folder_on_finish: false,
             notify_on_error: true,
             notify_on_auto_start: false,
             popup_position: PopupPosition::default(),

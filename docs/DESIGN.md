@@ -213,6 +213,54 @@ Bottom-right, Top-right, and Near-cursor.
   compares it with the running copy's version. It runs
   only from the button — no background phoning home.
 
+## 0.4.0 additions
+
+- **Channel watcher**: `Settings::subscriptions` (URL +
+  preset). A worker thread per poll runs
+  `fetch_playlist_entries` (`--flat-playlist --dump-json
+  --playlist-end 10`) per subscription; `saved::WatchData`
+  (`watch.json`) records the entry ids each URL has shown.
+  First poll of a URL baselines only. New ids enqueue via
+  the normal download path (archive dedupe still applies).
+- **Subtitles-only preset**: no `-f` at all; the arg vector
+  carries `--skip-download --write-subs --write-auto-subs
+  --sub-langs <setting> --convert-subs srt`. Merge-format,
+  embed-subs and split-chapters are suppressed for it.
+- **Audio convert presets**: MP3/M4A/Opus/FLAC/WAV share one
+  arg shape (`-x --audio-format <fmt> --audio-quality 0`)
+  via `Preset::audio_format`.
+- **Popup upgrades**: `VideoInfo` gained
+  height/format_note/filesize(_approx); the popup meta line
+  shows resolution + size. The thumbnail URL is fetched
+  with the bundled curl (`fetch_url_bytes`, 3 MB cap) and
+  decoded with the `image` crate (JPEG/PNG only) on a
+  worker thread, then uploaded as an egui texture.
+  `PopupRequest::folder` carries a per-download output
+  folder into `Job::output_dir` / `build_download_args_full`.
+  "Later" parks the link via `saved.rs` (`saved.json`).
+- **Failure banner**: final failures (after auto-retry)
+  set `App::failure_notice`; Retry requeues the finished
+  job (original preset + folder preserved).
+- **Queue-empty action**: fires once when a queue that had
+  active work drains completely (nothing queued/running/
+  paused): sound, `SetSuspendState`, or graceful exit.
+- **Low-disk guard**: `platform::free_disk_bytes`
+  (`GetDiskFreeSpaceExW`) gates `pump_downloads` — queued
+  jobs wait under the threshold; running jobs finish.
+- **Post-download command**: on success, the user's command
+  line runs through the shell with `{file}`/`{dir}`/
+  `{url}`/`{title}` substituted.
+- **Portable mode**: `settings::config_dir` checks once
+  for `portable.txt` next to the exe; when present, all
+  data resolves to `<exe dir>/ytTrayDL-data`. Every stored
+  file already funnels through `config_dir()`.
+- **Settings animation toggle**: `animate_settings_drawer`
+  false snaps the drawer animation value to its target;
+  the window resize runs once at the final width.
+- **Batch paste** needed no change: the clipboard handler
+  already routes every extracted URL (verified by reading
+  `process_platform_events`); popups queue in order.
+
 ## Verification matrix
 
 | Area | State | Evidence |
@@ -226,6 +274,7 @@ Bottom-right, Top-right, and Near-cursor.
 | Download manager queueing/cancel logic | Verified (logic) | Unit tests; process plumbing partially verified |
 | Queue management + popup positions (0.2.9) | Logic verified; UI **Unverified** on-machine | Manager unit tests cover pause/resume/reorder/retry/remove/clear/cancel-all and the paused-event routing; `--limit-rate` covered by arg-building tests. The Downloads-window controls, tray Pause-all item, and the three new popup positions need a real-machine pass |
 | 0.3.0 feature set | Logic verified; UI **Unverified** on-machine | Arg tests cover SponsorBlock + playlist override; rules tests cover domain-preset resolution. The popup playlist row, taskbar progress bar, finish sound, drag-and-drop, settings import/export, and the update check need a real-machine pass |
+| 0.4.0 feature set | Logic verified; UI **Unverified** on-machine | Arg tests cover subtitles-only, audio-convert formats, split-chapters and the output-dir override; unit tests cover playlist-entry parsing and the watcher's baseline/new-entry diffing. The watcher end-to-end, popup thumbnail, per-download folder, saved list, failure banner, queue-empty actions, disk guard, post-download command, portable mode and the animation toggle all need a real-machine pass |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
 | Eighth field report (2026-10-23) | "Everything works fine" on 0.2.7, with full log | FIELD-CONFIRMED: sends=drained (29/29, 38/38), heartbeats continue across tray interactions, left-click OS restore fires (`show_main_window -> true`), handler-direct Exit executes. Two findings in the same log: (1) the exit path PANICKED — `muda windows mod.rs:122: RefCell already borrowed`, then "panic in a function that cannot unwind" — because the handler dropped the tray handles (muda objects) inside muda's own menu dispatch, which holds that RefCell; the process aborted mid-drop, which still read as "exited" to the user. (2) Menu-ID correction: the handler log proves MenuId 1011 = **Exit** (the 0.2.7 handler names it from the stored ids) — the sixth/seventh reports' arithmetic inference (1011 = Hide icon) was wrong; in 0.2.5 SEAN was clicking Exit ×3 + one other item. Code never relied on the arithmetic (ids are captured from the item objects), only the report narrative did. 0.2.8: Exit routes through the app's graceful shutdown (event forwarded) + a 750 ms forced-exit fallback thread; nothing is dropped inside the dispatch. SEAN-requested in the same report: single left-click toggles the window — `platform::toggle_main_window` (reads real OS visibility; SW_HIDE/SW_SHOW+foreground), handler sends `TrayUiEvent::WindowToggled(visible)` which the app adopts as `show_panel`; 350 ms debounce because Windows delivers a second Up for double-clicks (visible in this very log), which would toggle twice. |
 | In-app ffmpeg install (0.2.0) | **Unverified** on-machine | Download/unpack logic mirrors the yt-dlp installer (curl.exe + tar.exe, both in-box); the archive-layout finder `find_ffmpeg_exes` and the managed `--ffmpeg-location` wiring are unit-tested. Needs a real click-through. |
@@ -249,8 +298,8 @@ Bottom-right, Top-right, and Near-cursor.
 
 - Per-monitor popup placement + remember last position.
 - Playlist item picker in the popup.
-- Thumbnail image in the popup (fetch via reqwest-free path or yt-dlp
-  `--write-thumbnail` to a temp file).
+- ~~Thumbnail image in the popup~~ — shipped in 0.4.0 (bundled curl
+  for bytes + the `image` crate for decode).
 - Drag-and-drop a URL/text file onto the panel to queue downloads.
 - Optional global hotkey "download clipboard now" (bypasses the popup).
 - ~~Signed release + GitHub Releases publishing with checksums~~ —

@@ -183,6 +183,19 @@ pub fn build_download_args_with_playlist(
     use_archive: bool,
     playlist_override: Option<bool>,
 ) -> Vec<String> {
+    build_download_args_full(settings, preset, url, use_archive, playlist_override, None)
+}
+
+/// The full argument builder: playlist choice + a per-download
+/// output-folder override (`None` = `settings.download_folder`).
+pub fn build_download_args_full(
+    settings: &Settings,
+    preset: Preset,
+    url: &str,
+    use_archive: bool,
+    playlist_override: Option<bool>,
+    output_dir: Option<&std::path::Path>,
+) -> Vec<String> {
     // Machine-parseable, line-at-a-time progress; resume partial
     // downloads instead of restarting them; don't let a page's own
     // timestamps confuse file sorting.
@@ -200,39 +213,53 @@ pub fn build_download_args_with_playlist(
             args.push("-f".into());
             args.push("bv*+ba/b".into());
         }
-        Preset::AudioMp3 => {
-            args.push("-x".into());
-            args.push("--audio-format".into());
-            args.push("mp3".into());
-            args.push("--audio-quality".into());
-            args.push("0".into());
-        }
         Preset::AudioOriginal => {
             args.push("-f".into());
             args.push("ba/b".into());
             args.push("-x".into());
         }
+        Preset::SubtitlesOnly => {
+            // No media format at all: `--skip-download` below
+            // means only subtitle files are written.
+            args.push("--skip-download".into());
+            args.push("--write-subs".into());
+            args.push("--write-auto-subs".into());
+            args.push("--sub-langs".into());
+            args.push(settings.subtitle_languages.clone());
+            args.push("--convert-subs".into());
+            args.push("srt".into());
+        }
         Preset::Custom => {
             args.push("-f".into());
             args.push(settings.custom_format.clone());
         }
-        capped => {
-            let h = capped.max_height().unwrap_or(4320);
-            args.push("-f".into());
-            args.push(format!("bv*[height<={h}]+ba/b[height<={h}]/b"));
+        other => {
+            if let Some(fmt) = other.audio_format() {
+                // Extract-and-convert audio presets (MP3/M4A/…).
+                args.push("-x".into());
+                args.push("--audio-format".into());
+                args.push(fmt.into());
+                args.push("--audio-quality".into());
+                args.push("0".into());
+            } else {
+                // Height-capped video presets.
+                let h = other.max_height().unwrap_or(4320);
+                args.push("-f".into());
+                args.push(format!("bv*[height<={h}]+ba/b[height<={h}]/b"));
+            }
         }
     }
 
-    if !preset.is_audio() {
+    if !preset.is_audio() && preset != Preset::SubtitlesOnly {
         if let Some(fmt) = settings.container.merge_format() {
             args.push("--merge-output-format".into());
             args.push(fmt.into());
         }
     }
 
-    // Output location + name.
-    let template = settings
-        .download_folder
+    // Output location + name (per-download folder wins).
+    let template = output_dir
+        .unwrap_or(&settings.download_folder)
         .join(&settings.filename_template)
         .to_string_lossy()
         .to_string();
@@ -265,6 +292,11 @@ pub fn build_download_args_with_playlist(
         args.push("all".into());
     }
 
+    // Chaptered downloads become one file per chapter.
+    if settings.split_chapters && preset != Preset::SubtitlesOnly {
+        args.push("--split-chapters".into());
+    }
+
     if settings.embed_metadata {
         args.push("--embed-metadata".into());
     }
@@ -279,7 +311,7 @@ pub fn build_download_args_with_playlist(
         args.push("--write-auto-subs".into());
         args.push("--sub-langs".into());
         args.push(settings.subtitle_languages.clone());
-        if !preset.is_audio() {
+        if !preset.is_audio() && preset != Preset::SubtitlesOnly {
             args.push("--embed-subs".into());
         }
     }
@@ -487,6 +519,14 @@ pub struct VideoInfo {
     #[serde(rename = "_type")]
     pub kind: Option<String>,
     pub playlist_count: Option<u32>,
+    /// Height of the (best) video format, when known.
+    pub height: Option<u32>,
+    /// yt-dlp's short format description (e.g. "1080p").
+    pub format_note: Option<String>,
+    /// Exact size of the chosen format(s) when yt-dlp knows it.
+    pub filesize: Option<u64>,
+    /// Approximate size (most common for merged formats).
+    pub filesize_approx: Option<u64>,
 }
 
 impl VideoInfo {
@@ -505,6 +545,125 @@ impl VideoInfo {
     pub fn is_playlist(&self) -> bool {
         self.kind.as_deref() == Some("playlist") || self.playlist_count.unwrap_or(0) > 1
     }
+
+    /// Best-known download size in bytes (exact beats approx).
+    pub fn size_bytes(&self) -> Option<u64> {
+        self.filesize.or(self.filesize_approx)
+    }
+
+    /// Whether `size_bytes` is only an approximation.
+    pub fn size_is_approx(&self) -> bool {
+        self.filesize.is_none() && self.filesize_approx.is_some()
+    }
+
+    /// Short resolution text for the popup: yt-dlp's own note
+    /// ("1080p") when present, else derived from the height.
+    pub fn resolution_text(&self) -> Option<String> {
+        if let Some(note) = &self.format_note {
+            let note = note.trim();
+            if !note.is_empty() {
+                return Some(note.to_string());
+            }
+        }
+        self.height.map(|h| format!("{h}p"))
+    }
+}
+
+/// Human file size: 1536 → "1.5 KB", 358_000_000 → "341 MB".
+pub fn format_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let v = n as f64;
+    let (value, unit) = if v >= GB {
+        (v / GB, "GB")
+    } else if v >= MB {
+        (v / MB, "MB")
+    } else if v >= KB {
+        (v / KB, "KB")
+    } else {
+        return format!("{n} B");
+    };
+    if value >= 100.0 {
+        format!("{value:.0} {unit}")
+    } else {
+        format!("{value:.1} {unit}")
+    }
+}
+
+/// One entry of a flat playlist probe, used by the channel
+/// watcher to spot new uploads on a channel/playlist page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistEntry {
+    pub id: String,
+    /// A directly downloadable page URL for the entry.
+    pub url: String,
+    pub title: String,
+}
+
+/// Parse `--flat-playlist --dump-json` output (one JSON object
+/// per line) into entries. Lines that don't parse, and entries
+/// without a usable http(s) URL, are skipped — a flat probe of
+/// some sites yields bare ids, which can't be downloaded
+/// directly and are safer ignored than guessed at.
+pub fn parse_playlist_entries(text: &str) -> Vec<PlaylistEntry> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let url = v
+            .get("webpage_url")
+            .and_then(|u| u.as_str())
+            .filter(|u| u.starts_with("http"))
+            .or_else(|| {
+                v.get("url")
+                    .and_then(|u| u.as_str())
+                    .filter(|u| u.starts_with("http"))
+            });
+        let Some(url) = url else { continue };
+        let id = v
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or(url)
+            .to_string();
+        let title = v
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+        out.push(PlaylistEntry {
+            id,
+            url: url.to_string(),
+            title,
+        });
+    }
+    out
+}
+
+/// Arguments for the watcher's flat probe of a channel/playlist
+/// page: metadata for the newest `limit` entries, no downloads.
+pub fn build_playlist_probe_args(settings: &Settings, url: &str, limit: u32) -> Vec<String> {
+    let mut args = vec![
+        "--flat-playlist".to_string(),
+        "--dump-json".to_string(),
+        "--no-warnings".to_string(),
+        "--no-colors".to_string(),
+        "--playlist-end".to_string(),
+        limit.max(1).to_string(),
+    ];
+    let cookies = settings.cookies_from_browser.trim();
+    if !cookies.is_empty() {
+        args.push("--cookies-from-browser".into());
+        args.push(cookies.to_string());
+    }
+    args.push("--".into());
+    args.push(url.to_string());
+    args
 }
 
 pub fn parse_info_json(text: &str) -> Result<VideoInfo, serde_json::Error> {
@@ -611,6 +770,106 @@ mod tests {
         assert!(args.contains(&"-x".to_string()));
         assert!(args.contains(&"mp3".to_string()));
         assert!(!args.contains(&"--merge-output-format".to_string()));
+    }
+
+    #[test]
+    fn subtitles_only_skips_download_and_media() {
+        let args = build_download_args(
+            &settings(),
+            Preset::SubtitlesOnly,
+            "https://youtu.be/x",
+            true,
+        );
+        assert!(args.contains(&"--skip-download".to_string()));
+        assert!(args.contains(&"--write-subs".to_string()));
+        assert!(args.contains(&"--convert-subs".to_string()));
+        assert!(args.contains(&"srt".to_string()));
+        // No media format selection, no merge container.
+        assert!(!args.contains(&"-f".to_string()));
+        assert!(!args.contains(&"--merge-output-format".to_string()));
+        assert!(!args.contains(&"--embed-subs".to_string()));
+    }
+
+    #[test]
+    fn audio_convert_presets_use_their_format() {
+        for (preset, fmt) in [
+            (Preset::AudioMp3, "mp3"),
+            (Preset::AudioM4a, "m4a"),
+            (Preset::AudioOpus, "opus"),
+            (Preset::AudioFlac, "flac"),
+            (Preset::AudioWav, "wav"),
+        ] {
+            let args = build_download_args(&settings(), preset, "https://youtu.be/x", true);
+            assert!(args.contains(&"-x".to_string()), "{preset:?}");
+            assert!(args.contains(&fmt.to_string()), "{preset:?}");
+            assert!(preset.is_audio());
+        }
+        assert_eq!(Preset::ALL.len(), 15);
+    }
+
+    #[test]
+    fn split_chapters_arg_only_when_enabled() {
+        let mut s = settings();
+        let args = build_download_args(&s, Preset::Best, "https://youtu.be/x", true);
+        assert!(!args.contains(&"--split-chapters".to_string()));
+        s.split_chapters = true;
+        let args = build_download_args(&s, Preset::Best, "https://youtu.be/x", true);
+        assert!(args.contains(&"--split-chapters".to_string()));
+        // …but never for subtitles-only (nothing to split).
+        let args = build_download_args(&s, Preset::SubtitlesOnly, "https://youtu.be/x", true);
+        assert!(!args.contains(&"--split-chapters".to_string()));
+    }
+
+    #[test]
+    fn output_dir_override_wins_over_settings_folder() {
+        let s = settings();
+        let dir = std::path::Path::new("/somewhere/else");
+        let args = build_download_args_full(
+            &s,
+            Preset::Best,
+            "https://youtu.be/x",
+            true,
+            None,
+            Some(dir),
+        );
+        let pos = args.iter().position(|a| a == "-o").unwrap();
+        assert!(
+            args[pos + 1].starts_with("/somewhere/else"),
+            "{}",
+            args[pos + 1]
+        );
+    }
+
+    #[test]
+    fn format_bytes_scales() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(341_000_000), "325 MB");
+        assert_eq!(format_bytes(2_500_000_000), "2.3 GB");
+    }
+
+    #[test]
+    fn playlist_entries_parse_and_skip_unusable() {
+        let text = concat!(
+            "{\"id\":\"v1\",\"title\":\"One\",\"webpage_url\":\"https://youtu.be/v1\"}\n",
+            "WARNING: something\n",
+            "{\"id\":\"v2\",\"title\":\"Two\",\"url\":\"https://youtu.be/v2\"}\n",
+            "{\"id\":\"v3\",\"title\":\"No URL at all\"}\n",
+            "{\"id\":\"v4\",\"url\":\"v4\"}\n",
+        );
+        let entries = parse_playlist_entries(text);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "v1");
+        assert_eq!(entries[1].url, "https://youtu.be/v2");
+    }
+
+    #[test]
+    fn info_size_and_resolution_helpers() {
+        let info =
+            parse_info_json("{\"id\":\"x\",\"height\":1080,\"filesize_approx\":5242880}").unwrap();
+        assert_eq!(info.size_bytes(), Some(5_242_880));
+        assert!(info.size_is_approx());
+        assert_eq!(info.resolution_text().as_deref(), Some("1080p"));
     }
 
     #[test]

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.8 — 2026-10-23
+
+- **Single left-click on the tray icon now toggles the
+  window**: click once to show it, click again to hide it.
+  The toggle reads the window's real visibility each time,
+  and quick double-clicks are debounced so they can't
+  toggle twice.
+- **Cleaner tray Exit.** The 0.2.7 exit path could panic
+  inside the menu library while tearing down (the app still
+  exited, but abruptly). Exit now goes through the app's
+  normal graceful shutdown — cancelling downloads and
+  saving state — with a forced fallback only if the UI
+  loop never responds.
+
 ## 0.2.7 — 2026-10-23
 
 - **Tray menu actions now execute where the click lands.**

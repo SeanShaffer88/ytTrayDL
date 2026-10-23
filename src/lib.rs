@@ -113,6 +113,38 @@ pub fn download_managed_ytdlp() -> Result<std::path::PathBuf, String> {
     Ok(target)
 }
 
+/// The latest official yt-dlp release tag (e.g. "2025.09.26")
+/// from the GitHub API, via the bundled curl. Blocking; call on
+/// a worker thread. Used by the "Check for yt-dlp updates"
+/// button — ytTrayDL itself never phones home unasked.
+pub fn fetch_latest_ytdlp_tag() -> Result<String, String> {
+    let curl = bundled_tool("curl");
+    let output = std::process::Command::new(&curl)
+        .args([
+            "-L",
+            "--fail",
+            "-H",
+            "User-Agent: ytTrayDL",
+            "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
+        ])
+        .output()
+        .map_err(|e| format!("could not run curl: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "GitHub request failed (curl exit {})",
+            output.status
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("unexpected GitHub response: {e}"))?;
+    value
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .map(|t| t.trim_start_matches('v').to_string())
+        .ok_or_else(|| "the GitHub response had no release tag".to_string())
+}
+
 /// Download the GyanD essentials ffmpeg build into the managed
 /// bin folder: bundled curl.exe fetches the zip, bundled tar.exe
 /// (bsdtar) unpacks it, and ffmpeg.exe + ffprobe.exe are moved

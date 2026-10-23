@@ -1,6 +1,6 @@
 [package]
 name = "yttraydl"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.80"
 authors = ["Sean Shaffer"]
@@ -21,6 +21,8 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Thumbnail decoding for the popup (JPEG/PNG only, no other formats).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 egui = { version = "0.33", default-features = false, features = ["default_fonts"] }
 # Renderer: glow (OpenGL), deliberately NOT wgpu. The 0.1.0/0.1.1
 # builds shipped wgpu with no backend feature enabled, which
@@ -45,12 +47,14 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",

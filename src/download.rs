@@ -23,6 +23,10 @@ pub enum JobState {
     Queued,
     Running,
     PostProcessing,
+    /// Stopped by the user with the partial file kept; a resume
+    /// re-runs the job and yt-dlp's `--continue` picks up the
+    /// `.part` file where it left off.
+    Paused,
     Done,
     Failed,
     Cancelled,
@@ -45,6 +49,10 @@ pub struct Job {
     /// Whether this job consults the download archive (false for an
     /// explicit "download anyway" request).
     pub use_archive: bool,
+    /// How many times this job has already been retried
+    /// (automatic retries + manual requeues start fresh at 0;
+    /// the auto-retry path carries the count forward).
+    pub attempts: u32,
     pub error: Option<String>,
     /// Last few output lines, kept for the error tooltip/details.
     pub tail_lines: Vec<String>,
@@ -66,6 +74,7 @@ impl Job {
                 _ => "Downloading…".into(),
             },
             JobState::PostProcessing => "Processing (merging / converting)…".into(),
+            JobState::Paused => "Paused".into(),
             JobState::Done => "Done".into(),
             JobState::Failed => format!(
                 "Failed{}",
@@ -89,12 +98,16 @@ pub enum DownloadEvent {
 struct RunningJob {
     job: Job,
     cancel: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
 }
 
 pub struct DownloadManager {
     next_id: u64,
     queue: VecDeque<Job>,
     running: Vec<RunningJob>,
+    /// Jobs the user paused; they hold no process and wait for
+    /// an explicit resume.
+    paused: Vec<Job>,
     /// Recently finished jobs, kept for the Downloads window.
     finished: Vec<Job>,
     tx: Sender<DownloadEvent>,
@@ -114,6 +127,7 @@ impl DownloadManager {
             next_id: 1,
             queue: VecDeque::new(),
             running: Vec::new(),
+            paused: Vec::new(),
             finished: Vec::new(),
             tx,
             rx,
@@ -126,6 +140,18 @@ impl DownloadManager {
         title: String,
         preset: Preset,
         use_archive: bool,
+    ) -> u64 {
+        self.enqueue_with_attempts(url, title, preset, use_archive, 0)
+    }
+
+    /// Enqueue with a carried-forward retry count (auto-retry).
+    pub fn enqueue_with_attempts(
+        &mut self,
+        url: String,
+        title: String,
+        preset: Preset,
+        use_archive: bool,
+        attempts: u32,
     ) -> u64 {
         // De-duplicate identical in-flight URLs: a second request for
         // the same URL+preset just returns the existing job id.
@@ -154,6 +180,7 @@ impl DownloadManager {
             final_file: None,
             already_downloaded: false,
             use_archive,
+            attempts,
             error: None,
             tail_lines: Vec::new(),
         });
@@ -171,16 +198,18 @@ impl DownloadManager {
             };
             job.state = JobState::Running;
             let cancel = Arc::new(AtomicBool::new(false));
+            let pause = Arc::new(AtomicBool::new(false));
             let tx = self.tx.clone();
             let bin = bin.to_path_buf();
             let args = build_download_args(settings, job.preset, &job.url, job.use_archive);
             let shared = Arc::new(Mutex::new(job.clone()));
             let thread_shared = shared;
             let thread_cancel = cancel.clone();
+            let thread_pause = pause.clone();
             std::thread::spawn(move || {
-                run_job(bin, args, thread_shared, thread_cancel, tx);
+                run_job(bin, args, thread_shared, thread_cancel, thread_pause, tx);
             });
-            self.running.push(RunningJob { job, cancel });
+            self.running.push(RunningJob { job, cancel, pause });
         }
     }
 
@@ -197,8 +226,15 @@ impl DownloadManager {
                 }
                 DownloadEvent::Finished(job) => {
                     self.running.retain(|r| r.job.id != job.id);
-                    self.finished.insert(0, job.clone());
-                    self.finished.truncate(50);
+                    if job.state == JobState::Paused {
+                        // A paused job is not finished — it waits
+                        // in the paused list for an explicit resume.
+                        self.paused.retain(|j| j.id != job.id);
+                        self.paused.push(job.clone());
+                    } else {
+                        self.finished.insert(0, job.clone());
+                        self.finished.truncate(50);
+                    }
                 }
             }
             events.push(ev);
@@ -213,16 +249,118 @@ impl DownloadManager {
             self.finished.insert(0, job);
             return;
         }
+        if let Some(pos) = self.paused.iter().position(|j| j.id == id) {
+            let mut job = self.paused.remove(pos);
+            job.state = JobState::Cancelled;
+            self.finished.insert(0, job);
+            return;
+        }
         if let Some(r) = self.running.iter().find(|r| r.job.id == id) {
             r.cancel.store(true, Ordering::SeqCst);
         }
     }
 
-    /// Cancel everything (app exit): queued jobs are dropped,
-    /// running jobs get their cancel flag — their workers kill
-    /// the yt-dlp child within ~120 ms.
+    /// Pause a job: a queued job simply waits in the paused
+    /// list; a running job's worker kills the yt-dlp child and
+    /// reports back as Paused (the `.part` file is kept, so a
+    /// later resume continues where it stopped).
+    pub fn pause(&mut self, id: u64) {
+        if let Some(pos) = self.queue.iter().position(|j| j.id == id) {
+            let mut job = self.queue.remove(pos).unwrap();
+            job.state = JobState::Paused;
+            self.paused.push(job);
+            return;
+        }
+        if let Some(r) = self.running.iter().find(|r| r.job.id == id) {
+            r.pause.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Resume a paused job: back into the queue (the caller
+    /// pumps). Returns false when the id isn't paused.
+    pub fn resume(&mut self, id: u64) -> bool {
+        if let Some(pos) = self.paused.iter().position(|j| j.id == id) {
+            let mut job = self.paused.remove(pos);
+            job.state = JobState::Queued;
+            self.queue.push_back(job);
+            return true;
+        }
+        false
+    }
+
+    /// Pause everything pausable (queued + running).
+    pub fn pause_all(&mut self) {
+        while let Some(mut job) = self.queue.pop_front() {
+            job.state = JobState::Paused;
+            self.paused.push(job);
+        }
+        for r in &self.running {
+            r.pause.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Resume every paused job.
+    pub fn resume_all(&mut self) {
+        for mut job in self.paused.drain(..) {
+            job.state = JobState::Queued;
+            self.queue.push_back(job);
+        }
+    }
+
+    /// Move a queued job one step toward the front (`up`) or
+    /// the back of the queue. Returns false when it can't move
+    /// (already at the end, running, or unknown id).
+    pub fn move_queued(&mut self, id: u64, up: bool) -> bool {
+        let Some(pos) = self.queue.iter().position(|j| j.id == id) else {
+            return false;
+        };
+        if up {
+            if pos == 0 {
+                return false;
+            }
+            self.queue.swap(pos, pos - 1);
+        } else {
+            if pos + 1 >= self.queue.len() {
+                return false;
+            }
+            self.queue.swap(pos, pos + 1);
+        }
+        true
+    }
+
+    /// Requeue a finished job with its original preset and
+    /// archive choice (manual retry). The finished entry is
+    /// removed; the new job starts fresh. Returns the new id.
+    pub fn requeue_finished(&mut self, id: u64) -> Option<u64> {
+        let pos = self.finished.iter().position(|j| j.id == id)?;
+        let old = self.finished.remove(pos);
+        Some(self.enqueue(old.url, old.title, old.preset, old.use_archive))
+    }
+
+    /// Remove one finished entry from the list (files stay).
+    pub fn remove_finished(&mut self, id: u64) {
+        self.finished.retain(|j| j.id != id);
+    }
+
+    /// Clear the whole finished list (files stay).
+    pub fn clear_finished(&mut self) {
+        self.finished.clear();
+    }
+
+    /// Cancel everything: queued and paused jobs land in the
+    /// finished list as Cancelled; running jobs get their
+    /// cancel flag — their workers kill the yt-dlp child
+    /// within ~120 ms. Used by the Downloads window's
+    /// "Cancel all" and by app exit.
     pub fn cancel_all(&mut self) {
-        self.queue.clear();
+        while let Some(mut job) = self.queue.pop_front() {
+            job.state = JobState::Cancelled;
+            self.finished.insert(0, job);
+        }
+        for mut job in self.paused.drain(..) {
+            job.state = JobState::Cancelled;
+            self.finished.insert(0, job);
+        }
         for r in &self.running {
             r.cancel.store(true, Ordering::SeqCst);
         }
@@ -232,11 +370,22 @@ impl DownloadManager {
         self.queue.len() + self.running.len()
     }
 
+    pub fn paused_count(&self) -> usize {
+        self.paused.len()
+    }
+
+    pub fn has_paused(&self) -> bool {
+        !self.paused.is_empty()
+    }
+
     pub fn running_jobs(&self) -> impl Iterator<Item = &Job> {
         self.running.iter().map(|r| &r.job)
     }
     pub fn queued_jobs(&self) -> impl Iterator<Item = &Job> {
         self.queue.iter()
+    }
+    pub fn paused_jobs(&self) -> &[Job] {
+        &self.paused
     }
     pub fn finished_jobs(&self) -> &[Job] {
         &self.finished
@@ -246,6 +395,9 @@ impl DownloadManager {
     pub fn summary(&self) -> String {
         let active = self.active_count();
         if active == 0 {
+            if self.paused_count() > 0 {
+                return format!("ytTrayDL — {} paused", self.paused_count());
+            }
             return "ytTrayDL — monitoring clipboard".into();
         }
         let best = self
@@ -268,6 +420,7 @@ fn run_job(
     args: Vec<String>,
     shared: Arc<Mutex<Job>>,
     cancel: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
     tx: Sender<DownloadEvent>,
 ) {
     let send_update = |job: &Job| {
@@ -326,6 +479,18 @@ fn run_job(
             let _ = child.wait();
             let mut job = shared.lock().unwrap();
             job.state = JobState::Cancelled;
+            let done = job.clone();
+            drop(job);
+            let _ = tx.send(DownloadEvent::Finished(done));
+            return;
+        }
+        if pause.load(Ordering::SeqCst) {
+            // Kill the child; the `.part` file stays, so a
+            // resume continues instead of restarting.
+            let _ = child.kill();
+            let _ = child.wait();
+            let mut job = shared.lock().unwrap();
+            job.state = JobState::Paused;
             let done = job.clone();
             drop(job);
             let _ = tx.send(DownloadEvent::Finished(done));
@@ -413,8 +578,9 @@ fn run_job(
     let status = child.wait();
     let mut job = shared.lock().unwrap();
     let cancelled = cancel.load(Ordering::SeqCst);
+    let paused = pause.load(Ordering::SeqCst);
     match status {
-        Ok(s) if s.success() && !cancelled => {
+        Ok(s) if s.success() && !cancelled && !paused => {
             job.state = JobState::Done;
             job.percent = 100.0;
             if job.final_file.is_none() {
@@ -423,6 +589,9 @@ fn run_job(
         }
         Ok(_) if cancelled => {
             job.state = JobState::Cancelled;
+        }
+        Ok(_) if paused => {
+            job.state = JobState::Paused;
         }
         Ok(s) => {
             job.state = JobState::Failed;
@@ -487,11 +656,132 @@ mod tests {
             final_file: None,
             already_downloaded: false,
             use_archive: true,
+            attempts: 0,
             error: None,
             tail_lines: Vec::new(),
         };
         assert!(j.status_text().contains("42%"));
         j.state = JobState::Done;
         assert_eq!(j.status_text(), "Done");
+        j.state = JobState::Paused;
+        assert_eq!(j.status_text(), "Paused");
+    }
+
+    #[test]
+    fn pause_queued_then_resume_requeues() {
+        let mut m = DownloadManager::new();
+        let id = m.enqueue("https://youtu.be/x".into(), "t".into(), Preset::Best, true);
+        m.pause(id);
+        assert_eq!(m.active_count(), 0);
+        assert_eq!(m.paused_count(), 1);
+        assert_eq!(m.paused_jobs()[0].state, JobState::Paused);
+        assert!(m.resume(id));
+        assert_eq!(m.paused_count(), 0);
+        assert_eq!(m.queued_jobs().count(), 1);
+        assert_eq!(m.queued_jobs().next().unwrap().state, JobState::Queued);
+        assert!(!m.resume(id));
+    }
+
+    #[test]
+    fn cancel_paused_job_moves_it_to_finished() {
+        let mut m = DownloadManager::new();
+        let id = m.enqueue("https://youtu.be/x".into(), "t".into(), Preset::Best, true);
+        m.pause(id);
+        m.cancel(id);
+        assert_eq!(m.paused_count(), 0);
+        assert_eq!(m.finished_jobs()[0].state, JobState::Cancelled);
+    }
+
+    #[test]
+    fn pause_all_and_resume_all() {
+        let mut m = DownloadManager::new();
+        m.enqueue("https://youtu.be/a".into(), "a".into(), Preset::Best, true);
+        m.enqueue("https://youtu.be/b".into(), "b".into(), Preset::Best, true);
+        m.pause_all();
+        assert_eq!(m.active_count(), 0);
+        assert_eq!(m.paused_count(), 2);
+        m.resume_all();
+        assert_eq!(m.paused_count(), 0);
+        assert_eq!(m.queued_jobs().count(), 2);
+    }
+
+    #[test]
+    fn move_queued_swaps_neighbours_only() {
+        let mut m = DownloadManager::new();
+        let a = m.enqueue("https://youtu.be/a".into(), "a".into(), Preset::Best, true);
+        let b = m.enqueue("https://youtu.be/b".into(), "b".into(), Preset::Best, true);
+        assert!(!m.move_queued(a, true)); // already first
+        assert!(m.move_queued(b, true));
+        let order: Vec<u64> = m.queued_jobs().map(|j| j.id).collect();
+        assert_eq!(order, vec![b, a]);
+        assert!(m.move_queued(b, false));
+        let order: Vec<u64> = m.queued_jobs().map(|j| j.id).collect();
+        assert_eq!(order, vec![a, b]);
+        assert!(!m.move_queued(b, false)); // already last
+        assert!(!m.move_queued(999, true)); // unknown id
+    }
+
+    #[test]
+    fn requeue_finished_preserves_preset_and_clears_entry() {
+        let mut m = DownloadManager::new();
+        let id = m.enqueue("https://youtu.be/x".into(), "t".into(), Preset::P720, false);
+        m.cancel(id); // queued cancel lands in finished
+        assert_eq!(m.finished_jobs().len(), 1);
+        let new_id = m.requeue_finished(id).expect("requeue works");
+        assert_ne!(new_id, id);
+        assert!(m.finished_jobs().is_empty());
+        let job = m.queued_jobs().next().unwrap();
+        assert_eq!(job.preset, Preset::P720);
+        assert!(!job.use_archive);
+        assert_eq!(job.state, JobState::Queued);
+        assert_eq!(job.attempts, 0);
+        assert!(m.requeue_finished(999).is_none());
+    }
+
+    #[test]
+    fn remove_and_clear_finished() {
+        let mut m = DownloadManager::new();
+        let a = m.enqueue("https://youtu.be/a".into(), "a".into(), Preset::Best, true);
+        let b = m.enqueue("https://youtu.be/b".into(), "b".into(), Preset::Best, true);
+        m.cancel(a);
+        m.cancel(b);
+        assert_eq!(m.finished_jobs().len(), 2);
+        m.remove_finished(a);
+        assert_eq!(m.finished_jobs().len(), 1);
+        assert_eq!(m.finished_jobs()[0].id, b);
+        m.clear_finished();
+        assert!(m.finished_jobs().is_empty());
+    }
+
+    #[test]
+    fn cancel_all_moves_queued_and_paused_to_finished() {
+        let mut m = DownloadManager::new();
+        m.enqueue("https://youtu.be/a".into(), "a".into(), Preset::Best, true);
+        let b = m.enqueue("https://youtu.be/b".into(), "b".into(), Preset::Best, true);
+        m.pause(b);
+        m.cancel_all();
+        assert_eq!(m.active_count(), 0);
+        assert_eq!(m.paused_count(), 0);
+        assert_eq!(m.finished_jobs().len(), 2);
+        assert!(m
+            .finished_jobs()
+            .iter()
+            .all(|j| j.state == JobState::Cancelled));
+    }
+
+    #[test]
+    fn finished_paused_event_goes_to_paused_list() {
+        let mut m = DownloadManager::new();
+        let id = m.enqueue("https://youtu.be/x".into(), "t".into(), Preset::Best, true);
+        // Simulate a worker reporting a pause finish directly.
+        let mut job = m.queued_jobs().next().unwrap().clone();
+        job.state = JobState::Paused;
+        m.queue.clear();
+        let _ = m.tx.send(DownloadEvent::Finished(job));
+        let events = m.poll_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(m.paused_count(), 1);
+        assert!(m.finished_jobs().is_empty());
+        let _ = id;
     }
 }

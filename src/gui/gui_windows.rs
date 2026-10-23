@@ -58,7 +58,7 @@ impl App {
                     .on_hover_text("Close this panel. ytTrayDL keeps running in the tray.")
                     .clicked()
                 {
-                    self.show_panel = false;
+                    self.begin_panel_hide();
                 }
             });
         });
@@ -2667,13 +2667,7 @@ impl App {
             }
             match action {
                 CloseAction::Exit => self.exit_requested = true,
-                CloseAction::Tray => {
-                    // Same as the X-button path: the drawer
-                    // closes with the window.
-                    self.show_settings = false;
-                    self.settings_anim = 0.0;
-                    self.show_panel = false;
-                }
+                CloseAction::Tray => self.begin_panel_hide(),
                 CloseAction::Taskbar => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
                 }

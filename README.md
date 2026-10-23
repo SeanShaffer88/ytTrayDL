@@ -13,7 +13,9 @@ downloads quietly in the background with your defaults while you keep working.
 ytTrayDL watches your clipboard for video links and downloads them
 with yt-dlp: it asks first (a popup with a quality choice) or
 downloads silently with your defaults — your rules per site, no
-duplicates, nothing leaves your PC. Free and open source (MIT),
+duplicates, nothing leaves your PC. It's for anyone who downloads
+videos regularly and wants it to feel built into Windows rather
+than like a chore in a terminal. Free and open source (MIT),
 for Windows 10/11, in 64-bit and 32-bit builds, as an installer
 or a portable zip.
 
@@ -169,6 +171,15 @@ test, October 2026), and the v0.2.8 left-click toggle builds on the
 same verified mechanism; the installer, the in-app ffmpeg install,
 the close-choice dialog, and an end-to-end download still await a
 full on-machine pass.
+
+## Contributing
+
+Issues and pull requests are welcome. If you're changing code,
+please run the project gate first (see [AGENTS.md](AGENTS.md)):
+`cargo fmt`, clippy on the host and both Windows targets
+(x86_64 and i686), and the full test suite — CI runs the same
+checks. Screenshots in this README are real captures from a
+Windows machine; please don't add placeholder images.
 
 ## License
 

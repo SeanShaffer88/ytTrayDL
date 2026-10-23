@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5 — 2026-10-23
+
+- **The window no longer changes height when Settings
+  opens** (SEAN). The drawer still slides out and the window
+  grows wider by the drawer's width — and shrinks back on
+  close — but the height stays exactly where you left it.
+  Drawer content scrolls, so any height works.
+
 ## 0.2.4 — 2026-10-23
 
 - **32-bit (x86) builds added**: every release now ships a

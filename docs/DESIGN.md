@@ -170,6 +170,49 @@ Popup placement gained Top-left, Bottom-left, and Center
 (primary monitor, like the existing corners) alongside
 Bottom-right, Top-right, and Near-cursor.
 
+## 0.3.0 additions
+
+- **Quality by domain**: `Settings::domain_presets` (domain +
+  preset pairs, normalized/sorted/deduped like the other rule
+  lists). `rules::preset_for_url` resolves the pin for a URL;
+  it seeds the popup's quality combo and replaces the global
+  default for auto-downloads. The popup choice stays per-
+  download — the pin is a starting point, not a lock.
+- **Per-download playlist choice**: `Job::playlist_all`
+  (`Option<bool>`) travels from the popup through
+  `enqueue_full` into `build_download_args_with_playlist`;
+  `None` follows the global `allow_playlists`. Retries
+  (manual and automatic) carry the choice forward. The popup
+  grows an extra row only when the probe identifies a
+  playlist.
+- **SponsorBlock**: a settings flag adds
+  `--sponsorblock-remove all` to the argument vector.
+- **Taskbar progress**: `platform::set_taskbar_progress`
+  drives `ITaskbarList3`. windows-sys 0.59 ships the CLSID
+  and TBPFLAG constants but not the interface, so the three
+  vtbl slots used (HrInit, SetProgressValue,
+  SetProgressState) are called by index from
+  `windows_impl.rs`, with the object cached in a
+  thread-local (COM apartment rules). The app sends the mean
+  completion across active jobs, and only on change.
+- **Finish sound**: `platform::play_notification_sound`
+  (`MessageBeep(MB_ICONASTERISK)`), fired from the same
+  completion branch as the toast.
+- **Drag-and-drop**: files dropped on the panel are read as
+  text (≤ 1 MiB), URLs extracted and routed through the
+  standard dedupe + rules pipeline — a drop behaves like a
+  series of copies.
+- **Settings export/import**: export writes the live
+  settings as pretty JSON; import parses via
+  `Settings::from_json` (same normalization as load),
+  replaces the live settings, re-applies autostart, and
+  re-localizes the tool binaries.
+- **Update check**: `fetch_latest_ytdlp_tag` reads the
+  GitHub releases API with the bundled curl (the same
+  transport as the managed downloads) and the yt-dlp tab
+  compares it with the running copy's version. It runs
+  only from the button — no background phoning home.
+
 ## Verification matrix
 
 | Area | State | Evidence |
@@ -182,6 +225,7 @@ Bottom-right, Top-right, and Near-cursor.
 | Info JSON parsing | Verified | Unit tests in `ytdlp.rs` |
 | Download manager queueing/cancel logic | Verified (logic) | Unit tests; process plumbing partially verified |
 | Queue management + popup positions (0.2.9) | Logic verified; UI **Unverified** on-machine | Manager unit tests cover pause/resume/reorder/retry/remove/clear/cancel-all and the paused-event routing; `--limit-rate` covered by arg-building tests. The Downloads-window controls, tray Pause-all item, and the three new popup positions need a real-machine pass |
+| 0.3.0 feature set | Logic verified; UI **Unverified** on-machine | Arg tests cover SponsorBlock + playlist override; rules tests cover domain-preset resolution. The popup playlist row, taskbar progress bar, finish sound, drag-and-drop, settings import/export, and the update check need a real-machine pass |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
 | Eighth field report (2026-10-23) | "Everything works fine" on 0.2.7, with full log | FIELD-CONFIRMED: sends=drained (29/29, 38/38), heartbeats continue across tray interactions, left-click OS restore fires (`show_main_window -> true`), handler-direct Exit executes. Two findings in the same log: (1) the exit path PANICKED — `muda windows mod.rs:122: RefCell already borrowed`, then "panic in a function that cannot unwind" — because the handler dropped the tray handles (muda objects) inside muda's own menu dispatch, which holds that RefCell; the process aborted mid-drop, which still read as "exited" to the user. (2) Menu-ID correction: the handler log proves MenuId 1011 = **Exit** (the 0.2.7 handler names it from the stored ids) — the sixth/seventh reports' arithmetic inference (1011 = Hide icon) was wrong; in 0.2.5 SEAN was clicking Exit ×3 + one other item. Code never relied on the arithmetic (ids are captured from the item objects), only the report narrative did. 0.2.8: Exit routes through the app's graceful shutdown (event forwarded) + a 750 ms forced-exit fallback thread; nothing is dropped inside the dispatch. SEAN-requested in the same report: single left-click toggles the window — `platform::toggle_main_window` (reads real OS visibility; SW_HIDE/SW_SHOW+foreground), handler sends `TrayUiEvent::WindowToggled(visible)` which the app adopts as `show_panel`; 350 ms debounce because Windows delivers a second Up for double-clicks (visible in this very log), which would toggle twice. |
 | In-app ffmpeg install (0.2.0) | **Unverified** on-machine | Download/unpack logic mirrors the yt-dlp installer (curl.exe + tar.exe, both in-box); the archive-layout finder `find_ffmpeg_exes` and the managed `--ffmpeg-location` wiring are unit-tested. Needs a real click-through. |

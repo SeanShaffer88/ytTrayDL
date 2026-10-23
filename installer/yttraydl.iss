@@ -8,7 +8,7 @@
 ; portable build can keep using it.
 
 #ifndef AppVersion
-  #define AppVersion "0.4.0"
+  #define AppVersion "0.4.1"
 #endif
 ; 32-bit builds (CI passes both): /DExeSourceDir=..\target\i686-pc-windows-msvc\release /DArchSuffix=x86
 #ifndef ExeSourceDir

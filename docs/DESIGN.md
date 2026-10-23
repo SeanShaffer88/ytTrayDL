@@ -261,6 +261,23 @@ Bottom-right, Top-right, and Near-cursor.
   already routes every extracted URL (verified by reading
   `process_platform_events`); popups queue in order.
 
+## 0.4.1 fix
+
+- **Settings closes before the window hides.** Field
+  report on 0.4.0: closing the window to the tray with the
+  Settings drawer open brought back a blank window on
+  restore — the close paths reset the drawer state and hid
+  the window in the same frame, so the OS window kept its
+  drawer-open width while hidden and the shrink-back resize
+  never ran. All panel-hiding paths (X with CloseAction
+  Tray, the close-choice dialog's Tray choice, the panel's
+  ✕ Close button, and `hide_entirely`) now route through
+  `App::begin_panel_hide`: the drawer closes like a normal
+  Settings close (slide or snap per the animation setting,
+  window shrinks to panel width) and `pending_panel_hide`
+  hides the panel only once `settings_anim` reaches 0.
+  Reopening Settings mid-close cancels the hide.
+
 ## Verification matrix
 
 | Area | State | Evidence |
@@ -274,7 +291,8 @@ Bottom-right, Top-right, and Near-cursor.
 | Download manager queueing/cancel logic | Verified (logic) | Unit tests; process plumbing partially verified |
 | Queue management + popup positions (0.2.9) | Logic verified; UI **Unverified** on-machine | Manager unit tests cover pause/resume/reorder/retry/remove/clear/cancel-all and the paused-event routing; `--limit-rate` covered by arg-building tests. The Downloads-window controls, tray Pause-all item, and the three new popup positions need a real-machine pass |
 | 0.3.0 feature set | Logic verified; UI **Unverified** on-machine | Arg tests cover SponsorBlock + playlist override; rules tests cover domain-preset resolution. The popup playlist row, taskbar progress bar, finish sound, drag-and-drop, settings import/export, and the update check need a real-machine pass |
-| 0.4.0 feature set | Logic verified; UI **Unverified** on-machine | Arg tests cover subtitles-only, audio-convert formats, split-chapters and the output-dir override; unit tests cover playlist-entry parsing and the watcher's baseline/new-entry diffing. The watcher end-to-end, popup thumbnail, per-download folder, saved list, failure banner, queue-empty actions, disk guard, post-download command, portable mode and the animation toggle all need a real-machine pass |
+| 0.4.0 feature set | Logic verified; UI **Partially verified** on-machine (rendering) | Arg tests cover subtitles-only, audio-convert formats, split-chapters and the output-dir override; unit tests cover playlist-entry parsing and the watcher's baseline/new-entry diffing. SEAN's 2026-10-23 captures of a real 0.4.0 run show the panel and all four Settings tabs rendering with the new controls present (animation toggle + queue-empty action; split chapters + disk guard + post-download command; channel watcher editor; quality-by-domain) and the hide-icon dialog. The behaviours themselves — watcher end-to-end, popup thumbnail, per-download folder, saved list, failure banner, queue-empty actions, disk guard, post-download command, portable mode — still need a real-machine pass |
+| Ninth field report (2026-10-23) | Blank window on restore from tray (0.4.0) | SEAN ran 0.4.0 (captures above; a completed download sits in Recent, ffmpeg found, managed yt-dlp 2026.08.19). Closing the window to the tray with the Settings drawer open, then restoring, showed a blank window. Cause: the close paths reset the drawer state and hid the window in the same frame — the OS window kept its drawer-open width while hidden and the shrink-back resize never ran. 0.4.1 routes every panel hide through `begin_panel_hide` (drawer closes fully first, then the hide lands). The fix is **Unverified** until SEAN's next run |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
 | Eighth field report (2026-10-23) | "Everything works fine" on 0.2.7, with full log | FIELD-CONFIRMED: sends=drained (29/29, 38/38), heartbeats continue across tray interactions, left-click OS restore fires (`show_main_window -> true`), handler-direct Exit executes. Two findings in the same log: (1) the exit path PANICKED — `muda windows mod.rs:122: RefCell already borrowed`, then "panic in a function that cannot unwind" — because the handler dropped the tray handles (muda objects) inside muda's own menu dispatch, which holds that RefCell; the process aborted mid-drop, which still read as "exited" to the user. (2) Menu-ID correction: the handler log proves MenuId 1011 = **Exit** (the 0.2.7 handler names it from the stored ids) — the sixth/seventh reports' arithmetic inference (1011 = Hide icon) was wrong; in 0.2.5 SEAN was clicking Exit ×3 + one other item. Code never relied on the arithmetic (ids are captured from the item objects), only the report narrative did. 0.2.8: Exit routes through the app's graceful shutdown (event forwarded) + a 750 ms forced-exit fallback thread; nothing is dropped inside the dispatch. SEAN-requested in the same report: single left-click toggles the window — `platform::toggle_main_window` (reads real OS visibility; SW_HIDE/SW_SHOW+foreground), handler sends `TrayUiEvent::WindowToggled(visible)` which the app adopts as `show_panel`; 350 ms debounce because Windows delivers a second Up for double-clicks (visible in this very log), which would toggle twice. |
 | In-app ffmpeg install (0.2.0) | **Unverified** on-machine | Download/unpack logic mirrors the yt-dlp installer (curl.exe + tar.exe, both in-box); the archive-layout finder `find_ffmpeg_exes` and the managed `--ffmpeg-location` wiring are unit-tested. Needs a real click-through. |

@@ -2,6 +2,9 @@
 
 ## 0.2.4 — 2026-10-23
 
+- **32-bit (x86) builds added**: every release now ships a
+  portable zip and an installer for 32-bit Windows alongside
+  the 64-bit ones, and CI compiles both architectures.
 - **Fixed: tray icon and tray menu clicks never reached the
   app.** Root cause found from a 0.2.3 diagnostic log: the app
   polled tray-icon's global event receivers, which delivered

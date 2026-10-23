@@ -38,7 +38,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GetCursorPos,
     GetMessageW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
     PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, ShowWindow,
-    TranslateMessage, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG, SW_SHOW, WM_CLIPBOARDUPDATE,
+    TranslateMessage, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG, SW_HIDE, SW_SHOW, WM_CLIPBOARDUPDATE,
     WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
 };
 
@@ -353,7 +353,8 @@ pub fn autostart_enabled() -> bool {
 /// tray-icon handler calls this directly (0.2.6): restoring
 /// the window must not wait for egui to schedule the frame
 /// that would process a queued "show" request.
-pub fn show_main_window() -> bool {
+/// Locate this process's main window (title "ytTrayDL").
+fn find_main_window() -> Option<HWND> {
     struct Search {
         pid: u32,
         found: HWND,
@@ -381,12 +382,45 @@ pub fn show_main_window() -> bool {
             found: std::ptr::null_mut(),
         };
         let _ = EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
-        if search.found.is_null() || IsWindowVisible(search.found) != 0 {
-            return false;
+        if search.found.is_null() {
+            None
+        } else {
+            Some(search.found)
         }
-        ShowWindow(search.found, SW_SHOW);
-        SetForegroundWindow(search.found);
-        true
+    }
+}
+
+pub fn show_main_window() -> bool {
+    match find_main_window() {
+        Some(hwnd) => unsafe {
+            if IsWindowVisible(hwnd) != 0 {
+                return false;
+            }
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+            true
+        },
+        None => false,
+    }
+}
+
+/// Toggle the main window's visibility (0.2.8): visible →
+/// hidden, hidden → shown + foregrounded. Returns the NEW
+/// visibility (`Some(true)` = now shown), or `None` when the
+/// window doesn't exist. Used by the tray-icon left-click,
+/// which reads the window's real OS state every time so the
+/// toggle can never diverge from what the user sees.
+pub fn toggle_main_window() -> Option<bool> {
+    let hwnd = find_main_window()?;
+    unsafe {
+        if IsWindowVisible(hwnd) != 0 {
+            ShowWindow(hwnd, SW_HIDE);
+            Some(false)
+        } else {
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+            Some(true)
+        }
     }
 }
 

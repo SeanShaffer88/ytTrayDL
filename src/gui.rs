@@ -184,9 +184,43 @@ enum TrayUiEvent {
 }
 
 /// Sender half shared with the static event handlers; the
-/// receiver lives on `App`.
+/// receiver lives on `App`. A replaceable slot, NOT a
+/// set-once cell (0.2.6): if the app object is ever recreated,
+/// the handlers must feed the LIVE receiver — a set-once cell
+/// would strand every send on the first, dropped channel, and
+/// `send` errors were being swallowed by `let _ =`.
 #[cfg(windows)]
-static TRAY_EVENT_TX: std::sync::OnceLock<Sender<TrayUiEvent>> = std::sync::OnceLock::new();
+static TRAY_EVENT_TX: std::sync::Mutex<Option<Sender<TrayUiEvent>>> = std::sync::Mutex::new(None);
+
+/// Tray-delivery diagnostic counters (0.2.6): handler sends
+/// vs app drains, so the log proves which leg is alive.
+#[cfg(windows)]
+static TRAY_SENDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(windows)]
+static TRAY_SEND_ERRS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(windows)]
+static TRAY_DRAINED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Forward one handler-produced event into the app channel,
+/// counting the send and logging failures (never silent).
+#[cfg(windows)]
+fn forward_tray_event(event: TrayUiEvent) {
+    use std::sync::atomic::Ordering;
+    TRAY_SENDS.fetch_add(1, Ordering::Relaxed);
+    let tx = TRAY_EVENT_TX.lock().ok().and_then(|slot| slot.clone());
+    match tx {
+        Some(tx) => {
+            if tx.send(event).is_err() {
+                TRAY_SEND_ERRS.fetch_add(1, Ordering::Relaxed);
+                yttraydl::diag_log("tray event send FAILED (no live receiver)");
+            }
+        }
+        None => {
+            TRAY_SEND_ERRS.fetch_add(1, Ordering::Relaxed);
+            yttraydl::diag_log("tray event send FAILED (no channel installed)");
+        }
+    }
+}
 
 pub struct App {
     pub settings: Settings,
@@ -252,6 +286,12 @@ pub struct App {
     manual_url: String,
     first_frame: bool,
     open_panel_on_start: bool,
+    /// Frame counter + last heartbeat time for the tray
+    /// diagnostics in `update` (0.2.6).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    frames: u64,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    last_heartbeat: Instant,
 }
 
 impl App {
@@ -262,6 +302,10 @@ impl App {
         manual_url: Option<String>,
     ) -> Self {
         apply_theme(&cc.egui_ctx);
+        // 0.2.6 diagnostics: if this line ever appears twice in
+        // one launch, the app object was recreated — the prime
+        // suspect for tray events being sent to a dead channel.
+        yttraydl::diag_log("app created");
         let settings = Settings::load();
         let seen = SeenCache::new(Duration::from_secs(settings.dedupe_window_secs));
         let exe_dir = std::env::current_exe()
@@ -313,6 +357,8 @@ impl App {
             manual_url: String::new(),
             first_frame: true,
             open_panel_on_start: show_on_launch,
+            frames: 0,
+            last_heartbeat: Instant::now(),
         };
         yttraydl::diag_log(&format!(
             "ui start: yt-dlp {} (source: {}), ffmpeg {}",
@@ -717,15 +763,39 @@ impl App {
         if self.tray_event_rx.is_none() {
             let (tx, rx) = std::sync::mpsc::channel::<TrayUiEvent>();
             self.tray_event_rx = Some(rx);
-            let _ = TRAY_EVENT_TX.set(tx);
+            // Replace (never set-once) the shared sender: the
+            // handlers must always feed the live receiver.
+            let replaced = {
+                let mut slot = TRAY_EVENT_TX.lock().unwrap();
+                let had = slot.is_some();
+                *slot = Some(tx);
+                had
+            };
             let wake = ctx.clone();
             tray_icon::TrayIconEvent::set_event_handler(Some(
                 move |event: tray_icon::TrayIconEvent| {
+                    let is_left_up = matches!(
+                        event,
+                        tray_icon::TrayIconEvent::Click {
+                            button: tray_icon::MouseButton::Left,
+                            button_state: tray_icon::MouseButtonState::Up,
+                            ..
+                        }
+                    );
                     if matches!(event, tray_icon::TrayIconEvent::Click { .. }) {
                         yttraydl::diag_log(&format!("tray icon event (handler): {event:?}"));
                     }
-                    if let Some(tx) = TRAY_EVENT_TX.get() {
-                        let _ = tx.send(TrayUiEvent::Icon(event));
+                    forward_tray_event(TrayUiEvent::Icon(event));
+                    if is_left_up {
+                        // OS-level restore (0.2.6): show the
+                        // window directly instead of waiting for
+                        // the egui frame that would process the
+                        // queued "show" — that frame may be
+                        // exactly what's not running.
+                        let shown = platform::show_main_window();
+                        yttraydl::diag_log(&format!(
+                            "tray left-click: show_main_window -> {shown}"
+                        ));
                     }
                     wake.request_repaint();
                 },
@@ -734,13 +804,13 @@ impl App {
             tray_icon::menu::MenuEvent::set_event_handler(Some(
                 move |event: tray_icon::menu::MenuEvent| {
                     yttraydl::diag_log(&format!("tray menu event (handler): id={:?}", event.id));
-                    if let Some(tx) = TRAY_EVENT_TX.get() {
-                        let _ = tx.send(TrayUiEvent::Menu(event));
-                    }
+                    forward_tray_event(TrayUiEvent::Menu(event));
                     wake.request_repaint();
                 },
             ));
-            yttraydl::diag_log("tray event handlers installed");
+            yttraydl::diag_log(&format!(
+                "tray event handlers installed (channel replaced: {replaced})"
+            ));
         }
         use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
         let menu = Menu::new();
@@ -881,6 +951,10 @@ impl App {
         while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
             menu_events.push(ev);
         }
+        TRAY_DRAINED.fetch_add(
+            (icon_events.len() + menu_events.len()) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         for ev in icon_events {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -1186,6 +1260,29 @@ impl eframe::App for App {
             let _ = self.history.save();
             yttraydl::diag_log(&format!("exiting (active downloads cancelled: {active})"));
             std::process::exit(0);
+        }
+
+        // Tray-delivery heartbeat (0.2.6): every ~5 s, record
+        // whether update() is running at all plus the handler
+        // send/drain counters — a "tray does nothing" report
+        // then localizes from the log alone: no hb lines while
+        // hidden = update is stalled; sends > drained with hb
+        // running = the channel leg is broken.
+        #[cfg(windows)]
+        {
+            self.frames += 1;
+            if self.last_heartbeat.elapsed() >= Duration::from_secs(5) {
+                self.last_heartbeat = Instant::now();
+                use std::sync::atomic::Ordering;
+                yttraydl::diag_log(&format!(
+                    "hb: frames={} sends={} send_errs={} drained={} panel={}",
+                    self.frames,
+                    TRAY_SENDS.load(Ordering::Relaxed),
+                    TRAY_SEND_ERRS.load(Ordering::Relaxed),
+                    TRAY_DRAINED.load(Ordering::Relaxed),
+                    self.show_panel
+                ));
+            }
         }
 
         ctx.request_repaint_after(Duration::from_millis(200));

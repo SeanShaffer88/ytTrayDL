@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.0 — 2026-10-23
+
+- **Channel watcher.** Settings → Domains & rules → Channel
+  watcher: subscribe to channels or playlists with a quality
+  preset; ytTrayDL polls on an interval (default hourly) and
+  auto-downloads new uploads. The first poll only baselines —
+  no back-catalogue dumps. "Check now" polls on demand.
+- **Subtitles-only downloads.** A new quality preset fetches
+  just the subtitle files (converted to `.srt`, languages from
+  the subtitle setting) — no video, no audio.
+- **More audio formats.** The audio presets now cover MP3,
+  M4A, Opus, FLAC and WAV alongside the original-format
+  option.
+- **A smarter popup.** It now shows the video's thumbnail,
+  resolution and approximate size before you commit, offers
+  a per-download "Save to" folder, and gains a "Later"
+  button that parks the link in the panel's Saved list.
+- **Save for later.** Parked links live in the panel with a
+  one-click Download; the list persists across restarts.
+- **Failure banner.** The most recent failed download shows
+  in the panel with its error and a one-click Retry, instead
+  of only landing in the Downloads window.
+- **Split chapters** (Settings → Downloads): chaptered
+  videos download as one file per chapter.
+- **When the queue empties…** (Settings → General): play a
+  sound, sleep the PC, or exit ytTrayDL — once, when a busy
+  queue fully drains.
+- **Low-disk guard** (Settings → Downloads): queued
+  downloads wait while the download drive is under a free-
+  space threshold you set.
+- **Post-download command** (Settings → Downloads): a shell
+  command run after each successful download, with `{file}`,
+  `{dir}`, `{url}` and `{title}` placeholders.
+- **Portable mode.** Put a `portable.txt` next to the exe
+  and all ytTrayDL data lives in a `ytTrayDL-data` folder
+  beside it instead of `%APPDATA%`.
+- **Settings animation toggle** (Settings → General): turn
+  off the Settings drawer slide for instant open/close.
+
 ## 0.3.0 — 2026-10-23
 
 - **Quality by domain.** Settings → Domains & rules gains

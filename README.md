@@ -65,6 +65,21 @@ click once to show it, click again to hide it.
   a Windows taskbar progress bar while downloads run, an optional
   finish sound, and drag-and-drop: drop a text file of links onto
   the panel and they're processed like copied links.
+- **A popup that shows its work** — thumbnail, resolution and
+  approximate size before you commit, a per-download "Save to"
+  folder, and a "Later" button that parks the link in the panel's
+  Saved list for when you're ready.
+- **Subtitles-only and audio your way** — a preset that fetches
+  just the subtitle files (`.srt`, no video or audio), and audio
+  presets for MP3, M4A, Opus, FLAC, WAV or the original format.
+- **Channel watcher** — subscribe to channels or playlists and
+  new uploads download themselves on an interval you choose.
+  The first check only takes stock; no back-catalogue dumps.
+- **Set-and-forget safety nets** — a failure banner with one-click
+  retry, a low-disk-space guard that pauses the queue, an optional
+  action when the queue empties (sound / sleep the PC / exit),
+  a post-download command hook, chapter splitting, and a true
+  portable mode (`portable.txt` next to the exe).
 - **Hide the tray icon if you want** — with three ways back: relaunch
   ytTrayDL, press **Ctrl+Alt+G**, or run `yttraydl.exe --show`. The
   confirmation dialog explains this before hiding, so you can't lock
@@ -135,21 +150,26 @@ needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button
 **Settings → General** — monitoring on/off, default action (Ask /
 Auto-download), detection scope, popup position and auto-close timer,
 dedupe window, which notifications you want, tray icon visibility,
-start-with-Windows.
+start-with-Windows, the Settings-panel animation toggle, and what
+happens when the download queue empties (nothing / a sound / sleep
+the PC / exit).
 
 **Settings → Downloads** — download folder, file-name template, default
-quality preset (Best, up to 2160p/1440p/1080p/720p/480p/360p, audio MP3,
-audio original, or a custom yt-dlp format string), container (MP4/MKV/
-original), embed thumbnail/metadata/subtitles, playlist behaviour,
-SponsorBlock segment removal, simultaneous download count, a speed
-limit, auto-retry for failed downloads, extra yt-dlp arguments, and
+quality preset (Best, up to 2160p/1440p/1080p/720p/480p/360p, audio
+MP3/M4A/Opus/FLAC/WAV/original, subtitles-only, or a custom yt-dlp
+format string), container (MP4/MKV/original), embed
+thumbnail/metadata/subtitles, playlist behaviour, SponsorBlock
+segment removal, chapter splitting, simultaneous download count, a
+speed limit, auto-retry for failed downloads, a low-disk-space
+guard, a post-download command, extra yt-dlp arguments, and
 browser cookies from a dropdown (Chrome, Edge, Firefox, Brave, Opera,
 Vivaldi, Chromium — for signed-in content; yt-dlp reads them, ytTrayDL
 never sees them).
 
 **Settings → Domains & rules** — the ignored / auto-download / allowed
-domain lists, per-domain quality pins, and ignored specific links,
-with the rule order explained.
+domain lists, per-domain quality pins, the channel watcher
+(subscriptions + poll interval), and ignored specific links, with
+the rule order explained.
 
 **Settings → yt-dlp** — the yt-dlp/ffmpeg copies in use, one-click
 install/update, a "Check for yt-dlp updates" button that compares
@@ -187,7 +207,7 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.3.0. The core library is covered by unit tests and the whole crate
+v0.4.0. The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
 and linted for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
 in CI. Runtime behaviour on a real Windows machine is tracked in
@@ -199,7 +219,11 @@ test, October 2026), and the v0.2.8 left-click toggle builds on the
 same verified mechanism; the v0.2.9 queue controls and popup
 positions and the v0.3.0 additions (quality pins, popup playlist
 choice, taskbar progress, drag-and-drop, import/export, update
-check) are logic-tested but not yet field-verified, and the
+check) are logic-tested but not yet field-verified, as are the
+v0.4.0 additions (channel watcher, subtitles-only, audio formats,
+popup thumbnail/size/folder, saved list, failure banner,
+queue-empty actions, disk guard, post-download command,
+portable mode), and the
 installer, the in-app ffmpeg install, the close-choice dialog, and
 an end-to-end download still await a full on-machine pass.
 

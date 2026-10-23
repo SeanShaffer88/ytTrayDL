@@ -202,6 +202,30 @@ pub fn fatal_error_box(title: &str, message: &str) {
     }
 }
 
+/// Play the standard Windows notification sound (the
+/// "download finished" chime). No-op off Windows.
+pub fn play_notification_sound() {
+    #[cfg(windows)]
+    {
+        windows_impl::play_notification_sound()
+    }
+}
+
+/// Set the main window's taskbar-button progress: `Some(frac)`
+/// (0.0–1.0) shows a progress bar at that fraction, `None`
+/// removes it. No-op off Windows or when the window doesn't
+/// exist (e.g. minimized to the tray — there is no button then).
+pub fn set_taskbar_progress(frac: Option<f64>) {
+    #[cfg(windows)]
+    {
+        windows_impl::set_taskbar_progress(frac)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = frac;
+    }
+}
+
 /// True when this process was asked (by a later launch) to show
 /// itself before `setup` ran — handled inside setup on Windows;
 /// always false elsewhere.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-10-23
+
+- **Fix: blank window after restoring from the tray.** Closing
+  the window (to tray, via the ✕ Close button, or hiding the
+  icon) while the Settings panel was open reset the panel and
+  hid the window in the same instant, so the window came back
+  blank. The Settings panel now always closes first — sliding
+  shut and shrinking the window back to its normal width —
+  and only then does the window minimize to the tray.
+
 ## 0.4.0 — 2026-10-23
 
 - **Channel watcher.** Settings → Domains & rules → Channel

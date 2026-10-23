@@ -1064,8 +1064,15 @@ impl eframe::App for App {
                 };
                 let e = 1.0 - (1.0 - self.settings_anim).powi(3); // ease-out cubic
                 let w = self.closed_size.x + SETTINGS_DRAWER_W * e;
-                let target_h = self.closed_size.y.max(580.0);
-                let h = self.closed_size.y + (target_h - self.closed_size.y) * e;
+                // SEAN (0.2.5): opening Settings expands the
+                // window sideways ONLY — the height never
+                // changes. (Before, it also grew toward
+                // 580 px tall.) The drawer's content scrolls,
+                // so any window height works.
+                let h = ctx
+                    .input(|i| i.viewport().inner_rect)
+                    .map(|r| r.height())
+                    .unwrap_or(self.closed_size.y);
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
                 ctx.request_repaint();
             } else if self.settings_anim == 0.0 && self.show_panel {

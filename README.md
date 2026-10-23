@@ -52,6 +52,10 @@ click once to show it, click again to hide it.
   (the popup offers "Download anyway" when yt-dlp detects one).
 - **Progress you can see** — live percent, speed and ETA in the panel and
   Downloads window, parsed from yt-dlp's own output.
+- **Full queue control** — in the Downloads window: reorder what's next,
+  pause and resume (a resume continues the partial file, it doesn't
+  restart it), retry failures with their original quality, and pause
+  or cancel everything at once — Pause all is in the tray menu too.
 - **Hide the tray icon if you want** — with three ways back: relaunch
   ytTrayDL, press **Ctrl+Alt+G**, or run `yttraydl.exe --show`. The
   confirmation dialog explains this before hiding, so you can't lock
@@ -128,15 +132,17 @@ start-with-Windows.
 quality preset (Best, up to 2160p/1440p/1080p/720p/480p/360p, audio MP3,
 audio original, or a custom yt-dlp format string), container (MP4/MKV/
 original), embed thumbnail/metadata/subtitles, playlist behaviour,
-simultaneous download count, extra yt-dlp arguments, browser cookies
+simultaneous download count, a speed limit, auto-retry for failed
+downloads, extra yt-dlp arguments, browser cookies
 (for signed-in content; yt-dlp reads them, ytTrayDL never sees them).
 
 **Settings → Domains & rules** — the ignored / auto-download / allowed
 domain lists and ignored specific links, with the rule order explained.
 
-**Tray menu** — pause/resume, auto-download toggle, "Download from
-clipboard" (acts on what's copied *now*), Downloads, download folder,
-Settings, start-with-Windows, hide icon, About, Exit.
+**Tray menu** — pause/resume monitoring, auto-download toggle, "Download
+from clipboard" (acts on what's copied *now*), Downloads, download
+folder, pause/resume all downloads, Settings, start-with-Windows,
+hide icon, About, Exit.
 
 **Command line**
 
@@ -164,7 +170,7 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.2.8. The core library is covered by unit tests and the whole crate
+v0.2.9. The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
 and linted for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
 in CI. Runtime behaviour on a real Windows machine is tracked in
@@ -173,9 +179,10 @@ Partially verified / Unverified labels — nothing is claimed as
 runtime-verified until it has run on a real PC. Current state: the
 tray menu and its actions are verified on a real PC (v0.2.7 field
 test, October 2026), and the v0.2.8 left-click toggle builds on the
-same verified mechanism; the installer, the in-app ffmpeg install,
-the close-choice dialog, and an end-to-end download still await a
-full on-machine pass.
+same verified mechanism; the v0.2.9 queue controls and new popup
+positions are logic-tested but not yet field-verified, and the
+installer, the in-app ffmpeg install, the close-choice dialog, and
+an end-to-end download still await a full on-machine pass.
 
 ## Contributing
 

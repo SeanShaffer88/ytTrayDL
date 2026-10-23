@@ -1754,6 +1754,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4410,10 +4412,11 @@ dependencies = [
 
 [[package]]
 name = "yttraydl"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "eframe",
  "egui",
+ "image",
  "rfd",
  "serde",
  "serde_json",

@@ -142,6 +142,34 @@ rules:
 - yt-dlp/ffmpeg *runtime* behaviour depends on the user's copies; only
   ytTrayDL's own argument construction is verified here.
 
+## Queue management (0.2.9)
+
+The Downloads window is the management surface for the
+manager's three lists — queue, paused, finished:
+
+- **Reorder**: queued jobs swap neighbours (the pump takes
+  from the front, so order is download order).
+- **Pause/resume**: pausing a running job kills its yt-dlp
+  child and files the job as Paused — not finished, so it
+  never lands in history as a failure. The `.part` file is
+  kept, and because every download runs with `--continue`,
+  a resume picks up where it stopped. Paused jobs hold no
+  process and survive until resumed or cancelled.
+- **Retry**: a finished Failed/Cancelled job requeues with
+  its original preset and archive choice. **Auto-retry**
+  (a setting, default off) does the same automatically for
+  failures, carrying an attempt count on the job; a manual
+  cancel is never auto-retried, and an intermediate failure
+  that will be retried is not written to history.
+- **Housekeeping**: finished entries can be removed one by
+  one or cleared wholesale (files always stay), and Cancel
+  all moves queued/paused jobs to finished-as-Cancelled
+  while flagging running jobs — the same path app exit uses.
+
+Popup placement gained Top-left, Bottom-left, and Center
+(primary monitor, like the existing corners) alongside
+Bottom-right, Top-right, and Near-cursor.
+
 ## Verification matrix
 
 | Area | State | Evidence |
@@ -153,6 +181,7 @@ rules:
 | Progress line parsing | Verified | Unit tests against real yt-dlp line shapes |
 | Info JSON parsing | Verified | Unit tests in `ytdlp.rs` |
 | Download manager queueing/cancel logic | Verified (logic) | Unit tests; process plumbing partially verified |
+| Queue management + popup positions (0.2.9) | Logic verified; UI **Unverified** on-machine | Manager unit tests cover pause/resume/reorder/retry/remove/clear/cancel-all and the paused-event routing; `--limit-rate` covered by arg-building tests. The Downloads-window controls, tray Pause-all item, and the three new popup positions need a real-machine pass |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
 | Eighth field report (2026-10-23) | "Everything works fine" on 0.2.7, with full log | FIELD-CONFIRMED: sends=drained (29/29, 38/38), heartbeats continue across tray interactions, left-click OS restore fires (`show_main_window -> true`), handler-direct Exit executes. Two findings in the same log: (1) the exit path PANICKED — `muda windows mod.rs:122: RefCell already borrowed`, then "panic in a function that cannot unwind" — because the handler dropped the tray handles (muda objects) inside muda's own menu dispatch, which holds that RefCell; the process aborted mid-drop, which still read as "exited" to the user. (2) Menu-ID correction: the handler log proves MenuId 1011 = **Exit** (the 0.2.7 handler names it from the stored ids) — the sixth/seventh reports' arithmetic inference (1011 = Hide icon) was wrong; in 0.2.5 SEAN was clicking Exit ×3 + one other item. Code never relied on the arithmetic (ids are captured from the item objects), only the report narrative did. 0.2.8: Exit routes through the app's graceful shutdown (event forwarded) + a 750 ms forced-exit fallback thread; nothing is dropped inside the dispatch. SEAN-requested in the same report: single left-click toggles the window — `platform::toggle_main_window` (reads real OS visibility; SW_HIDE/SW_SHOW+foreground), handler sends `TrayUiEvent::WindowToggled(visible)` which the app adopts as `show_panel`; 350 ms debounce because Windows delivers a second Up for double-clicks (visible in this very log), which would toggle twice. |
 | In-app ffmpeg install (0.2.0) | **Unverified** on-machine | Download/unpack logic mirrors the yt-dlp installer (curl.exe + tar.exe, both in-box); the archive-layout finder `find_ffmpeg_exes` and the managed `--ffmpeg-location` wiring are unit-tested. Needs a real click-through. |

@@ -64,18 +64,14 @@ The control panel — status, manual link downloads, recent activity:
 
 ![Control panel](docs/screenshots/panel.png)
 
-The popup when a link is copied — title, uploader, duration, quality
-presets, and per-domain rules without opening the app:
-
-![Link detected popup](docs/screenshots/popup.png)
-
 Settings slide out from the side of the main window:
 
 ![Settings drawer](docs/screenshots/settings.png)
 
-The Downloads window — queue, per-file progress, speed and ETA:
+Hiding the tray icon is always explained first — and always
+recoverable:
 
-![Downloads window](docs/screenshots/downloads.png)
+![Hide the tray icon dialog](docs/screenshots/hide-icon.png)
 
 ## Quick start
 

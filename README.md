@@ -80,15 +80,19 @@ The Downloads window — queue, per-file progress, speed and ETA:
 ## Quick start
 
 Two ways to get it from the
-[Releases page](https://github.com/SeanShaffer88/ytTrayDL/releases):
+[Releases page](https://github.com/SeanShaffer88/ytTrayDL/releases)
+— every download comes in 64-bit (`-x64`) and 32-bit (`-x86`)
+builds; the 32-bit build also runs on 64-bit Windows:
 
-- **Installer** — `ytTrayDL-Setup-vX.Y.Z-windows-x64.exe`: per-user
-  install (no admin) to `%LOCALAPPDATA%\Programs\ytTrayDL`, with a
-  Start-menu entry, optional desktop shortcut and start-with-Windows,
-  and a standard uninstaller. Your settings/history in
+- **Installer** — `ytTrayDL-Setup-vX.Y.Z-windows-x64.exe` (or
+  `-windows-x86.exe`): per-user install (no admin) to
+  `%LOCALAPPDATA%\Programs\ytTrayDL`, with a Start-menu entry,
+  optional desktop shortcut and start-with-Windows, and a
+  standard uninstaller. Your settings/history in
   `%APPDATA%\ytTrayDL` are kept on uninstall.
-- **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip`: unzip anywhere
-  and run `yttraydl.exe`. Nothing is installed.
+- **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip` (or
+  `-windows-x86.zip`): unzip anywhere and run `yttraydl.exe`.
+  Nothing is installed.
 
 Then:
 

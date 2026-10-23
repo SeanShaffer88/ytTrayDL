@@ -94,14 +94,25 @@ pub enum Preset {
     P360,
     /// Best audio, extracted and converted to MP3 (needs ffmpeg).
     AudioMp3,
+    /// Best audio, extracted and converted to M4A (needs ffmpeg).
+    AudioM4a,
+    /// Best audio, extracted and converted to Opus (needs ffmpeg).
+    AudioOpus,
+    /// Best audio, extracted and converted to FLAC (needs ffmpeg).
+    AudioFlac,
+    /// Best audio, extracted and converted to WAV (needs ffmpeg).
+    AudioWav,
     /// Best audio in its original container, no conversion.
     AudioOriginal,
+    /// Subtitle files only — no audio or video is downloaded
+    /// (`--skip-download` + subtitle writing, converted to SRT).
+    SubtitlesOnly,
     /// Use `Settings::custom_format` verbatim as the `-f` argument.
     Custom,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 10] = [
+    pub const ALL: [Preset; 15] = [
         Preset::Best,
         Preset::P2160,
         Preset::P1440,
@@ -110,7 +121,12 @@ impl Preset {
         Preset::P480,
         Preset::P360,
         Preset::AudioMp3,
+        Preset::AudioM4a,
+        Preset::AudioOpus,
+        Preset::AudioFlac,
+        Preset::AudioWav,
         Preset::AudioOriginal,
+        Preset::SubtitlesOnly,
         Preset::Custom,
     ];
 
@@ -124,13 +140,39 @@ impl Preset {
             Preset::P480 => "Up to 480p",
             Preset::P360 => "Up to 360p",
             Preset::AudioMp3 => "Audio only — MP3",
+            Preset::AudioM4a => "Audio only — M4A",
+            Preset::AudioOpus => "Audio only — Opus",
+            Preset::AudioFlac => "Audio only — FLAC",
+            Preset::AudioWav => "Audio only — WAV",
             Preset::AudioOriginal => "Audio only — original format",
+            Preset::SubtitlesOnly => "Subtitles only (no video/audio)",
             Preset::Custom => "Custom format string…",
         }
     }
 
     pub fn is_audio(self) -> bool {
-        matches!(self, Preset::AudioMp3 | Preset::AudioOriginal)
+        matches!(
+            self,
+            Preset::AudioMp3
+                | Preset::AudioM4a
+                | Preset::AudioOpus
+                | Preset::AudioFlac
+                | Preset::AudioWav
+                | Preset::AudioOriginal
+        )
+    }
+
+    /// The `--audio-format` value for the extract-and-convert
+    /// audio presets. `AudioOriginal` converts nothing (`None`).
+    pub fn audio_format(self) -> Option<&'static str> {
+        match self {
+            Preset::AudioMp3 => Some("mp3"),
+            Preset::AudioM4a => Some("m4a"),
+            Preset::AudioOpus => Some("opus"),
+            Preset::AudioFlac => Some("flac"),
+            Preset::AudioWav => Some("wav"),
+            _ => None,
+        }
     }
 
     /// Max video height for capped presets.
@@ -184,6 +226,51 @@ pub struct DomainPreset {
     pub preset: Preset,
 }
 
+/// A channel/playlist the watcher polls for new uploads
+/// (Settings → Domains & rules → Channel watcher). New entries
+/// download automatically with the subscription's preset; the
+/// seen-entry bookkeeping lives in `watch.json`, not here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Subscription {
+    /// Channel or playlist page URL, as pasted by the user.
+    pub url: String,
+    #[serde(default)]
+    pub preset: Preset,
+}
+
+/// What ytTrayDL does when the download queue drains to empty
+/// after having been active (Settings → General).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueEmptyAction {
+    #[default]
+    Nothing,
+    /// Play the notification sound.
+    Sound,
+    /// Put the PC to sleep.
+    Sleep,
+    /// Quit ytTrayDL.
+    ExitApp,
+}
+
+impl QueueEmptyAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            QueueEmptyAction::Nothing => "Nothing",
+            QueueEmptyAction::Sound => "Play a sound",
+            QueueEmptyAction::Sleep => "Sleep the PC",
+            QueueEmptyAction::ExitApp => "Exit ytTrayDL",
+        }
+    }
+
+    pub const ALL: [QueueEmptyAction; 4] = [
+        QueueEmptyAction::Nothing,
+        QueueEmptyAction::Sound,
+        QueueEmptyAction::Sleep,
+        QueueEmptyAction::ExitApp,
+    ];
+}
+
 /// Where the download popup appears.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -216,6 +303,9 @@ pub struct Settings {
     /// the choice dialog with a "remember" option; the choice can
     /// be changed later in Settings → General.
     pub close_action: CloseAction,
+    /// Animate the Settings drawer sliding open/closed. When
+    /// false, the drawer (and the window resize) is instant.
+    pub animate_settings_drawer: bool,
 
     // --- Domain rules (host names, lowercase, no scheme) ---
     /// Matching URLs are never prompted or downloaded.
@@ -261,6 +351,22 @@ pub struct Settings {
     /// interaction reminders…) from downloads via yt-dlp's
     /// `--sponsorblock-remove all`. Needs ffmpeg.
     pub sponsorblock_remove: bool,
+    /// Split chaptered downloads into one file per chapter
+    /// (`--split-chapters`). Needs ffmpeg.
+    pub split_chapters: bool,
+    /// What to do when the queue drains to empty after activity.
+    pub queue_empty_action: QueueEmptyAction,
+    /// Pause starting new downloads while the download drive has
+    /// less free space than this (MiB). 0 = guard off.
+    pub low_disk_threshold_mb: u64,
+    /// A command line run after each successful download, with
+    /// `{file}`, `{dir}`, `{url}` and `{title}` substituted.
+    /// Empty = no command. Runs through the system shell.
+    pub post_download_command: String,
+    /// Channel watcher poll interval in minutes. 0 = watcher off.
+    pub watch_interval_mins: u32,
+    /// Channels/playlists the watcher polls for new uploads.
+    pub subscriptions: Vec<Subscription>,
     /// Extra yt-dlp arguments, split like a command line. Power-user
     /// escape hatch, shown verbatim in Settings.
     pub extra_args: String,
@@ -300,6 +406,7 @@ impl Default for Settings {
             default_action: DefaultAction::Prompt,
             detection_scope: DetectionScope::KnownSitesOnly,
             close_action: CloseAction::Ask,
+            animate_settings_drawer: true,
             ignored_domains: Vec::new(),
             auto_domains: Vec::new(),
             allowed_domains: Vec::new(),
@@ -321,6 +428,12 @@ impl Default for Settings {
             rate_limit_kbps: 0,
             auto_retry_attempts: 0,
             sponsorblock_remove: false,
+            split_chapters: false,
+            queue_empty_action: QueueEmptyAction::Nothing,
+            low_disk_threshold_mb: 0,
+            post_download_command: String::new(),
+            watch_interval_mins: 60,
+            subscriptions: Vec::new(),
             extra_args: String::new(),
             cookies_from_browser: String::new(),
             ytdlp_path: PathBuf::new(),
@@ -361,8 +474,32 @@ pub fn home_dir() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
 }
 
-/// `%APPDATA%\ytTrayDL` on Windows, `~/.config/yttraydl` elsewhere.
+/// Portable mode: when a file named `portable.txt` sits next to
+/// the executable, ALL of ytTrayDL's data (settings, history,
+/// archive, managed binaries) lives in a `ytTrayDL-data` folder
+/// beside the exe instead of the per-user config dir, so the
+/// portable zip is truly self-contained. Detected once.
+pub fn portable_data_dir() -> Option<PathBuf> {
+    static CACHE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let exe = std::env::current_exe().ok()?;
+            let dir = exe.parent()?;
+            dir.join("portable.txt")
+                .is_file()
+                .then(|| dir.join("ytTrayDL-data"))
+        })
+        .clone()
+}
+
+/// `%APPDATA%\ytTrayDL` on Windows, `~/.config/yttraydl`
+/// elsewhere — or the portable data dir in portable mode. Every
+/// stored file resolves through here, so portable mode is this
+/// one decision.
 pub fn config_dir() -> PathBuf {
+    if let Some(dir) = portable_data_dir() {
+        return dir;
+    }
     if let Some(appdata) = std::env::var_os("APPDATA") {
         return PathBuf::from(appdata).join("ytTrayDL");
     }
@@ -448,6 +585,11 @@ impl Settings {
         self.domain_presets.sort_by(|a, b| a.domain.cmp(&b.domain));
         self.domain_presets.dedup_by(|a, b| a.domain == b.domain);
         self.ignored_urls.retain(|u| !u.trim().is_empty());
+        for sub in &mut self.subscriptions {
+            sub.url = sub.url.trim().to_string();
+        }
+        self.subscriptions.retain(|s| !s.url.is_empty());
+        self.subscriptions.dedup_by(|a, b| a.url == b.url);
         self.max_concurrent_downloads = self.max_concurrent_downloads.clamp(1, 8);
         if self.filename_template.trim().is_empty() {
             self.filename_template = "%(title)s [%(id)s].%(ext)s".to_string();

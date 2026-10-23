@@ -76,6 +76,11 @@ The control panel — status, manual link downloads, recent activity:
 
 ![Control panel](docs/screenshots/panel.png)
 
+Copy a link and the popup asks first — title, quality, one click
+to download:
+
+![Link detected popup](docs/screenshots/popup.png)
+
 Settings slide out from the side of the main window:
 
 ![Settings drawer](docs/screenshots/settings.png)

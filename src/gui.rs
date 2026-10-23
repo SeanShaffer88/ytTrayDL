@@ -503,6 +503,11 @@ pub struct App {
     pub show_settings: bool,
     /// Slide-out settings drawer animation, 0 = closed, 1 = open.
     settings_anim: f32,
+    /// Hide the panel as soon as the settings drawer has fully
+    /// closed — set by `begin_panel_hide`, consumed in `update`.
+    /// Field fix (0.4.1): the panel must never hide in the same
+    /// frame the drawer state is reset (see `begin_panel_hide`).
+    pending_panel_hide: bool,
     /// Main-window size while the drawer is closed — the base the
     /// open animation grows from (tracks user resizes).
     closed_size: egui::Vec2,
@@ -621,6 +626,7 @@ impl App {
             show_panel: false,
             show_settings: false,
             settings_anim: 0.0,
+            pending_panel_hide: false,
             closed_size: egui::vec2(400.0, 540.0),
             show_downloads: false,
             show_about: false,
@@ -1046,6 +1052,29 @@ impl App {
         }
     }
 
+    /// Hide the control panel — to the tray, or as part of
+    /// `hide_entirely` — closing the settings drawer FIRST.
+    ///
+    /// Field report (SEAN, v0.4.0): closing the window with the
+    /// Settings drawer open, then restoring it, brought back a
+    /// BLANK window. The old code reset the drawer state and hid
+    /// the window in the same frame, so the window went away at
+    /// its drawer-open width and the shrink-back resize never
+    /// ran. Now the drawer slides shut and the window shrinks to
+    /// its panel-only width like a normal Settings close, and
+    /// only once it is fully closed does the panel hide (the
+    /// deferred half lives in `update`). With the animation
+    /// setting off, the close snaps and the hide follows a frame
+    /// later — same guarantee.
+    pub fn begin_panel_hide(&mut self) {
+        if self.show_settings || self.settings_anim > 0.0 {
+            self.show_settings = false;
+            self.pending_panel_hide = true;
+        } else {
+            self.show_panel = false;
+        }
+    }
+
     /// Hide EVERYTHING — panel and tray icon — while the app keeps
     /// running in the background. Callers are responsible for
     /// having explained recall first (the tray-menu confirm dialog,
@@ -1059,11 +1088,9 @@ impl App {
             t._tray.set_visible(false).ok();
         });
         self.settings_dirty = true;
-        // The settings drawer lives in the main window — it
-        // closes (instantly) when the window goes away.
-        self.show_settings = false;
-        self.settings_anim = 0.0;
-        self.show_panel = false;
+        // The panel half defers until the settings drawer has
+        // closed — see `begin_panel_hide` (0.4.1).
+        self.begin_panel_hide();
     }
 
     // ---------- per-frame processing ----------
@@ -1968,6 +1995,12 @@ impl eframe::App for App {
             }
         }
 
+        // Reopening Settings cancels a deferred panel hide (the
+        // user changed their mind mid-close).
+        if self.show_settings {
+            self.pending_panel_hide = false;
+        }
+
         // Settings drawer slide (0.2.1): animate 0<->1 over
         // ~220 ms; while it moves, the window itself grows/shrinks
         // by the drawer width so the panel never gets squeezed.
@@ -2009,6 +2042,14 @@ impl eframe::App for App {
                     self.closed_size = r.size();
                 }
             }
+        }
+
+        // Deferred panel hide (0.4.1): the drawer has fully
+        // closed and the block above has shrunk the window back
+        // to its panel-only width — the panel may hide now.
+        if self.pending_panel_hide && !self.show_settings && self.settings_anim == 0.0 {
+            self.pending_panel_hide = false;
+            self.show_panel = false;
         }
 
         // Root viewport = the control panel (+ settings drawer).
@@ -2060,14 +2101,7 @@ impl eframe::App for App {
                 match self.settings.close_action {
                     CloseAction::Ask => self.confirm_close = true,
                     CloseAction::Exit => self.exit_requested = true,
-                    CloseAction::Tray => {
-                        // The drawer lives in this window; it
-                        // closes with it (instantly — the window
-                        // is going away anyway).
-                        self.show_settings = false;
-                        self.settings_anim = 0.0;
-                        self.show_panel = false;
-                    }
+                    CloseAction::Tray => self.begin_panel_hide(),
                     CloseAction::Taskbar => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
                     }

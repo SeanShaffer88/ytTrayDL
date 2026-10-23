@@ -56,6 +56,15 @@ click once to show it, click again to hide it.
   pause and resume (a resume continues the partial file, it doesn't
   restart it), retry failures with their original quality, and pause
   or cancel everything at once — Pause all is in the tray menu too.
+- **Quality by domain** — pin a quality per site ("this domain always
+  ≤720p, that one always MP3"): the popup starts there and
+  auto-downloads use it too.
+- **Playlists, your call each time** — a playlist link asks in the popup:
+  just this video, or the whole playlist.
+- **Cleaner downloads** — optional SponsorBlock segment removal,
+  a Windows taskbar progress bar while downloads run, an optional
+  finish sound, and drag-and-drop: drop a text file of links onto
+  the panel and they're processed like copied links.
 - **Hide the tray icon if you want** — with three ways back: relaunch
   ytTrayDL, press **Ctrl+Alt+G**, or run `yttraydl.exe --show`. The
   confirmation dialog explains this before hiding, so you can't lock
@@ -132,12 +141,20 @@ start-with-Windows.
 quality preset (Best, up to 2160p/1440p/1080p/720p/480p/360p, audio MP3,
 audio original, or a custom yt-dlp format string), container (MP4/MKV/
 original), embed thumbnail/metadata/subtitles, playlist behaviour,
-simultaneous download count, a speed limit, auto-retry for failed
-downloads, extra yt-dlp arguments, browser cookies
-(for signed-in content; yt-dlp reads them, ytTrayDL never sees them).
+SponsorBlock segment removal, simultaneous download count, a speed
+limit, auto-retry for failed downloads, extra yt-dlp arguments, and
+browser cookies from a dropdown (Chrome, Edge, Firefox, Brave, Opera,
+Vivaldi, Chromium — for signed-in content; yt-dlp reads them, ytTrayDL
+never sees them).
 
 **Settings → Domains & rules** — the ignored / auto-download / allowed
-domain lists and ignored specific links, with the rule order explained.
+domain lists, per-domain quality pins, and ignored specific links,
+with the rule order explained.
+
+**Settings → yt-dlp** — the yt-dlp/ffmpeg copies in use, one-click
+install/update, a "Check for yt-dlp updates" button that compares
+your copy against the latest GitHub release, and export/import of
+all settings (rules included) as a JSON file.
 
 **Tray menu** — pause/resume monitoring, auto-download toggle, "Download
 from clipboard" (acts on what's copied *now*), Downloads, download
@@ -170,7 +187,7 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.2.9. The core library is covered by unit tests and the whole crate
+v0.3.0. The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
 and linted for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
 in CI. Runtime behaviour on a real Windows machine is tracked in
@@ -179,8 +196,10 @@ Partially verified / Unverified labels — nothing is claimed as
 runtime-verified until it has run on a real PC. Current state: the
 tray menu and its actions are verified on a real PC (v0.2.7 field
 test, October 2026), and the v0.2.8 left-click toggle builds on the
-same verified mechanism; the v0.2.9 queue controls and new popup
-positions are logic-tested but not yet field-verified, and the
+same verified mechanism; the v0.2.9 queue controls and popup
+positions and the v0.3.0 additions (quality pins, popup playlist
+choice, taskbar progress, drag-and-drop, import/export, update
+check) are logic-tested but not yet field-verified, and the
 installer, the in-app ffmpeg install, the close-choice dialog, and
 an end-to-end download still await a full on-machine pass.
 

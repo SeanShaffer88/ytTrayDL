@@ -377,6 +377,18 @@ impl App {
                 let mon = monitor_size(ctx);
                 egui::pos2((mon.x - size.x - 12.0).max(0.0), 12.0)
             }
+            PopupPosition::TopLeft => egui::pos2(12.0, 12.0),
+            PopupPosition::BottomLeft => {
+                let mon = monitor_size(ctx);
+                egui::pos2(12.0, (mon.y - size.y - 12.0).max(0.0))
+            }
+            PopupPosition::Center => {
+                let mon = monitor_size(ctx);
+                egui::pos2(
+                    ((mon.x - size.x) / 2.0).max(0.0),
+                    ((mon.y - size.y) / 2.0).max(0.0),
+                )
+            }
             PopupPosition::NearCursor => match platform::cursor_position() {
                 Some((x, y)) => {
                     let mon = monitor_size(ctx);
@@ -926,11 +938,17 @@ fn settings_general(
             .selected_text(match pos {
                 PopupPosition::BottomRight => "Bottom-right",
                 PopupPosition::TopRight => "Top-right",
+                PopupPosition::TopLeft => "Top-left",
+                PopupPosition::BottomLeft => "Bottom-left",
+                PopupPosition::Center => "Center of the screen",
                 PopupPosition::NearCursor => "Near the mouse cursor",
             })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut pos, PopupPosition::BottomRight, "Bottom-right");
                 ui.selectable_value(&mut pos, PopupPosition::TopRight, "Top-right");
+                ui.selectable_value(&mut pos, PopupPosition::TopLeft, "Top-left");
+                ui.selectable_value(&mut pos, PopupPosition::BottomLeft, "Bottom-left");
+                ui.selectable_value(&mut pos, PopupPosition::Center, "Center of the screen");
                 ui.selectable_value(&mut pos, PopupPosition::NearCursor, "Near the mouse cursor");
             });
         if pos != s.popup_position {
@@ -979,6 +997,16 @@ fn settings_general(
                 if ui.checkbox(flag, label).on_hover_text(tip).changed() {
                     out.changed = true;
                 }
+            }
+            if ui
+                .checkbox(
+                    &mut s.open_folder_on_finish,
+                    "Open the download folder when a download finishes",
+                )
+                .on_hover_text("Opens the finished file's folder in Explorer. Off by default — it can be intrusive if several downloads finish together.")
+                .changed()
+            {
+                out.changed = true;
             }
         });
 }
@@ -1116,6 +1144,34 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             .changed()
         {
             s.max_concurrent_downloads = n;
+            out.changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Speed limit:");
+        let mut r = s.rate_limit_kbps;
+        if ui
+            .add(egui::Slider::new(&mut r, 0..=102_400).suffix(" KB/s"))
+            .on_hover_text(
+                "Cap the download speed (passed to yt-dlp as --limit-rate). 0 = no limit.",
+            )
+            .changed()
+        {
+            s.rate_limit_kbps = r;
+            out.changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Auto-retry failures:");
+        let mut a = s.auto_retry_attempts;
+        if ui
+            .add(egui::Slider::new(&mut a, 0..=5).suffix("×"))
+            .on_hover_text(
+                "Retry a failed download this many times with its original quality before giving up. 0 = off. A manual cancel is never retried.",
+            )
+            .changed()
+        {
+            s.auto_retry_attempts = a;
             out.changed = true;
         }
     });
@@ -1432,8 +1488,9 @@ type ActiveRow = (
     JobState,
     Option<String>,
 );
-/// (title, url, state, file, error, preset)
+/// (id, title, url, state, file, error, preset)
 type FinishedRow = (
+    u64,
     String,
     String,
     JobState,
@@ -1442,6 +1499,9 @@ type FinishedRow = (
     Preset,
 );
 
+/// (id, title, url, percent)
+type PausedRow = (u64, String, String, f32);
+
 impl App {
     pub fn downloads_ui(&mut self, ctx: &egui::Context) {
         if !self.show_downloads {
@@ -1449,10 +1509,28 @@ impl App {
         }
         let mut open = true;
         // Snapshot everything the closure needs.
-        let active: Vec<ActiveRow> = self
+        let row_of = |j: &yttraydl::download::Job| -> ActiveRow {
+            (
+                j.id,
+                if j.title.is_empty() {
+                    j.url.clone()
+                } else {
+                    j.title.clone()
+                },
+                j.url.clone(),
+                j.percent,
+                j.speed_text.clone(),
+                j.eta_text.clone(),
+                j.state,
+                j.error.clone(),
+            )
+        };
+        let running: Vec<ActiveRow> = self.downloads.running_jobs().map(row_of).collect();
+        let queued: Vec<ActiveRow> = self.downloads.queued_jobs().map(row_of).collect();
+        let paused: Vec<PausedRow> = self
             .downloads
-            .running_jobs()
-            .chain(self.downloads.queued_jobs())
+            .paused_jobs()
+            .iter()
             .map(|j| {
                 (
                     j.id,
@@ -1463,10 +1541,6 @@ impl App {
                     },
                     j.url.clone(),
                     j.percent,
-                    j.speed_text.clone(),
-                    j.eta_text.clone(),
-                    j.state,
-                    j.error.clone(),
                 )
             })
             .collect();
@@ -1476,6 +1550,7 @@ impl App {
             .iter()
             .map(|j| {
                 (
+                    j.id,
                     if j.title.is_empty() {
                         j.url.clone()
                     } else {
@@ -1489,11 +1564,21 @@ impl App {
                 )
             })
             .collect();
+        let any_active = !running.is_empty() || !queued.is_empty();
         let history_entries: Vec<HistoryEntry> = self.history.entries.clone();
         let bin_missing = self.bin.is_none();
         let fetching = self.ytdlp_fetch_rx.is_some();
 
         let mut cancel: Option<u64> = None;
+        let mut pause_job: Option<u64> = None;
+        let mut resume_job: Option<u64> = None;
+        let mut move_job: Option<(u64, bool)> = None;
+        let mut pause_all_flag = false;
+        let mut resume_all_flag = false;
+        let mut cancel_all_flag = false;
+        let mut retry_finished: Option<u64> = None;
+        let mut remove_finished: Option<u64> = None;
+        let mut clear_finished_flag = false;
         let mut retry: Option<(String, Preset)> = None;
         let mut open_target: Option<std::path::PathBuf> = None;
         let mut install = false;
@@ -1518,23 +1603,36 @@ impl App {
                         ui.separator();
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.label(egui::RichText::new("Active").strong());
-                        if active.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Active").strong());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add_enabled(any_active || !paused.is_empty(), egui::Button::new("✕ Cancel all").small()).on_hover_text("Cancel everything queued, paused and running (partial files are kept)").clicked() {
+                                    cancel_all_flag = true;
+                                }
+                                if ui.add_enabled(!paused.is_empty(), egui::Button::new("▶ Resume all").small()).on_hover_text("Resume every paused download").clicked() {
+                                    resume_all_flag = true;
+                                }
+                                if ui.add_enabled(any_active, egui::Button::new("⏸ Pause all").small()).on_hover_text("Pause every queued and running download (partial files are kept)").clicked() {
+                                    pause_all_flag = true;
+                                }
+                            });
+                        });
+                        if !any_active && paused.is_empty() {
                             ui.label(egui::RichText::new("Nothing downloading. Copy a supported link, or paste one in the panel.").color(TEXT_DIM));
                         }
-                        for (id, title, url, pct, speed, eta, state, _err) in &active {
+                        for (id, title, url, pct, speed, eta, state, _err) in &running {
                             ui.horizontal(|ui| {
                                 ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.small_button("✕ Cancel").on_hover_text("Cancel (partial file kept for resume)").clicked() {
                                         cancel = Some(*id);
                                     }
+                                    if ui.small_button("⏸ Pause").on_hover_text("Pause (partial file kept; resume continues it)").clicked() {
+                                        pause_job = Some(*id);
+                                    }
                                 });
                             });
                             match state {
-                                JobState::Queued => {
-                                    ui.label(egui::RichText::new("Queued").color(TEXT_FAINT).small());
-                                }
                                 JobState::PostProcessing => {
                                     ui.label(egui::RichText::new("Processing — merging / converting…").color(TEXT_DIM).small());
                                     ui.add(egui::ProgressBar::new(1.0).desired_width(200.0));
@@ -1553,12 +1651,66 @@ impl App {
                             }
                             ui.add_space(4.0);
                         }
+                        let queued_len = queued.len();
+                        for (qi, (id, title, url, _pct, _speed, _eta, _state, _err)) in queued.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("✕ Cancel").on_hover_text("Cancel this queued download").clicked() {
+                                        cancel = Some(*id);
+                                    }
+                                    if ui.small_button("⏸ Pause").on_hover_text("Pause (stays out of the queue until resumed)").clicked() {
+                                        pause_job = Some(*id);
+                                    }
+                                    if ui.add_enabled(qi + 1 < queued_len, egui::Button::new("↓").small()).on_hover_text("Move down in the queue").clicked() {
+                                        move_job = Some((*id, false));
+                                    }
+                                    if ui.add_enabled(qi > 0, egui::Button::new("↑").small()).on_hover_text("Move up in the queue").clicked() {
+                                        move_job = Some((*id, true));
+                                    }
+                                });
+                            });
+                            ui.label(egui::RichText::new(format!("Queued — #{} in queue", qi + 1)).color(TEXT_FAINT).small());
+                            ui.add_space(4.0);
+                        }
+
+                        if !paused.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Paused").strong());
+                            for (id, title, url, pct) in &paused {
+                                ui.horizontal(|ui| {
+                                    ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.small_button("✕ Cancel").on_hover_text("Cancel for good (partial file kept on disk)").clicked() {
+                                            cancel = Some(*id);
+                                        }
+                                        if ui.small_button("▶ Resume").on_hover_text("Resume (continues the partial file)").clicked() {
+                                            resume_job = Some(*id);
+                                        }
+                                    });
+                                });
+                                let txt = if *pct > 0.0 {
+                                    format!("Paused at {pct:.0}%")
+                                } else {
+                                    "Paused".to_string()
+                                };
+                                ui.label(egui::RichText::new(txt).color(TEXT_FAINT).small());
+                                ui.add_space(4.0);
+                            }
+                        }
 
                         if !finished.is_empty() {
                             ui.separator();
-                            ui.label(egui::RichText::new("Finished this session").strong());
-                            for (title, url, state, file, err, preset) in &finished {
-                                job_row(ui, &(title.clone(), url.clone(), *state, file.clone(), err.clone(), *preset), &mut open_target, &mut retry);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Finished this session").strong());
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("Clear finished").on_hover_text("Remove all finished entries from this list (files stay)").clicked() {
+                                        clear_finished_flag = true;
+                                    }
+                                });
+                            });
+                            for row in &finished {
+                                job_row(ui, row, &mut open_target, &mut retry_finished, &mut remove_finished);
                             }
                         }
 
@@ -1600,8 +1752,40 @@ impl App {
         if install {
             self.start_ytdlp_download();
         }
+        if pause_all_flag {
+            self.downloads.pause_all();
+        }
+        if resume_all_flag {
+            self.downloads.resume_all();
+            self.pump_downloads();
+        }
+        if cancel_all_flag {
+            self.downloads.cancel_all();
+        }
+        if let Some((id, up)) = move_job {
+            self.downloads.move_queued(id, up);
+        }
+        if let Some(id) = pause_job {
+            self.downloads.pause(id);
+        }
+        if let Some(id) = resume_job {
+            if self.downloads.resume(id) {
+                self.pump_downloads();
+            }
+        }
         if let Some(id) = cancel {
             self.downloads.cancel(id);
+        }
+        if let Some(id) = retry_finished {
+            if self.downloads.requeue_finished(id).is_some() {
+                self.pump_downloads();
+            }
+        }
+        if let Some(id) = remove_finished {
+            self.downloads.remove_finished(id);
+        }
+        if clear_finished_flag {
+            self.downloads.clear_finished();
         }
         if let Some((url, _preset)) = retry {
             let preset = self.settings.default_preset;
@@ -1908,9 +2092,10 @@ fn job_row(
     ui: &mut egui::Ui,
     row: &FinishedRow,
     open_target: &mut Option<std::path::PathBuf>,
-    retry: &mut Option<(String, Preset)>,
+    retry_finished: &mut Option<u64>,
+    remove_finished: &mut Option<u64>,
 ) {
-    let (title, url, state, file, err, preset) = row;
+    let (id, title, url, state, file, err, _preset) = row;
     let state = *state;
     ui.horizontal(|ui| {
         let (ch, color) = match state {
@@ -1933,13 +2118,20 @@ fn job_row(
                 *open_target = f.parent().map(|p| p.to_path_buf());
             }
         }
-        if state == JobState::Failed
+        if matches!(state, JobState::Failed | JobState::Cancelled)
             && ui
                 .small_button("↻ Retry")
-                .on_hover_text("Try this download again")
+                .on_hover_text("Download again with the same quality as the original attempt")
                 .clicked()
         {
-            *retry = Some((url.to_string(), *preset));
+            *retry_finished = Some(*id);
+        }
+        if ui
+            .small_button("✕")
+            .on_hover_text("Remove from this list (the file stays)")
+            .clicked()
+        {
+            *remove_finished = Some(*id);
         }
     });
 }

@@ -3,7 +3,7 @@
 - Architecture rule: all decision logic lives in the library
   (`settings`, `url_detect`, `rules`, `dedupe`, `ytdlp`, `download`,
   `history`) and must stay testable off-Windows. The GUI
-  (`src/gui.rs`, `src/gui_windows.rs`) renders state and collects
+  (`src/gui.rs`, `src/gui/gui_windows.rs`) renders state and collects
   intent; it does not invent rules.
 - Win32 surface lives only in `src/platform/windows_impl.rs`. Keep it
   narrow: clipboard listener, single-instance/show event, hotkey,
@@ -13,8 +13,11 @@
   `cargo clippy --all-targets -- -D warnings`,
   `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
   (host clippy never sees `cfg(windows)` code),
+  `cargo clippy --target i686-pc-windows-msvc --all-targets -- -D warnings`
+  (dual-arch since 0.2.4 — the x86 build must stay clean too),
   `cargo test --locked` (full suite — never a filtered subset),
-  `cargo check --target x86_64-pc-windows-msvc --all-targets`.
+  `cargo check --target x86_64-pc-windows-msvc --all-targets`,
+  `cargo check --target i686-pc-windows-msvc --all-targets`.
 - Never claim Windows runtime behaviour is verified until it has run
   on a real Windows machine; keep the verification matrix in
   `docs/DESIGN.md` current with Verified / Partially verified /

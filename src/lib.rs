@@ -38,6 +38,7 @@ pub mod download;
 pub mod history;
 pub mod platform;
 pub mod rules;
+pub mod saved;
 pub mod settings;
 pub mod url_detect;
 pub mod ytdlp;
@@ -143,6 +144,58 @@ pub fn fetch_latest_ytdlp_tag() -> Result<String, String> {
         .and_then(|t| t.as_str())
         .map(|t| t.trim_start_matches('v').to_string())
         .ok_or_else(|| "the GitHub response had no release tag".to_string())
+}
+
+/// GET a small file over HTTPS with the bundled curl (used for
+/// popup thumbnails). Refuses responses over ~3 MB. Blocking;
+/// call on a worker thread. Only http(s) URLs are fetched.
+pub fn fetch_url_bytes(url: &str) -> Option<Vec<u8>> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return None;
+    }
+    let curl = bundled_tool("curl");
+    let output = std::process::Command::new(&curl)
+        .args([
+            "-L",
+            "--fail",
+            "--max-filesize",
+            "3000000",
+            "--max-time",
+            "10",
+            "-H",
+            "User-Agent: ytTrayDL",
+            "-o",
+            "-",
+            url,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    Some(output.stdout)
+}
+
+/// Probe the newest entries of a channel/playlist page with
+/// yt-dlp's flat playlist mode (blocking; worker thread). The
+/// channel watcher diffs these against its seen list. Any
+/// failure yields an empty vec — the watcher just tries again
+/// next interval.
+pub fn fetch_playlist_entries(
+    bin: &std::path::Path,
+    settings: &settings::Settings,
+    url: &str,
+    limit: u32,
+) -> Vec<ytdlp::PlaylistEntry> {
+    let args = ytdlp::build_playlist_probe_args(settings, url, limit);
+    let Ok(output) = std::process::Command::new(bin).args(&args).output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    ytdlp::parse_playlist_entries(&text)
 }
 
 /// Download the GyanD essentials ffmpeg build into the managed

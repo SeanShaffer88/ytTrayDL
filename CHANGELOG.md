@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.7 — 2026-10-23
+
+- **Tray menu actions now execute where the click lands.**
+  Field logs from 0.2.5/0.2.6 showed tray clicks being
+  delivered reliably, but the app's UI loop could stop
+  scheduling frames after the tray's context menu had been
+  shown (an eframe repaint-scheduling quirk), so anything
+  waiting for the UI loop waited forever. Exit, the
+  Monitoring / Auto-download / Start-with-Windows toggles,
+  Open download folder, and Hide tray icon now run directly
+  in the tray event handler — no UI frame involved — and
+  tray-made setting changes are written to the settings file,
+  which the app now watches and reloads when it changes.
+  The remaining menu items (Downloads, Settings, About,
+  Download from clipboard) still go through the app, and
+  choosing one now also raises the main window immediately.
+  Note: hiding the icon from the tray menu now hides it
+  right away; the explanatory confirmation dialog still
+  guards the same action inside the main window.
+
 ## 0.2.6 — 2026-10-23
 
 - **Tray restore hardened.** Clicking the tray icon now also

@@ -513,6 +513,35 @@ pub fn play_notification_sound() {
     }
 }
 
+use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+use windows_sys::Win32::System::Power::SetSuspendState;
+
+/// Free bytes available to the current user on the volume
+/// holding `path` (`GetDiskFreeSpaceExW`). The path doesn't
+/// need to exist yet — the volume root is derived from it.
+pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
+    let mut s = path.to_string_lossy().to_string();
+    if !s.ends_with('\\') {
+        s.push('\\');
+    }
+    let w = wide(&s);
+    let mut free: u64 = 0;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            w.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free)
+}
+
+/// Suspend the machine (not hibernate, no forced close).
+pub fn suspend_system() -> bool {
+    unsafe { SetSuspendState(0, 0, 0) != 0 }
+}
+
 /// IID of ITaskbarList3 ({EA1AFB91-9E28-4B86-90E9-9E9F8A5EEF75}).
 /// windows-sys ships the CLSID and the TBPFLAG constants but not
 /// the interface itself, so the few vtbl slots used here are

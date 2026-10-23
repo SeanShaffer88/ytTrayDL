@@ -237,6 +237,13 @@ pub fn build_download_args(
         args.push("--no-playlist".into());
     }
 
+    // Optional bandwidth cap (0 = no limit). yt-dlp accepts a
+    // rate with a K/M suffix; the setting is stored in KiB/s.
+    if settings.rate_limit_kbps > 0 {
+        args.push("--limit-rate".into());
+        args.push(format!("{}K", settings.rate_limit_kbps));
+    }
+
     if settings.embed_metadata {
         args.push("--embed-metadata".into());
     }
@@ -583,6 +590,17 @@ mod tests {
         assert!(args.contains(&"-x".to_string()));
         assert!(args.contains(&"mp3".to_string()));
         assert!(!args.contains(&"--merge-output-format".to_string()));
+    }
+
+    #[test]
+    fn rate_limit_arg_only_when_set() {
+        let args = build_download_args(&settings(), Preset::Best, "https://youtu.be/x", true);
+        assert!(!args.contains(&"--limit-rate".to_string()));
+        let mut s = settings();
+        s.rate_limit_kbps = 2048;
+        let args = build_download_args(&s, Preset::Best, "https://youtu.be/x", true);
+        let pos = args.iter().position(|a| a == "--limit-rate").unwrap();
+        assert_eq!(args[pos + 1], "2048K");
     }
 
     #[test]

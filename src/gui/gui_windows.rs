@@ -1762,9 +1762,9 @@ impl App {
             self.settings.tray_icon_visible = false;
             self.tray_visible = false;
             #[cfg(windows)]
-            if let Some(t) = &self.tray {
+            with_tray_handles(|t| {
                 t._tray.set_visible(false).ok();
-            }
+            });
             self.settings_dirty = true;
             self.confirm_hide_icon = false;
         } else if cancel || !open {

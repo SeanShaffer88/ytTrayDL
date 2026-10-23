@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.6 — 2026-10-23
+
+- **Tray restore hardened.** Clicking the tray icon now also
+  restores the window at the OS level, immediately — it no
+  longer waits for the app's next UI frame to process the
+  request. The tray-event plumbing was also made self-healing
+  (the event channel is replaced rather than set-once, and
+  delivery failures are logged instead of swallowed), with
+  counters in the diagnostic log so any remaining delivery
+  problem can be pinpointed from the log alone.
+
 ## 0.2.5 — 2026-10-23
 
 - **The window no longer changes height when Settings

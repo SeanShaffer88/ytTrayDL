@@ -9,7 +9,7 @@
 //! `max_concurrent_downloads` jobs run at once; the rest wait.
 
 use crate::settings::{Preset, Settings};
-use crate::ytdlp::{build_download_args, parse_progress_line, ProgressEvent};
+use crate::ytdlp::{build_download_args_with_playlist, parse_progress_line, ProgressEvent};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -53,6 +53,10 @@ pub struct Job {
     /// (automatic retries + manual requeues start fresh at 0;
     /// the auto-retry path carries the count forward).
     pub attempts: u32,
+    /// Per-download playlist choice from the popup: `Some(true)`
+    /// = whole playlist, `Some(false)` = just the linked item,
+    /// `None` = follow the global setting.
+    pub playlist_all: Option<bool>,
     pub error: Option<String>,
     /// Last few output lines, kept for the error tooltip/details.
     pub tail_lines: Vec<String>,
@@ -153,6 +157,21 @@ impl DownloadManager {
         use_archive: bool,
         attempts: u32,
     ) -> u64 {
+        self.enqueue_full(url, title, preset, use_archive, attempts, None)
+    }
+
+    /// The full enqueue: retry count + per-download playlist
+    /// choice. The other enqueue helpers delegate here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enqueue_full(
+        &mut self,
+        url: String,
+        title: String,
+        preset: Preset,
+        use_archive: bool,
+        attempts: u32,
+        playlist_all: Option<bool>,
+    ) -> u64 {
         // De-duplicate identical in-flight URLs: a second request for
         // the same URL+preset just returns the existing job id.
         for r in &self.running {
@@ -181,6 +200,7 @@ impl DownloadManager {
             already_downloaded: false,
             use_archive,
             attempts,
+            playlist_all,
             error: None,
             tail_lines: Vec::new(),
         });
@@ -201,7 +221,13 @@ impl DownloadManager {
             let pause = Arc::new(AtomicBool::new(false));
             let tx = self.tx.clone();
             let bin = bin.to_path_buf();
-            let args = build_download_args(settings, job.preset, &job.url, job.use_archive);
+            let args = build_download_args_with_playlist(
+                settings,
+                job.preset,
+                &job.url,
+                job.use_archive,
+                job.playlist_all,
+            );
             let shared = Arc::new(Mutex::new(job.clone()));
             let thread_shared = shared;
             let thread_cancel = cancel.clone();
@@ -334,7 +360,14 @@ impl DownloadManager {
     pub fn requeue_finished(&mut self, id: u64) -> Option<u64> {
         let pos = self.finished.iter().position(|j| j.id == id)?;
         let old = self.finished.remove(pos);
-        Some(self.enqueue(old.url, old.title, old.preset, old.use_archive))
+        Some(self.enqueue_full(
+            old.url,
+            old.title,
+            old.preset,
+            old.use_archive,
+            0,
+            old.playlist_all,
+        ))
     }
 
     /// Remove one finished entry from the list (files stay).
@@ -657,6 +690,7 @@ mod tests {
             already_downloaded: false,
             use_archive: true,
             attempts: 0,
+            playlist_all: None,
             error: None,
             tail_lines: Vec::new(),
         };

@@ -25,10 +25,11 @@ or a portable zip.
    app keeps running in the system tray (notification area). Only
    Start-with-Windows launches skip the panel and go straight to
    the tray.
-2. Copy a link — from a browser, a chat app, anywhere.
+2. Copy a link — from a browser, a chat app, anywhere — or paste
+   one into the panel's link box.
 3a. **Ask mode (default):** a small popup appears near the corner of your
     screen with the video's title, a quality selector, and Download /
-    Not now / Ignore options.
+    Later / Not now / Ignore options.
 3b. **Auto-download mode:** no popup at all. The download starts immediately
     with your default quality and folder; a small toast confirms it finished
     (and failures are always reported, never silent).
@@ -73,7 +74,8 @@ click once to show it, click again to hide it.
   just the subtitle files (`.srt`, no video or audio), and audio
   presets for MP3, M4A, Opus, FLAC, WAV or the original format.
 - **Channel watcher** — subscribe to channels or playlists and
-  new uploads download themselves on an interval you choose.
+  new uploads download themselves on an interval you choose
+  (hourly by default).
   The first check only takes stock; no back-catalogue dumps.
 - **Set-and-forget safety nets** — a failure banner with one-click
   retry, a low-disk-space guard that pauses the queue, an optional
@@ -167,7 +169,9 @@ needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button
 
 **Settings → General** — monitoring on/off, default action (Ask /
 Auto-download), detection scope, popup position and auto-close timer,
-dedupe window, which notifications you want, tray icon visibility,
+dedupe window, which notifications you want (finished / failed /
+auto-start, an optional finish sound, opening the download folder
+on finish), tray icon visibility,
 start-with-Windows, the Settings-panel animation toggle, and what
 happens when the download queue empties (nothing / a sound / sleep
 the PC / exit).
@@ -192,7 +196,9 @@ the rule order explained.
 **Settings → yt-dlp** — the yt-dlp/ffmpeg copies in use, one-click
 install/update, a "Check for yt-dlp updates" button that compares
 your copy against the latest GitHub release, and export/import of
-all settings (rules included) as a JSON file.
+all settings (rules included) as a JSON file — plus the config
+folder, clear-download-history, and a reset-all-settings
+Danger zone.
 
 **Tray menu** — pause/resume monitoring, auto-download toggle, "Download
 from clipboard" (acts on what's copied *now*), Downloads, download
@@ -206,6 +212,14 @@ hide icon, About, Exit.
 | `yttraydl.exe --show` (or `--settings`) | If already running: restore the tray icon and open Settings. If not running: start with the panel open. |
 | `yttraydl.exe --background` | Start in the tray without opening the panel (used by Start-with-Windows). |
 | `yttraydl.exe https://…` | Treat the URL like a copied link (opens the download popup). |
+
+**Your data** — everything lives in `%APPDATA%\ytTrayDL`:
+`settings.json`, `download-archive.txt` (yt-dlp's already-downloaded
+list), `history.json`, `saved.json` (Saved-for-later links),
+`watch.json` (channel-watcher state), `yttraydl.log` (diagnostics),
+and `bin\` (the managed yt-dlp/ffmpeg copies). Portable mode moves
+all of it into a `ytTrayDL-data` folder beside the exe when a
+`portable.txt` file sits next to it.
 
 ## Building
 
@@ -243,10 +257,13 @@ subtitles-only, audio formats, popup thumbnail/size/folder,
 saved list, failure banner, queue-empty actions, disk guard,
 post-download command, portable mode) — their Settings
 screens are photographed rendering on a real PC from a
-v0.4.0 run, and v0.4.1 fixes the blank window that run found
-when restoring from the tray with Settings open — and the
-installer, the in-app ffmpeg install, the close-choice dialog, and
-an end-to-end download still await a full on-machine pass.
+v0.4.0 run. The blank window that run found when restoring from
+the tray with Settings open was fixed in v0.4.1 and confirmed
+working on a real PC the same day, and a real end-to-end
+download is partially verified (one completed on SEAN's machine
+and shows in Recent — no log was examined). The installer, the
+in-app ffmpeg install and the close-choice dialog still await a
+full on-machine pass.
 
 ## Contributing
 

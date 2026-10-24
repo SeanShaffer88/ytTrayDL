@@ -8,8 +8,10 @@ folder). Captured so far: `settings.png` and `hide-icon.png`
 `panel.png`, `settings.png`, `hide-icon.png`, plus the three
 remaining Settings tabs (`settings-downloads.png`,
 `settings-domains.png`, `settings-ytdlp.png`) — all seven are
-in the README. Still owed: `downloads.png`; it joins the
-README when captured.
+in the README. The list is complete: a `downloads.png`
+(Downloads window) capture was dropped at SEAN's direction
+on 2026-10-23 — the Downloads window stays undocumented by
+screenshot unless he asks again.
 
 | File | What to capture |
 | --- | --- |
@@ -19,7 +21,6 @@ README when captured.
 | `settings-downloads.png` | The same window, Downloads tab visible. |
 | `settings-domains.png` | The same window, Domains & rules tab visible. |
 | `settings-ytdlp.png` | The same window, yt-dlp tab visible. |
-| `downloads.png` | The Downloads window with at least one active or finished download showing progress/state. |
 | `hide-icon.png` | The "Hide the tray icon?" confirmation dialog. |
 
 Tips: default window sizes (don't maximize), no personal links or

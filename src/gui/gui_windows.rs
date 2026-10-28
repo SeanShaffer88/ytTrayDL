@@ -47,6 +47,14 @@ impl App {
     // ---------------- Control panel (root viewport) ----------------
 
     pub fn panel_ui(&mut self, ui: &mut egui::Ui) {
+        // Hard clip at the panel's own content rect (0.5.1):
+        // rows are width-budgeted to fit (see the status pill,
+        // manual-link, Recent and footer rows), and this
+        // guarantees any residual overflow is cut at the panel
+        // edge instead of painting past the window — the
+        // v0.5.0 field captures showed content running off the
+        // right edge at launch and after resizes.
+        ui.set_clip_rect(ui.max_rect());
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("ytTrayDL").color(TEXT));
             ui.label(
@@ -223,13 +231,23 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
+            // Explicit equal shares (0.5.1): at the panel's
+            // 340px minimum width the three natural-width
+            // buttons sum wider than the row, and egui paints
+            // the excess past the right edge instead of
+            // shrinking them (v0.5.0 field captures). Each
+            // button now gets a fixed third of the row and
+            // truncates its label inside that share.
+            let share = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
+            let btn_size = egui::vec2(share, 30.0);
             if ui
-                .button("⚙ Settings…")
-                .on_hover_text("Show/hide the settings drawer")
+                .add_sized(btn_size, egui::Button::new("⚙ Settings…").truncate())
+                .on_hover_text("Show/hide the Settings window")
                 .clicked()
             {
-                // A toggle (SEAN, 0.2.2): the button slides the
-                // drawer out and slides it back in.
+                // A toggle (SEAN, 0.2.2): the button opens the
+                // Settings window and closes it again (0.5.1:
+                // its own window, not a slide-out drawer).
                 self.show_settings = !self.show_settings;
             }
             let active = self.downloads.active_count();
@@ -239,14 +257,14 @@ impl App {
                 "⬇ Downloads…".to_string()
             };
             if ui
-                .button(label)
+                .add_sized(btn_size, egui::Button::new(label).truncate())
                 .on_hover_text("Active downloads and history")
                 .clicked()
             {
                 self.show_downloads = true;
             }
             if ui
-                .button("📂 Download folder")
+                .add_sized(btn_size, egui::Button::new("📂 Download folder").truncate())
                 .on_hover_text("Open the download folder in Explorer")
                 .clicked()
             {
@@ -263,10 +281,19 @@ impl App {
         ui.label(section_heading("Download a link directly"));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            // The field takes whatever width the Download button
-            // doesn't need, so the row stays aligned at any
-            // panel width (0.5.0; was a fixed 240px field).
-            let field_w = (ui.available_width() - 112.0).max(120.0);
+            // Reserve the button FIRST (0.5.1). The 0.5.0 budget
+            // (available − 112) ran the row past the panel's
+            // right edge in the field: egui's TextEdit outer
+            // width is its desired_width PLUS its frame margin
+            // (2×8px \u2014 vendored egui 0.33.3 TextEdit
+            // builder), which the budget never subtracted, and
+            // the button's min_size was treated as its exact
+            // width. Now the button has a fixed size and the
+            // field gets what remains after button + spacing +
+            // the field's own margin.
+            let btn_w = 108.0;
+            let field_w =
+                (ui.available_width() - btn_w - ui.spacing().item_spacing.x - 16.0).max(80.0);
             let resp = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.manual_url)
@@ -275,7 +302,7 @@ impl App {
                 )
                 .on_hover_text("Type or paste a URL, then press Enter or Download");
             let go = ui
-                .add(primary_button("Download…").min_size(egui::vec2(104.0, 0.0)))
+                .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
                 .on_hover_text("Open the download popup for this link")
                 .clicked();
             if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
@@ -347,25 +374,41 @@ impl App {
             let mut open_file: Option<std::path::PathBuf> = None;
             for (title, status, file) in &recent {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("●").color(status_color(*status)));
+                    // Painted dot, not the "●" character
+                    // (0.5.1 — U+25CF is missing from egui's
+                    // default font and rendered as a hollow
+                    // square in the field captures).
+                    status_dot(ui, status_color(*status));
+                    // Explicit width budget (0.5.1): the folder
+                    // button used to be placed by a right-to-left
+                    // sub-layout BEFORE the title label, which
+                    // claimed the whole remaining row — the
+                    // title got no room at all and the button
+                    // landed on the panel's extreme edge, half
+                    // off it (field captures). Now the title
+                    // takes a fixed budget and truncates (full
+                    // title on hover), and the button follows it
+                    // at a fixed size.
+                    let btn_w = if file.is_some() { 30.0 } else { 0.0 };
+                    let title_w =
+                        (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(40.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(title_w, 22.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(egui::Label::new(title.clone()).truncate())
+                                .on_hover_text(title.clone());
+                        },
+                    );
                     if let Some(f) = file {
-                        // Folder button pinned right; the title
-                        // label below gets the remaining width
-                        // and truncates cleanly with an ellipsis
-                        // (full title stays on hover) — 0.5.0.
-                        let mut clicked = false;
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            clicked = ui
-                                .small_button("📂")
-                                .on_hover_text("Show in Explorer")
-                                .clicked();
-                        });
-                        if clicked {
+                        if ui
+                            .add_sized(egui::vec2(btn_w, 24.0), egui::Button::new("📂").small())
+                            .on_hover_text("Show in Explorer")
+                            .clicked()
+                        {
                             open_file = Some(f.clone());
                         }
                     }
-                    ui.add(egui::Label::new(title.clone()).truncate())
-                        .on_hover_text(title.clone());
                 });
             }
             if let Some(f) = open_file {
@@ -446,22 +489,40 @@ impl App {
         }
         ui.separator();
         ui.horizontal(|ui| {
+            // Explicit sizes (0.5.1): Exit used to be placed by
+            // a nested right-to-left layout and landed on the
+            // panel's extreme right edge, clipped at every
+            // width (field captures). Both buttons now have
+            // fixed sizes, labels truncate inside them, and the
+            // gap between them is computed from the row's width.
+            let hide_size = egui::vec2(134.0, 30.0);
+            let exit_size = egui::vec2(124.0, 30.0);
+            let gap = (ui.available_width()
+                - hide_size.x
+                - exit_size.x
+                - 2.0 * ui.spacing().item_spacing.x)
+                .max(0.0);
             if ui
-                .button("Hide tray icon…")
+                .add_sized(
+                    hide_size,
+                    egui::Button::new("Hide tray icon…").truncate(),
+                )
                 .on_hover_text("Run without a tray icon. Relaunch ytTrayDL or press Ctrl+Alt+G to get it back.")
                 .clicked()
             {
                 self.confirm_hide_icon = true;
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("Exit ytTrayDL")
-                    .on_hover_text("Quit completely (downloads in progress are interrupted; partial files can resume)")
-                    .clicked()
-                {
-                    self.exit_requested = true;
-                }
-            });
+            ui.add_space(gap);
+            if ui
+                .add_sized(
+                    exit_size,
+                    egui::Button::new("Exit ytTrayDL").truncate(),
+                )
+                .on_hover_text("Quit completely (downloads in progress are interrupted; partial files can resume)")
+                .clicked()
+            {
+                self.exit_requested = true;
+            }
         });
     }
 
@@ -900,14 +961,20 @@ pub struct SettingsOutcome {
 }
 
 impl App {
-    /// The settings drawer — rendered inside the main window
-    /// (right side panel), sliding out as the window grows; see
-    /// the animation in `App::update`. Until 0.2.1 this was a
-    /// separate window; SEAN asked for the slide-out instead.
-    /// Content lays out at a fixed width and is clipped to the
-    /// drawer's current width, so mid-slide it reads as a
-    /// physical drawer rather than reflowing text.
-    pub fn settings_drawer_ui(&mut self, ui: &mut egui::Ui) {
+    /// Settings — its own window since 0.5.1. It was a
+    /// separate window until 0.2.1, then a slide-out drawer in
+    /// the main window (0.2.1–0.5.0); the v0.5.0 field
+    /// captures showed the drawer squeezing the panel and
+    /// panel content painting under it, so Settings is a
+    /// standalone window again, built like Downloads/About.
+    /// The tab content functions and the 0.5.0 styling (pill
+    /// tabs, cards, aligned sliders) are unchanged — only
+    /// the container is new. Closing the window (its X or the
+    /// header button) just hides it; the app keeps running.
+    pub fn settings_ui(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            return;
+        }
         let mut settings = std::mem::take(&mut self.settings);
         let mut rule_ignore = std::mem::take(&mut self.rule_input_ignore);
         let mut rule_auto = std::mem::take(&mut self.rule_input_auto);
@@ -919,6 +986,7 @@ impl App {
         let mut rule_watch_preset = self.rule_watch_preset;
         let mut tab = self.settings_tab;
         let mut reset_armed = self.reset_armed;
+        let mut open = true;
         let mut close = false;
         let mut outcome = SettingsOutcome::default();
         let bin_info: Option<(String, String, String)> = self.bin.as_ref().map(|b| {
@@ -934,86 +1002,90 @@ impl App {
         let fetching_ffmpeg = self.ffmpeg_fetch_rx.is_some();
         let autostart_now = platform::Platform::autostart_enabled();
 
-        ui.set_clip_rect(ui.available_rect_before_wrap());
-        ui.set_min_width(SETTINGS_DRAWER_W - 28.0);
-        // Row spacing follows the same 4/8 grid as the central
-        // theme (0.5.0; the 0.2.1 drawer overrode it to a
-        // cramped 6x3, which made rows run together).
-        ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 6.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Settings")
-                    .strong()
-                    .size(17.0)
-                    .color(TEXT),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("✕")
-                    .on_hover_text("Close settings (the window shrinks back)")
-                    .clicked()
-                {
-                    close = true;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("yttraydl-settings"),
+            egui::ViewportBuilder::default()
+                .with_title("ytTrayDL — Settings")
+                .with_inner_size(SETTINGS_WINDOW_SIZE)
+                .with_min_inner_size([480.0, 420.0]),
+            |ctx, _class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    open = false;
                 }
-            });
-        });
-        // Tab bar as pills (0.5.0): the active tab is a filled,
-        // selected button; the rest are plain buttons.
-        ui.horizontal(|ui| {
-            for (i, name) in ["General", "Downloads", "Domains & rules", "yt-dlp"]
-                .iter()
-                .enumerate()
-            {
-                if ui
-                    .add(egui::Button::new(*name).selected(tab == i))
-                    .on_hover_text("Switch settings section")
-                    .clicked()
-                {
-                    tab = i;
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new("Settings save automatically")
-                        .color(TEXT_FAINT)
-                        .small(),
-                );
-            });
-        });
-        ui.separator();
-        egui::ScrollArea::vertical().show(ui, |ui| match tab {
-            0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
-            1 => settings_downloads(ui, &mut settings, &mut outcome),
-            2 => settings_domains(
-                ui,
-                &mut settings,
-                &mut outcome,
-                &mut rule_ignore,
-                &mut rule_auto,
-                &mut rule_allow,
-                &mut rule_url,
-                &mut rule_preset_domain,
-                &mut rule_preset_choice,
-                &mut rule_watch_url,
-                &mut rule_watch_preset,
-            ),
-            _ => settings_ytdlp(
-                ui,
-                &mut settings,
-                &mut outcome,
-                &bin_info,
-                ToolsUi {
-                    ffmpeg_ok,
-                    ffmpeg_managed,
-                    ffmpeg_fetching: fetching_ffmpeg,
-                    update_checking: self.ytdlp_check_rx.is_some(),
-                    latest: self.ytdlp_latest.clone(),
-                    current_version: self.ytdlp_version.clone(),
-                },
-                fetching,
-                &mut reset_armed,
-            ),
-        });
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Settings")
+                                .strong()
+                                .size(17.0)
+                                .color(TEXT),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("✕").on_hover_text("Close settings").clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+                    // Tab bar as pills (0.5.0): the active tab is a filled,
+                    // selected button; the rest are plain buttons.
+                    ui.horizontal(|ui| {
+                        for (i, name) in ["General", "Downloads", "Domains & rules", "yt-dlp"]
+                            .iter()
+                            .enumerate()
+                        {
+                            if ui
+                                .add(egui::Button::new(*name).selected(tab == i))
+                                .on_hover_text("Switch settings section")
+                                .clicked()
+                            {
+                                tab = i;
+                            }
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new("Settings save automatically")
+                                    .color(TEXT_FAINT)
+                                    .small(),
+                            );
+                        });
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| match tab {
+                        0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
+                        1 => settings_downloads(ui, &mut settings, &mut outcome),
+                        2 => settings_domains(
+                            ui,
+                            &mut settings,
+                            &mut outcome,
+                            &mut rule_ignore,
+                            &mut rule_auto,
+                            &mut rule_allow,
+                            &mut rule_url,
+                            &mut rule_preset_domain,
+                            &mut rule_preset_choice,
+                            &mut rule_watch_url,
+                            &mut rule_watch_preset,
+                        ),
+                        _ => settings_ytdlp(
+                            ui,
+                            &mut settings,
+                            &mut outcome,
+                            &bin_info,
+                            ToolsUi {
+                                ffmpeg_ok,
+                                ffmpeg_managed,
+                                ffmpeg_fetching: fetching_ffmpeg,
+                                update_checking: self.ytdlp_check_rx.is_some(),
+                                latest: self.ytdlp_latest.clone(),
+                                current_version: self.ytdlp_version.clone(),
+                            },
+                            fetching,
+                            &mut reset_armed,
+                        ),
+                    });
+                });
+            },
+        );
 
         self.settings = settings;
         self.rule_input_ignore = rule_ignore;
@@ -1026,7 +1098,7 @@ impl App {
         self.rule_watch_preset = rule_watch_preset;
         self.settings_tab = tab;
         self.reset_armed = reset_armed;
-        if close {
+        if close || !open {
             self.show_settings = false;
         }
 
@@ -1251,9 +1323,6 @@ fn settings_general(
             out.changed = true;
         }
     });
-        if ui.checkbox(&mut s.animate_settings_drawer, "Animate the Settings panel").on_hover_text("The Settings drawer slides open and the window grows sideways. Turn this off to open and close it instantly, with no animation.").changed() {
-        out.changed = true;
-    }
         ui.horizontal(|ui| {
         ui.label("When the download queue empties:")
             .on_hover_text("Runs once when a queue that had active downloads finishes completely — never just because the app is idle.");
@@ -2392,7 +2461,7 @@ impl App {
                         }
                         for e in history_entries.iter().take(40) {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("●").color(status_color(e.status)));
+                                status_dot(ui, status_color(e.status));
                                 ui.label(truncate(&e.title, 44)).on_hover_text(format!("{}\n{}\n{}", e.title, e.url, e.error.clone().unwrap_or_default()));
                                 ui.label(egui::RichText::new(format!("{} · {}", local_time_hhmm(e.finished_at_unix), e.preset_label)).color(TEXT_FAINT).small());
                                 if let Some(f) = &e.file {

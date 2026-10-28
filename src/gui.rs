@@ -28,16 +28,45 @@ use yttraydl::ytdlp::{self, VideoInfo, YtDlpBinary};
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xE5, 0x48, 0x4D);
 pub const ACCENT_DARK: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x07, 0x00);
 pub const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x10, 0x10, 0x10);
-pub const HAIRLINE: egui::Color32 = egui::Color32::from_rgb(0x24, 0x24, 0x24);
-pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xF5, 0xF5, 0xF5);
-pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xA8, 0xA8, 0xA8);
+pub const HAIRLINE: egui::Color32 = egui::Color32::from_rgb(0x2B, 0x2B, 0x2C);
+pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xE9, 0xE9, 0xE9);
+pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xA0, 0xA0, 0xA0);
 pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6E, 0x6E);
 pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0x4C, 0xC3, 0x6B);
 /// Card fill: panels-within-the-panel (0.5.0 polish pass).
 pub const CARD: egui::Color32 = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
-/// Control fill at rest / on hover (0.5.0).
-pub const CONTROL_BG: egui::Color32 = egui::Color32::from_rgb(0x1C, 0x1C, 0x1C);
-pub const CONTROL_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(0x28, 0x28, 0x28);
+/// Control fill at rest / on hover (0.5.0; the rest fill is
+/// CARD2 since 0.6.0 — controls sit one step above the cards).
+pub const CONTROL_BG: egui::Color32 = CARD2;
+pub const CONTROL_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(0x28, 0x28, 0x2A);
+/// Raised surface (0.6.0 premium pass): one step lighter than
+/// CARD — buttons, chips, value readouts, anything that sits
+/// ON a card instead of being the card.
+pub const CARD2: egui::Color32 = egui::Color32::from_rgb(0x1E, 0x1E, 0x1F);
+/// Recessed surface (0.6.0): darker than the panel itself —
+/// wells, text fields, the segmented-control track, the panel
+/// footer bar. Depth comes from pairing this with CARD/CARD2.
+pub const WELL: egui::Color32 = egui::Color32::from_rgb(0x0B, 0x0B, 0x0C);
+/// Darker outline for recessed surfaces (0.6.0).
+pub const STROKE_DARK: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1E);
+/// The 1px light line painted along a card's top edge
+/// (0.6.0) — the cheapest depth cue egui can draw.
+pub const TOP_HIGHLIGHT: egui::Color32 = egui::Color32::from_rgb(0x42, 0x42, 0x44);
+/// Gradient ends for primary buttons / selected segments
+/// (0.6.0): light accent at the top, deep red at the bottom.
+pub const ACCENT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xF0, 0x60, 0x66);
+pub const ACCENT_DEEP: egui::Color32 = egui::Color32::from_rgb(0x94, 0x16, 0x1C);
+/// Gradient top for the selected format chip (0.6.0); its
+/// bottom is ACCENT_DARK.
+pub const CHIP_GRAD_TOP: egui::Color32 = egui::Color32::from_rgb(0x96, 0x1E, 0x24);
+/// Header-band gradient ends (0.6.0): near-black at the top,
+/// a subtle deep-red tint at the bottom edge.
+pub const BAND_TOP: egui::Color32 = egui::Color32::from_rgb(0x13, 0x12, 0x14);
+pub const BAND_BOTTOM: egui::Color32 = egui::Color32::from_rgb(0x2B, 0x0F, 0x10);
+pub const BAND_EDGE: egui::Color32 = egui::Color32::from_rgb(0x40, 0x22, 0x24);
+/// Status pill colours inside the header band (0.6.0).
+pub const PILL_BG: egui::Color32 = egui::Color32::from_rgb(0x12, 0x12, 0x14);
+pub const PILL_STROKE: egui::Color32 = egui::Color32::from_rgb(0x46, 0x34, 0x36);
 /// Slightly stronger outline than HAIRLINE, for interactive
 /// controls on hover so they read as touchable (0.5.0).
 pub const STROKE_SOFT: egui::Color32 = egui::Color32::from_rgb(0x3A, 0x3A, 0x3A);
@@ -52,13 +81,148 @@ pub const RADIUS: u8 = 8;
 /// (0.5.1; Settings was a slide-out drawer in 0.2.1–0.5.0).
 pub const SETTINGS_WINDOW_SIZE: [f32; 2] = [600.0, 640.0];
 
+/// An opaque colour with its alpha replaced (egui 0.33's
+/// Color32 has no `with_alpha`; all colours this is applied
+/// to here are opaque, so rebuilding from unmultiplied
+/// channels is exact).
+pub fn with_alpha(c: egui::Color32, a: u8) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+}
+
+/// Per-channel linear interpolation between two colours.
+pub fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let ch = |x: u8, y: u8| -> u8 { (x as f32 + (y as f32 - x as f32) * t).round() as u8 };
+    egui::Color32::from_rgba_unmultiplied(
+        ch(a.r(), b.r()),
+        ch(a.g(), b.g()),
+        ch(a.b(), b.b()),
+        ch(a.a(), b.a()),
+    )
+}
+
+/// Paint a vertical gradient inside a rounded rect (0.6.0).
+/// egui has no gradient fill, so this draws thin horizontal
+/// strips whose x-extent is clipped by the corner circles —
+/// at 2px per strip the steps are invisible in practice. Used
+/// for the header band, gradient buttons, the selected
+/// segment/chip, and the popup's placeholder hero.
+pub fn paint_vertical_gradient(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    radius: f32,
+    top: egui::Color32,
+    bottom: egui::Color32,
+) {
+    let h = rect.height();
+    if h <= 0.0 || rect.width() <= 0.0 {
+        return;
+    }
+    let strips = ((h / 2.0).ceil() as usize).clamp(4, 64);
+    let r = radius.min(rect.width() / 2.0).min(h / 2.0);
+    for i in 0..strips {
+        let y0 = rect.top() + h * (i as f32 / strips as f32);
+        let y1 = rect.top() + h * ((i + 1) as f32 / strips as f32);
+        let yc = (y0 + y1) / 2.0;
+        // Horizontal inset imposed by the corner circle at
+        // this strip's centre height (0 outside the corners).
+        let dy = if yc < rect.top() + r {
+            r - (yc - rect.top())
+        } else if yc > rect.bottom() - r {
+            r - (rect.bottom() - yc)
+        } else {
+            0.0
+        };
+        let inset = if dy > 0.0 {
+            r - (r * r - dy * dy).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        let strip = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + inset, y0),
+            egui::pos2(rect.right() - inset, y1 + 0.75),
+        );
+        painter.rect_filled(
+            strip,
+            0.0,
+            lerp_color(top, bottom, (i as f32 + 0.5) / strips as f32),
+        );
+    }
+}
+
+/// The 1px top-highlight line on a raised surface (0.6.0):
+/// a short light stroke along the top edge, inset by the
+/// corner radius so it never touches the corners.
+pub fn paint_top_highlight(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
+    let y = rect.top() + 0.5;
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + radius, y),
+            egui::pos2(rect.right() - radius, y),
+        ],
+        egui::Stroke::new(1.0_f32, with_alpha(TOP_HIGHLIGHT, 110)),
+    );
+}
+
+/// A soft fake shadow/glow (0.6.0): three nested rounded
+/// rects of increasing size and decreasing alpha — egui's
+/// painter has no blur, so this is the closest equivalent of
+/// the mockups' blurred drop shadows / red button glow.
+pub fn paint_soft_glow(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    radius: f32,
+    color: egui::Color32,
+) {
+    for (expand, alpha) in [(6.0_f32, 22_u8), (4.0, 38), (2.0, 58)] {
+        painter.rect_filled(
+            rect.expand(expand),
+            radius + expand,
+            with_alpha(color, alpha),
+        );
+    }
+}
+
 /// A card frame (0.5.0): CARD fill, hairline outline, rounded
 /// corners, 12px inner padding, 8px of space below so stacked
-/// cards separate on the 4/8 grid.
+/// cards separate on the 4/8 grid. 0.6.0 adds a soft drop
+/// shadow (Frame shadows are real egui; the matching top
+/// highlight is painted by `premium_card`).
 pub fn card_frame() -> egui::Frame {
     egui::Frame::NONE
         .fill(CARD)
         .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+        .corner_radius(RADIUS)
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 2],
+            blur: 6,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(60),
+        })
+        .inner_margin(egui::Margin::same(12))
+        .outer_margin(egui::Margin {
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 8,
+        })
+}
+
+/// Show a card and paint its 1px top highlight (0.6.0) — the
+/// standard raised container everywhere in the app.
+pub fn premium_card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let shown = card_frame().show(ui, add_contents);
+    paint_top_highlight(ui.painter(), shown.response.rect, RADIUS as f32);
+    shown.inner
+}
+
+/// A recessed well frame (0.6.0): WELL fill (darker than the
+/// panel), the darker stroke, no shadow — wells sink, cards
+/// rise. Same padding/grid as `card_frame`.
+pub fn well_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .fill(WELL)
+        .stroke(egui::Stroke::new(1.0_f32, STROKE_DARK))
         .corner_radius(RADIUS)
         .inner_margin(egui::Margin::same(12))
         .outer_margin(egui::Margin {
@@ -69,10 +233,34 @@ pub fn card_frame() -> egui::Frame {
         })
 }
 
-/// Small strong section heading used at the top of a card and
-/// for panel sections (0.5.0).
+/// Show a well and paint its inset top line (0.6.0): wells get
+/// a dark line just inside the top edge (the shadow a raised
+/// neighbour would cast into the recess) instead of a card's
+/// light highlight.
+pub fn premium_well<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let shown = well_frame().show(ui, add_contents);
+    let rect = shown.response.rect;
+    let y = rect.top() + 1.5;
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left() + RADIUS as f32, y),
+            egui::pos2(rect.right() - RADIUS as f32, y),
+        ],
+        egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(170)),
+    );
+    shown.inner
+}
+
+/// Section heading (0.5.0), restyled 0.6.0 as a micro-label:
+/// small, strong, uppercase, faint — the mockups' section
+/// voice ("ENGINE", "RECENT", "TRAY & STARTUP"). egui has no
+/// letter-spacing API, so the mockups' letterspaced labels
+/// are honestly approximated by case + size + weight alone.
 pub fn section_heading(text: &str) -> egui::RichText {
-    egui::RichText::new(text).strong().color(TEXT).size(15.0)
+    egui::RichText::new(text.to_uppercase())
+        .strong()
+        .color(TEXT_FAINT)
+        .size(11.5)
 }
 
 /// A card with a section heading on top (0.5.0). Returns
@@ -82,22 +270,525 @@ pub fn section_card<R>(
     heading: &str,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    card_frame()
-        .show(ui, |ui| {
-            ui.label(section_heading(heading));
-            ui.add_space(6.0);
-            add_contents(ui)
-        })
-        .inner
+    premium_card(ui, |ui| {
+        ui.label(section_heading(heading));
+        ui.add_space(6.0);
+        add_contents(ui)
+    })
 }
 
-/// The primary action button (0.5.0): bright accent-red fill
-/// with strong white text — the one button in a view that
-/// should draw the eye (Download, Hide the icon…).
-pub fn primary_button(text: &str) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(text).color(TEXT).strong())
-        .fill(ACCENT)
-        .stroke(egui::Stroke::new(1.0_f32, ACCENT))
+/// A focus ring for custom-painted controls (0.6.0): an
+/// accent outline just outside the rect, matching the ring
+/// egui draws around focused stock widgets in spirit.
+pub fn paint_focus_ring(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
+    painter.rect_stroke(
+        rect.expand(1.5),
+        egui::CornerRadius::same((radius + 1.5) as u8),
+        egui::Stroke::new(1.5_f32, ACCENT_LIGHT),
+        egui::epaint::StrokeKind::Outside,
+    );
+}
+
+/// The primary action button (0.5.0), rebuilt 0.6.0 as a
+/// custom-painted pill: vertical gradient (ACCENT_LIGHT →
+/// ACCENT_DEEP), a soft deep-red glow underneath, a light
+/// top edge, strong white text — the one button in a view
+/// that should draw the eye (Download, Hide the icon…).
+/// Implements `Widget` so every 0.5.0 call site
+/// (`ui.add`, `ui.add_enabled`, `ui.add_sized`, `.min_size`)
+/// works unchanged; interaction (hover/press/focus, Space /
+/// Enter activation) comes from the same `Sense::click`
+/// machinery the stock Button uses.
+pub struct GradientButton {
+    text: String,
+    min_size: egui::Vec2,
+    top: egui::Color32,
+    bottom: egui::Color32,
+    glow: bool,
+    /// Label size override (chips render at 12.5, buttons at
+    /// the theme's Button size).
+    text_size: Option<f32>,
+}
+
+pub fn primary_button(text: &str) -> GradientButton {
+    GradientButton {
+        text: text.to_string(),
+        min_size: egui::Vec2::ZERO,
+        top: ACCENT_LIGHT,
+        bottom: ACCENT_DEEP,
+        glow: true,
+        text_size: None,
+    }
+}
+
+impl GradientButton {
+    pub fn min_size(mut self, min_size: egui::Vec2) -> Self {
+        self.min_size = min_size;
+        self
+    }
+}
+
+impl egui::Widget for GradientButton {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let enabled = ui.is_enabled();
+        let rich = egui::RichText::new(&self.text)
+            .strong()
+            .color(egui::Color32::WHITE);
+        let rich = match self.text_size {
+            Some(s) => rich.size(s),
+            None => rich,
+        };
+        let galley = egui::WidgetText::from(rich).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Button,
+        );
+        let padding = ui.spacing().button_padding;
+        let desired = egui::vec2(
+            galley.size().x + padding.x * 2.0,
+            (galley.size().y + padding.y * 2.0).max(ui.spacing().interact_size.y),
+        );
+        let size = desired.max(self.min_size);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let radius = rect.height() / 2.0;
+            let (mut top, mut bottom) = (self.top, self.bottom);
+            if !enabled {
+                let grey = egui::Color32::from_rgb(0x4A, 0x4A, 0x4C);
+                top = lerp_color(top, grey, 0.55);
+                bottom = lerp_color(bottom, grey, 0.55);
+            } else if response.is_pointer_button_down_on() {
+                top = lerp_color(top, egui::Color32::BLACK, 0.18);
+                bottom = lerp_color(bottom, egui::Color32::BLACK, 0.18);
+            } else if response.hovered() {
+                top = lerp_color(top, egui::Color32::WHITE, 0.10);
+                bottom = lerp_color(bottom, egui::Color32::WHITE, 0.10);
+            }
+            let painter = ui.painter();
+            if self.glow && enabled {
+                paint_soft_glow(painter, rect, radius, ACCENT_DARK);
+            }
+            paint_vertical_gradient(painter, rect, radius, top, bottom);
+            // Light top edge, inset like the mockup's.
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left() + radius, rect.top() + 0.5),
+                    egui::pos2(rect.right() - radius, rect.top() + 0.5),
+                ],
+                egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgba_unmultiplied(0xFF, 0xB0, 0xB4, 110),
+                ),
+            );
+            if response.has_focus() {
+                paint_focus_ring(painter, rect, radius);
+            }
+            painter.galley(
+                rect.center() - galley.size() / 2.0,
+                galley,
+                egui::Color32::WHITE,
+            );
+        }
+        response
+    }
+}
+
+/// A selectable chip (0.6.0): the popup's format choices and
+/// playlist choice, restyled from the old combo box /
+/// selectable labels. Selected = deep-red gradient fill +
+/// accent outline + white strong text; unselected = raised
+/// ghost (CARD2 fill, hairline stroke, dim text).
+pub fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    if selected {
+        let resp = ui.add(GradientButton {
+            text: label.to_string(),
+            min_size: egui::vec2(0.0, 28.0),
+            top: CHIP_GRAD_TOP,
+            bottom: ACCENT_DARK,
+            glow: false,
+            text_size: Some(12.5),
+        });
+        // Accent outline over the gradient (mockup).
+        ui.painter().rect_stroke(
+            resp.rect,
+            egui::CornerRadius::same((resp.rect.height() / 2.0) as u8),
+            egui::Stroke::new(1.0_f32, ACCENT),
+            egui::epaint::StrokeKind::Inside,
+        );
+        resp
+    } else {
+        let galley = egui::WidgetText::from(egui::RichText::new(label).color(TEXT_DIM).size(12.5))
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            );
+        let size = egui::vec2(galley.size().x + 26.0, 28.0);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let radius = rect.height() / 2.0;
+            let fill = if response.is_pointer_button_down_on() {
+                CARD
+            } else if response.hovered() {
+                CONTROL_BG_HOVER
+            } else {
+                CARD2
+            };
+            let painter = ui.painter();
+            painter.rect_filled(rect, radius, fill);
+            painter.rect_stroke(
+                rect,
+                egui::CornerRadius::same(radius as u8),
+                egui::Stroke::new(
+                    1.0_f32,
+                    if response.hovered() {
+                        STROKE_SOFT
+                    } else {
+                        HAIRLINE
+                    },
+                ),
+                egui::epaint::StrokeKind::Inside,
+            );
+            paint_top_highlight(painter, rect, radius);
+            if response.has_focus() {
+                paint_focus_ring(painter, rect, radius);
+            }
+            painter.galley(rect.center() - galley.size() / 2.0, galley, TEXT_DIM);
+        }
+        response
+    }
+}
+
+/// A toggle switch (0.6.0), painter-drawn to the mockup's
+/// geometry: 36×20 pill track (accent when on, #363638 when
+/// off) with a white knob. Replaces checkboxes where the
+/// mockups show switches; the response's `changed()` works
+/// like the stock checkbox's.
+pub fn switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+    let size = egui::vec2(36.0, 20.0);
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let mut track = if *on {
+            ACCENT
+        } else {
+            egui::Color32::from_rgb(0x36, 0x36, 0x38)
+        };
+        if !ui.is_enabled() {
+            track = lerp_color(track, egui::Color32::from_rgb(0x4A, 0x4A, 0x4C), 0.5);
+        } else if response.hovered() {
+            track = lerp_color(track, egui::Color32::WHITE, 0.08);
+        }
+        painter.rect_filled(rect, 10.0, track);
+        let knob_x = if *on {
+            rect.right() - 10.0
+        } else {
+            rect.left() + 10.0
+        };
+        let knob = egui::pos2(knob_x, rect.center().y);
+        painter.circle_filled(
+            knob + egui::vec2(0.0, 1.0),
+            7.0,
+            egui::Color32::from_black_alpha(70),
+        );
+        painter.circle_filled(knob, 7.0, egui::Color32::WHITE);
+        if response.has_focus() {
+            paint_focus_ring(painter, rect, 10.0);
+        }
+    }
+    response
+}
+
+/// Drawn line icons (0.6.0) — the mockups replace the ⚙ / ⬇ /
+/// 📂 text glyphs with simple stroke icons. `scale` 1.0 ≈ a
+/// 16px icon box around `center`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum IconKind {
+    Gear,
+    Download,
+    Folder,
+}
+
+pub fn paint_icon(
+    painter: &egui::Painter,
+    kind: IconKind,
+    center: egui::Pos2,
+    scale: f32,
+    color: egui::Color32,
+    tray_color: egui::Color32,
+) {
+    let line = |a: egui::Pos2, b: egui::Pos2, w: f32, c: egui::Color32| {
+        painter.line_segment([a, b], egui::Stroke::new(w, c));
+    };
+    let at = |dx: f32, dy: f32| center + egui::vec2(dx * scale, dy * scale);
+    match kind {
+        IconKind::Gear => {
+            for k in 0..6 {
+                let a = (k as f32 * 60.0 + 30.0).to_radians();
+                line(
+                    at(5.2 * a.cos(), 5.2 * a.sin()),
+                    at(8.0 * a.cos(), 8.0 * a.sin()),
+                    2.4 * scale,
+                    color,
+                );
+            }
+            painter.circle_stroke(center, 5.4 * scale, egui::Stroke::new(1.9 * scale, color));
+            painter.circle_filled(center, 1.8 * scale, color);
+        }
+        IconKind::Download => {
+            line(at(0.0, -7.0), at(0.0, 3.0), 2.2 * scale, color);
+            line(at(-4.5, -1.0), at(0.0, 3.5), 2.2 * scale, color);
+            line(at(0.0, 3.5), at(4.5, -1.0), 2.2 * scale, color);
+            line(at(-7.0, 7.0), at(7.0, 7.0), 2.2 * scale, tray_color);
+        }
+        IconKind::Folder => {
+            let pts = [
+                at(-8.0, -5.0),
+                at(-2.0, -5.0),
+                at(1.0, -2.4),
+                at(8.0, -2.4),
+                at(8.0, 6.0),
+                at(-8.0, 6.0),
+                at(-8.0, -5.0),
+            ];
+            painter.add(egui::Shape::line(
+                pts.to_vec(),
+                egui::Stroke::new(1.8 * scale, color),
+            ));
+        }
+    }
+}
+
+/// A ghost button with a drawn line icon (0.6.0): raised
+/// CARD2 fill, hairline stroke, top highlight, icon at the
+/// left, truncating label — the panel's Settings / Downloads
+/// / Download-folder trio. With an empty label the icon is
+/// centred (used for the Recent rows' folder button).
+pub fn icon_text_button(
+    ui: &mut egui::Ui,
+    kind: IconKind,
+    label: &str,
+    size: egui::Vec2,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = 9.0_f32.min(rect.height() / 2.0);
+        let fill = if !ui.is_enabled() || response.is_pointer_button_down_on() {
+            CARD
+        } else if response.hovered() {
+            CONTROL_BG_HOVER
+        } else {
+            CARD2
+        };
+        painter.rect_filled(rect, radius, fill);
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(radius as u8),
+            egui::Stroke::new(
+                1.0_f32,
+                if response.hovered() {
+                    STROKE_SOFT
+                } else {
+                    HAIRLINE
+                },
+            ),
+            egui::epaint::StrokeKind::Inside,
+        );
+        paint_top_highlight(painter, rect, radius);
+        if response.has_focus() {
+            paint_focus_ring(painter, rect, radius);
+        }
+        let icon_color = if response.hovered() { TEXT } else { TEXT_DIM };
+        if label.is_empty() {
+            paint_icon(painter, kind, rect.center(), 0.85, icon_color, icon_color);
+        } else {
+            paint_icon(
+                painter,
+                kind,
+                egui::pos2(rect.left() + 17.0, rect.center().y),
+                0.85,
+                icon_color,
+                icon_color,
+            );
+            let galley = egui::WidgetText::from(egui::RichText::new(label).color(TEXT))
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Truncate),
+                    (rect.width() - 37.0).max(0.0),
+                    egui::TextStyle::Button,
+                );
+            painter.galley(
+                egui::pos2(rect.left() + 29.0, rect.center().y - galley.size().y / 2.0),
+                galley,
+                TEXT,
+            );
+        }
+    }
+    response
+}
+
+/// One segment of a segmented control (0.6.0). Returns the
+/// click response; painting matches the mockups: selected =
+/// red gradient + top light edge, unselected = dim text that
+/// brightens on hover.
+fn segment(ui: &mut egui::Ui, label: &str, selected: bool, size: egui::Vec2) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = 9.0_f32.min(rect.height() / 2.0);
+        if selected {
+            paint_soft_glow(painter, rect, radius, ACCENT_DARK);
+            let (mut top, mut bottom) = (ACCENT_LIGHT, ACCENT_DEEP);
+            if response.is_pointer_button_down_on() {
+                top = lerp_color(top, egui::Color32::BLACK, 0.15);
+                bottom = lerp_color(bottom, egui::Color32::BLACK, 0.15);
+            }
+            paint_vertical_gradient(painter, rect, radius, top, bottom);
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left() + radius, rect.top() + 0.5),
+                    egui::pos2(rect.right() - radius, rect.top() + 0.5),
+                ],
+                egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgba_unmultiplied(0xFF, 0xB0, 0xB4, 110),
+                ),
+            );
+        } else if response.hovered() {
+            painter.rect_filled(rect, radius, CONTROL_BG_HOVER);
+        }
+        if response.has_focus() && !selected {
+            paint_focus_ring(painter, rect, radius);
+        }
+        let rich = egui::RichText::new(label)
+            .color(if selected {
+                egui::Color32::WHITE
+            } else {
+                TEXT_DIM
+            })
+            .size(12.5);
+        let rich = if selected { rich.strong() } else { rich };
+        let galley = egui::WidgetText::from(rich).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - 12.0).max(0.0),
+            egui::TextStyle::Button,
+        );
+        painter.galley(
+            rect.center() - galley.size() / 2.0,
+            galley,
+            if selected {
+                egui::Color32::WHITE
+            } else {
+                TEXT_DIM
+            },
+        );
+    }
+    response
+}
+
+/// The Settings tab bar (0.6.0): a recessed well track with
+/// four equal segments; the selected one is filled with the
+/// red gradient. Returns true when the tab changed.
+pub fn settings_tab_bar(ui: &mut egui::Ui, tab: &mut usize) -> bool {
+    let labels = ["General", "Downloads", "Domains & rules", "yt-dlp"];
+    let mut changed = false;
+    egui::Frame::NONE
+        .fill(WELL)
+        .stroke(egui::Stroke::new(1.0_f32, STROKE_DARK))
+        .corner_radius(12)
+        .inner_margin(egui::Margin::same(4))
+        .outer_margin(egui::Margin {
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 8,
+        })
+        .show(ui, |ui| {
+            let share =
+                (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / labels.len() as f32;
+            ui.horizontal(|ui| {
+                for (i, name) in labels.iter().enumerate() {
+                    if segment(ui, name, *tab == i, egui::vec2(share, 30.0))
+                        .on_hover_text("Switch settings section")
+                        .clicked()
+                    {
+                        *tab = i;
+                        changed = true;
+                    }
+                }
+            });
+        });
+    changed
+}
+
+/// A two-or-more-way segmented choice on a recessed track
+/// (0.6.0) — the General tab's Default action, which the
+/// mockup draws as a small segmented control instead of the
+/// old radio pair. `tips` carries each option's tooltip, so
+/// nothing the radios explained is lost. Returns the new
+/// index when the user picks a different segment.
+pub fn segmented_choice(
+    ui: &mut egui::Ui,
+    labels: &[&str],
+    tips: &[&str],
+    current: usize,
+    width: f32,
+) -> Option<usize> {
+    let mut picked = None;
+    egui::Frame::NONE
+        .fill(WELL)
+        .stroke(egui::Stroke::new(1.0_f32, STROKE_DARK))
+        .corner_radius(9)
+        .inner_margin(egui::Margin::same(3))
+        .show(ui, |ui| {
+            ui.set_width(width);
+            let share = (ui.available_width()
+                - (labels.len() - 1) as f32 * ui.spacing().item_spacing.x)
+                / labels.len() as f32;
+            ui.horizontal(|ui| {
+                for (i, name) in labels.iter().enumerate() {
+                    let resp = segment(ui, name, current == i, egui::vec2(share, 22.0));
+                    let resp = match tips.get(i) {
+                        Some(tip) => resp.on_hover_text(*tip),
+                        None => resp,
+                    };
+                    if resp.clicked() && current != i {
+                        picked = Some(i);
+                    }
+                }
+            });
+        });
+    picked
+}
+
+/// A visible focus ring for text fields (0.6.0): the mockup's
+/// link field carries an accent outline plus a faint deep-red
+/// outer glow while focused. Painted strokes only — the field
+/// underneath is untouched.
+pub fn paint_focus_ring_for_field(ui: &egui::Ui, resp: &egui::Response) {
+    if resp.has_focus() {
+        let painter = ui.painter();
+        painter.rect_stroke(
+            resp.rect.expand(3.0),
+            egui::CornerRadius::same(RADIUS + 3),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x4A, 0x1B, 0x1F)),
+            egui::epaint::StrokeKind::Outside,
+        );
+        painter.rect_stroke(
+            resp.rect.expand(1.0),
+            egui::CornerRadius::same(RADIUS + 1),
+            egui::Stroke::new(1.5_f32, ACCENT),
+            egui::epaint::StrokeKind::Outside,
+        );
+    }
 }
 
 /// A small status dot, PAINTED as a filled circle (0.5.1) —
@@ -125,8 +816,8 @@ pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
 pub fn status_pill(ui: &mut egui::Ui, dot: egui::Color32, main: &str, suffix: &str, tip: &str) {
     let budget = ui.available_width();
     egui::Frame::NONE
-        .fill(CARD)
-        .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+        .fill(PILL_BG)
+        .stroke(egui::Stroke::new(1.0_f32, PILL_STROKE))
         .corner_radius(14)
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
@@ -291,6 +982,9 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.icon_width = 18.0;
     style.spacing.icon_spacing = 6.0;
     style.spacing.slider_width = 150.0;
+    // Thin slider track (0.6.0): the mockups' 4px rail with a
+    // round thumb, instead of egui's chunky 8px default rail.
+    style.spacing.slider_rail_height = 4.0;
     style.spacing.combo_width = 150.0;
     style.spacing.text_edit_width = 220.0;
     style.spacing.tooltip_width = 320.0;
@@ -301,7 +995,9 @@ pub fn apply_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = PANEL_BG;
     visuals.window_fill = PANEL_BG;
-    visuals.extreme_bg_color = egui::Color32::BLACK;
+    // Recessed fields (text edits, combo boxes) sit in a well
+    // (0.6.0) — darker than the panel around them.
+    visuals.extreme_bg_color = WELL;
     visuals.faint_bg_color = CARD;
     visuals.code_bg_color = CARD;
     visuals.hyperlink_color = ACCENT;
@@ -323,8 +1019,10 @@ pub fn apply_theme(ctx: &egui::Context) {
         color: egui::Color32::from_black_alpha(80),
     };
     // Sliders show their filled portion in the selection
-    // colour (the deep red below).
+    // colour (the bright accent below, since 0.6.0).
     visuals.slider_trailing_fill = true;
+    // Round slider thumbs (0.6.0).
+    visuals.handle_shape = egui::style::HandleShape::Circle;
 
     let wv = |bg: egui::Color32, stroke: egui::Color32| egui::style::WidgetVisuals {
         bg_fill: bg,
@@ -339,7 +1037,11 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.widgets.hovered = wv(CONTROL_BG_HOVER, STROKE_SOFT);
     visuals.widgets.active = wv(ACCENT_DARK, ACCENT_DARK);
     visuals.widgets.open = wv(CONTROL_BG_HOVER, STROKE_SOFT);
-    visuals.selection.bg_fill = ACCENT_DARK;
+    // Selection is the bright accent since 0.6.0: it drives
+    // the slider's filled trail, progress-bar fills, selected
+    // combo entries and text selection — the mockups' red is
+    // the bright one, not the deep red 0.5.0 used here.
+    visuals.selection.bg_fill = ACCENT;
     visuals.selection.stroke = egui::Stroke::new(1.0_f32, TEXT);
 
     style.visuals = visuals;
@@ -1410,6 +2112,31 @@ impl App {
             if let Ok((url, decoded)) = rx.try_recv() {
                 self.thumb_rx = None;
                 if let Some((w, h, rgba)) = decoded {
+                    // Centre-crop to the popup hero's aspect
+                    // (0.6.0): the hero paints the texture
+                    // stretched to its exact rect, so the crop
+                    // happens here, once, instead of distorting
+                    // the image at paint time.
+                    const HERO_ASPECT: f32 = 406.0 / 184.0;
+                    let (w, h, rgba) = if (w as f32 / h as f32 - HERO_ASPECT).abs() < 0.01 {
+                        (w, h, rgba)
+                    } else if w as f32 / h as f32 > HERO_ASPECT {
+                        let cw = ((h as f32 * HERO_ASPECT) as u32).min(w).max(1);
+                        let x0 = (w - cw) / 2;
+                        let mut out = Vec::with_capacity((cw * h * 4) as usize);
+                        for y in 0..h {
+                            let start = (((y * w + x0) * 4) as usize).min(rgba.len());
+                            let end = (start + (cw * 4) as usize).min(rgba.len());
+                            out.extend_from_slice(&rgba[start..end]);
+                        }
+                        (cw, h, out)
+                    } else {
+                        let ch = ((w as f32 / HERO_ASPECT) as u32).min(h).max(1);
+                        let y0 = (h - ch) / 2;
+                        let start = ((y0 * w * 4) as usize).min(rgba.len());
+                        let end = (start + (ch * w * 4) as usize).min(rgba.len());
+                        (w, ch, rgba[start..end].to_vec())
+                    };
                     let img =
                         egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
                     let handle = ctx.load_texture("popup-thumb", img, egui::TextureOptions::LINEAR);
@@ -2246,9 +2973,15 @@ impl eframe::App for App {
         // Root viewport = the control panel.
         if self.show_panel {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            egui::CentralPanel::default().show(ctx, |ui| {
-                self.panel_ui(ui);
-            });
+            // Margin-free frame (0.6.0): the panel paints its
+            // own layout — the gradient header band and the
+            // recessed footer bar run full-bleed to the window
+            // edges, and `panel_ui` insets the content itself.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(PANEL_BG))
+                .show(ctx, |ui| {
+                    self.panel_ui(ui);
+                });
             if ctx.input(|i| i.viewport().close_requested()) && !self.exit_requested {
                 // Closing the main window is a choice, not a
                 // reflex: the user's saved CloseAction decides

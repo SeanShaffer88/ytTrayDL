@@ -48,8 +48,9 @@ pub const DANGER_BG: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x0E, 0x0E);
 /// the large radius; egui applies ONE radius per widget state,
 /// so small controls inherit it too (noted in DESIGN.md).
 pub const RADIUS: u8 = 8;
-/// Width of the slide-out settings drawer (0.2.1).
-pub const SETTINGS_DRAWER_W: f32 = 530.0;
+/// Default inner size of the standalone Settings window
+/// (0.5.1; Settings was a slide-out drawer in 0.2.1–0.5.0).
+pub const SETTINGS_WINDOW_SIZE: [f32; 2] = [600.0, 640.0];
 
 /// A card frame (0.5.0): CARD fill, hairline outline, rounded
 /// corners, 12px inner padding, 8px of space below so stacked
@@ -99,25 +100,58 @@ pub fn primary_button(text: &str) -> egui::Button<'_> {
         .stroke(egui::Stroke::new(1.0_f32, ACCENT))
 }
 
+/// A small status dot, PAINTED as a filled circle (0.5.1) —
+/// never the "●" character: U+25CF is missing from egui's
+/// default font, so the text version rendered as a hollow
+/// square on Windows (v0.5.0 field captures). Allocates a
+/// 10×10 box and paints the circle inside it.
+pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
+    let (rect, _resp) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+}
+
 /// A rounded status pill (0.5.0): coloured dot + strong main
 /// text + dim suffix, inside a card-fill pill outline. Used for
 /// the panel's monitoring status line, replacing the plain
 /// outlined box the status used to sit in.
+///
+/// Width budget (0.5.1): the pill may never be wider than the
+/// row it sits in — the 0.5.0 version had no budget and its
+/// natural width (~450px at the theme's sizes) overflowed the
+/// 400px panel and painted under the Settings drawer. The
+/// suffix gets whatever width remains after the dot and main
+/// text, and truncates inside the pill; the full line is on
+/// hover over the pill.
 pub fn status_pill(ui: &mut egui::Ui, dot: egui::Color32, main: &str, suffix: &str, tip: &str) {
+    let budget = ui.available_width();
     egui::Frame::NONE
         .fill(CARD)
         .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
         .corner_radius(14)
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
+            ui.set_max_width((budget - 20.0).max(60.0));
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("●").color(dot));
+                status_dot(ui, dot);
                 ui.label(egui::RichText::new(main).strong().color(TEXT));
                 ui.label(egui::RichText::new("·").color(TEXT_FAINT));
-                ui.label(egui::RichText::new(suffix).color(TEXT_DIM))
-                    .on_hover_text(tip);
+                let remaining = ui.available_width();
+                if remaining > 24.0 {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(remaining, 20.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(suffix).color(TEXT_DIM))
+                                    .truncate(),
+                            );
+                        },
+                    );
+                }
             });
-        });
+        })
+        .response
+        .on_hover_text(tip);
 }
 
 /// Runtime-generated window/tray icon: white down-arrow on a black
@@ -509,7 +543,7 @@ fn tray_item_name(t: &TrayHandles, id: &tray_icon::menu::MenuId) -> &'static str
 /// Returns true when the action was fully handled here;
 /// false means "forward it to the app" (actions that need
 /// live app state: popup, downloads window, settings
-/// drawer, about).
+/// window, about).
 #[cfg(windows)]
 fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
     let name = match with_tray_handles(|t| tray_item_name(t, &event.id)) {
@@ -547,7 +581,14 @@ fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
             let v = s.monitoring_enabled;
             match s.save() {
                 Ok(()) => {
-                    with_tray_handles(|t| t.monitoring.set_checked(v));
+                    // No set_checked here (0.5.1): mutating a muda
+                    // menu item inside muda's own dispatch is the
+                    // RefCell-borrowed panic class proven in the
+                    // 0.2.7 field log, and the prime suspect for
+                    // the tray autostart untick exiting the
+                    // program on v0.5.0. sync_tray (app context)
+                    // owns all checkmarks and follows the
+                    // settings file this save just wrote.
                     yttraydl::diag_log(&format!(
                         "tray menu click: monitoring toggle -> {v} (handler)"
                     ));
@@ -568,7 +609,8 @@ fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
             };
             match s.save() {
                 Ok(()) => {
-                    with_tray_handles(|t| t.auto_mode.set_checked(now_auto));
+                    // No set_checked in-dispatch (0.5.1) — see
+                    // the monitoring branch. sync_tray owns it.
                     yttraydl::diag_log(&format!(
                         "tray menu click: auto-download toggle -> {now_auto} (handler)"
                     ));
@@ -580,13 +622,35 @@ fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
             true
         }
         "autostart toggle" => {
-            let target = !platform::Platform::autostart_enabled();
+            // Step-by-step logging (0.5.1): SEAN reported that
+            // unticking this on v0.5.0 exited the program. If it
+            // ever dies mid-toggle again, the log names the last
+            // completed step. NO muda mutation in here (no
+            // set_checked in-dispatch — see the monitoring
+            // branch); sync_tray owns the checkmark and reads it
+            // back from the registry.
+            let current = platform::Platform::autostart_enabled();
+            let target = !current;
+            yttraydl::diag_log(&format!(
+                "tray autostart toggle: current={current} -> target={target} (handler)"
+            ));
             match platform::Platform::set_autostart(target) {
                 Ok(()) => {
-                    with_tray_handles(|t| t.autostart.set_checked(target));
+                    yttraydl::diag_log(&format!(
+                        "tray autostart toggle: registry updated -> {target}"
+                    ));
                     let mut s = Settings::load();
                     s.start_with_windows = target;
-                    let _ = s.save();
+                    match s.save() {
+                        Ok(()) => {
+                            yttraydl::diag_log("tray autostart toggle: settings saved");
+                        }
+                        Err(e) => {
+                            yttraydl::diag_log(&format!(
+                                "tray autostart toggle: settings save failed: {e}"
+                            ));
+                        }
+                    }
                     yttraydl::diag_log(&format!(
                         "tray menu click: autostart toggle -> {target} (handler)"
                     ));
@@ -611,6 +675,11 @@ fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
             true
         }
         "hide tray icon" => {
+            // set_visible stays in the handler (judgment call,
+            // 0.5.1): it mutates the tray ICON itself, not a menu
+            // item, and this exact call has worked in the field
+            // since 0.2.7 — the checkmark calls above are the
+            // ones that moved out of the dispatch.
             with_tray_handles(|t| {
                 t._tray.set_visible(false).ok();
             });
@@ -682,16 +751,13 @@ pub struct App {
 
     pub show_panel: bool,
     pub show_settings: bool,
-    /// Slide-out settings drawer animation, 0 = closed, 1 = open.
-    settings_anim: f32,
-    /// Hide the panel as soon as the settings drawer has fully
-    /// closed — set by `begin_panel_hide`, consumed in `update`.
-    /// Field fix (0.4.1): the panel must never hide in the same
-    /// frame the drawer state is reset (see `begin_panel_hide`).
-    pending_panel_hide: bool,
-    /// Main-window size while the drawer is closed — the base the
-    /// open animation grows from (tracks user resizes).
-    closed_size: egui::Vec2,
+    /// Last autostart checkmark state pushed to the tray menu
+    /// by `sync_tray` (0.5.1); `None` = not pushed yet. The tray
+    /// handlers no longer touch muda checkmarks inside muda's
+    /// dispatch — `sync_tray` owns them (see
+    /// `handle_tray_menu_direct`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    tray_autostart_checked: Option<bool>,
     pub show_downloads: bool,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
@@ -806,9 +872,7 @@ impl App {
             tray_event_rx: None,
             show_panel: false,
             show_settings: false,
-            settings_anim: 0.0,
-            pending_panel_hide: false,
-            closed_size: egui::vec2(400.0, 540.0),
+            tray_autostart_checked: None,
             show_downloads: false,
             show_about: false,
             confirm_hide_icon: false,
@@ -1234,26 +1298,15 @@ impl App {
     }
 
     /// Hide the control panel — to the tray, or as part of
-    /// `hide_entirely` — closing the settings drawer FIRST.
-    ///
-    /// Field report (SEAN, v0.4.0): closing the window with the
-    /// Settings drawer open, then restoring it, brought back a
-    /// BLANK window. The old code reset the drawer state and hid
-    /// the window in the same frame, so the window went away at
-    /// its drawer-open width and the shrink-back resize never
-    /// ran. Now the drawer slides shut and the window shrinks to
-    /// its panel-only width like a normal Settings close, and
-    /// only once it is fully closed does the panel hide (the
-    /// deferred half lives in `update`). With the animation
-    /// setting off, the close snaps and the hide follows a frame
-    /// later — same guarantee.
+    /// `hide_entirely`. Direct since 0.5.1: Settings is its own
+    /// window now, so there is no drawer to close first (the
+    /// 0.4.1 deferred hide existed only for the drawer and its
+    /// window-shrink resize). The Settings window hides with
+    /// the panel so nothing floats alone while the app sits in
+    /// the tray.
     pub fn begin_panel_hide(&mut self) {
-        if self.show_settings || self.settings_anim > 0.0 {
-            self.show_settings = false;
-            self.pending_panel_hide = true;
-        } else {
-            self.show_panel = false;
-        }
+        self.show_settings = false;
+        self.show_panel = false;
     }
 
     /// Hide EVERYTHING — panel and tray icon — while the app keeps
@@ -1269,8 +1322,7 @@ impl App {
             t._tray.set_visible(false).ok();
         });
         self.settings_dirty = true;
-        // The panel half defers until the settings drawer has
-        // closed — see `begin_panel_hide` (0.4.1).
+        // begin_panel_hide also closes the Settings window.
         self.begin_panel_hide();
     }
 
@@ -2081,8 +2133,9 @@ impl App {
                 self.show_downloads = true;
                 self.show_panel = true;
             } else if ev.id == id_settings {
-                // Settings is a drawer in the main window now —
-                // opening it means showing the window too.
+                // Settings is its own window (0.5.1) — opening
+                // it from the tray also shows the panel, as
+                // before.
                 self.show_settings = true;
                 self.show_panel = true;
             } else if ev.id == id_about {
@@ -2122,6 +2175,17 @@ impl App {
             t.auto_mode
                 .set_checked(self.settings.default_action == DefaultAction::AutoDownload);
         });
+        // Autostart checkmark (0.5.1): owned here, in app
+        // context, never in the tray handler (see
+        // handle_tray_menu_direct). Read back from the registry
+        // (the source of truth) and pushed only on change, so
+        // a handler-side toggle shows up within a pass or two
+        // once the app adopts the handler's settings save.
+        let autostart_now = platform::Platform::autostart_enabled();
+        if self.tray_autostart_checked != Some(autostart_now) {
+            self.tray_autostart_checked = Some(autostart_now);
+            with_tray_handles(|t| t.autostart.set_checked(autostart_now));
+        }
     }
 }
 
@@ -2176,85 +2240,13 @@ impl eframe::App for App {
             }
         }
 
-        // Reopening Settings cancels a deferred panel hide (the
-        // user changed their mind mid-close).
-        if self.show_settings {
-            self.pending_panel_hide = false;
-        }
+        // (0.5.1: no drawer, no deferred hide — Settings is
+        // its own window, rendered by settings_ui below.)
 
-        // Settings drawer slide (0.2.1): animate 0<->1 over
-        // ~220 ms; while it moves, the window itself grows/shrinks
-        // by the drawer width so the panel never gets squeezed.
-        // Once settled, sizing is the user's again.
-        {
-            let target = if self.show_settings { 1.0 } else { 0.0 };
-            if (self.settings_anim - target).abs() > 0.0005 && self.show_panel {
-                if !self.settings.animate_settings_drawer {
-                    // Animation off (user setting): snap straight
-                    // to the end state; the resize below runs once
-                    // with the final width.
-                    self.settings_anim = target;
-                } else {
-                    let dt = ctx.input(|i| i.stable_dt).clamp(0.001, 0.1);
-                    let step = dt / 0.22;
-                    self.settings_anim = if target > self.settings_anim {
-                        (self.settings_anim + step).min(1.0)
-                    } else {
-                        (self.settings_anim - step).max(0.0)
-                    };
-                }
-                let e = 1.0 - (1.0 - self.settings_anim).powi(3); // ease-out cubic
-                let w = self.closed_size.x + SETTINGS_DRAWER_W * e;
-                // SEAN (0.2.5): opening Settings expands the
-                // window sideways ONLY — the height never
-                // changes. (Before, it also grew toward
-                // 580 px tall.) The drawer's content scrolls,
-                // so any window height works.
-                let h = ctx
-                    .input(|i| i.viewport().inner_rect)
-                    .map(|r| r.height())
-                    .unwrap_or(self.closed_size.y);
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
-                ctx.request_repaint();
-            } else if self.settings_anim == 0.0 && self.show_panel {
-                // Fully closed: follow the user's window size as
-                // the base the next open-animation grows from.
-                if let Some(r) = ctx.input(|i| i.viewport().inner_rect) {
-                    self.closed_size = r.size();
-                }
-            }
-        }
-
-        // Deferred panel hide (0.4.1): the drawer has fully
-        // closed and the block above has shrunk the window back
-        // to its panel-only width — the panel may hide now.
-        if self.pending_panel_hide && !self.show_settings && self.settings_anim == 0.0 {
-            self.pending_panel_hide = false;
-            self.show_panel = false;
-        }
-
-        // Root viewport = the control panel (+ settings drawer).
+        // Root viewport = the control panel.
         if self.show_panel {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             egui::CentralPanel::default().show(ctx, |ui| {
-                if self.settings_anim > 0.001 {
-                    let e = 1.0 - (1.0 - self.settings_anim).powi(3);
-                    let resp = egui::SidePanel::right("settings-drawer")
-                        .exact_width(SETTINGS_DRAWER_W * e)
-                        .resizable(false)
-                        .frame(
-                            egui::Frame::NONE
-                                .fill(egui::Color32::from_rgb(0x0B, 0x0B, 0x0B))
-                                .inner_margin(egui::Margin::same(12)),
-                        )
-                        .show_inside(ui, |ui| {
-                            self.settings_drawer_ui(ui);
-                        });
-                    // Hairline on the drawer's left edge.
-                    let r = resp.response.rect;
-                    ui.painter()
-                        .vline(r.left(), r.y_range(), egui::Stroke::new(1.0_f32, HAIRLINE));
-                }
                 self.panel_ui(ui);
             });
             if ctx.input(|i| i.viewport().close_requested()) && !self.exit_requested {
@@ -2296,6 +2288,7 @@ impl eframe::App for App {
         }
 
         self.popup_ui(ctx);
+        self.settings_ui(ctx);
         self.downloads_ui(ctx);
         self.toasts_ui(ctx);
         self.about_ui(ctx);

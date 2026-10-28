@@ -111,27 +111,26 @@ to download:
 
 ![Link detected popup](docs/screenshots/popup.png)
 
-Settings slide out from the side of the main window — one tab
-at a time. General: clipboard behaviour, tray & startup, popup
+Settings opens in its own window — one tab at a time. General: clipboard behaviour, tray & startup, popup
 position, what happens when the queue empties:
 
-![Settings drawer — General](docs/screenshots/settings.png)
+![Settings — General](docs/screenshots/settings.png)
 
 Downloads: folder, filename template, default quality,
 subtitles, SponsorBlock, split chapters, the low-disk guard
 and a post-download command:
 
-![Settings drawer — Downloads](docs/screenshots/settings-downloads.png)
+![Settings — Downloads](docs/screenshots/settings-downloads.png)
 
 Domains & rules: ignored / auto-download / allowed domains,
 quality pins per domain, and the channel watcher:
 
-![Settings drawer — Domains & rules](docs/screenshots/settings-domains.png)
+![Settings — Domains & rules](docs/screenshots/settings-domains.png)
 
 yt-dlp: managed yt-dlp and ffmpeg updates, settings
 export/import, and the data folder:
 
-![Settings drawer — yt-dlp](docs/screenshots/settings-ytdlp.png)
+![Settings — yt-dlp](docs/screenshots/settings-ytdlp.png)
 
 Hiding the tray icon is always explained first — and always
 recoverable:

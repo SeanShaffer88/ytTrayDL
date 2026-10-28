@@ -13,7 +13,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc
+          targets: x86_64-pc-windows-msvc
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (host)
@@ -24,8 +24,6 @@ jobs:
         run: cargo test --locked
       - name: Windows check
         run: cargo check --target x86_64-pc-windows-msvc --all-targets --locked
-      - name: Windows check (32-bit)
-        run: cargo check --target i686-pc-windows-msvc --all-targets --locked
 
   windows-build:
     runs-on: windows-latest
@@ -34,7 +32,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: i686-pc-windows-msvc
       - name: Tests (native)
         run: cargo test --locked
       - name: Release build
@@ -56,20 +53,3 @@ jobs:
         with:
           name: yttraydl-setup
           path: dist/ytTrayDL-Setup-*.exe
-      - name: Release build (32-bit)
-        run: cargo build --release --locked --target i686-pc-windows-msvc
-      - name: Upload exe (32-bit)
-        uses: actions/upload-artifact@v4
-        with:
-          name: yttraydl-windows-x86
-          path: target/i686-pc-windows-msvc/release/yttraydl.exe
-      - name: Build installer (32-bit)
-        shell: pwsh
-        run: |
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches.Groups[1].Value
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$version "/DExeSourceDir=..\target\i686-pc-windows-msvc\release" /DArchSuffix=x86 installer\yttraydl.iss
-      - name: Upload installer (32-bit)
-        uses: actions/upload-artifact@v4
-        with:
-          name: yttraydl-setup-x86
-          path: dist/ytTrayDL-Setup-*-windows-x86.exe

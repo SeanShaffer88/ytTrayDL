@@ -55,8 +55,56 @@ impl App {
         // v0.5.0 field captures showed content running off the
         // right edge at launch and after resizes.
         ui.set_clip_rect(ui.max_rect());
-        ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("ytTrayDL").color(TEXT));
+        let full = ui.max_rect();
+
+        // Gradient header band (0.6.0): full-bleed to the
+        // window edges (the root panel frame is margin-free —
+        // see `update`), near-black at the top shading into a
+        // deep-red tint, carrying the logo tile, the title and
+        // the status pill. Fixed height: tile row 42 + pill
+        // row 26 + spacing, inside 10px vertical insets.
+        const BAND_H: f32 = 96.0;
+        let band_rect =
+            egui::Rect::from_min_max(full.min, egui::pos2(full.max.x, full.min.y + BAND_H));
+        paint_vertical_gradient(ui.painter(), band_rect, 0.0, BAND_TOP, BAND_BOTTOM);
+        ui.painter().line_segment(
+            [band_rect.left_bottom(), band_rect.right_bottom()],
+            egui::Stroke::new(1.0_f32, BAND_EDGE),
+        );
+        let mut band = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(band_rect.shrink2(egui::vec2(12.0, 10.0)))
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        band.horizontal(|ui| {
+            // Logo tile: raised dark square, red-tinted
+            // outline, top light edge, the download glyph
+            // drawn (white arrow, red tray line).
+            let (tile, _) = ui.allocate_exact_size(egui::vec2(42.0, 42.0), egui::Sense::hover());
+            paint_soft_glow(ui.painter(), tile, 11.0, egui::Color32::BLACK);
+            ui.painter()
+                .rect_filled(tile, 11.0, egui::Color32::from_rgb(0x19, 0x19, 0x1B));
+            ui.painter().rect_stroke(
+                tile,
+                egui::CornerRadius::same(11),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x4A, 0x30, 0x32)),
+                egui::epaint::StrokeKind::Inside,
+            );
+            paint_top_highlight(ui.painter(), tile, 11.0);
+            paint_icon(
+                ui.painter(),
+                IconKind::Download,
+                tile.center(),
+                1.05,
+                egui::Color32::WHITE,
+                ACCENT,
+            );
+            ui.label(
+                egui::RichText::new("ytTrayDL")
+                    .strong()
+                    .size(20.0)
+                    .color(TEXT),
+            );
             ui.label(
                 egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(TEXT_FAINT),
             );
@@ -70,16 +118,16 @@ impl App {
                 }
             });
         });
-        ui.add_space(8.0);
-
-        // Status pill (0.5.0): dot + state + mode, in a rounded
-        // pill instead of a line of loose labels.
+        band.add_space(8.0);
+        // Status pill (0.5.0), sitting in the band (0.6.0):
+        // dot + state + mode, in a rounded pill instead of a
+        // line of loose labels.
         let (dot, word) = if self.settings.monitoring_enabled {
             (OK_GREEN, "Monitoring clipboard")
         } else {
             (ACCENT, "Monitoring paused")
         };
-        ui.horizontal(|ui| {
+        band.horizontal(|ui| {
             status_pill(
                 ui,
                 dot,
@@ -91,7 +139,25 @@ impl App {
                 "Change this in Settings → General, or from the tray menu.",
             );
         });
+        ui.allocate_rect(band_rect, egui::Sense::hover());
 
+        // Content below the band, inset 12px on both sides —
+        // the margins the old window_margin style used to give
+        // every row (the 0.5.1 width budgets are computed from
+        // `available_width` exactly as before).
+        let content_rect = egui::Rect::from_min_max(
+            egui::pos2(full.min.x + 12.0, band_rect.max.y + 10.0),
+            egui::pos2(full.max.x - 12.0, full.max.y),
+        );
+        let mut content = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(content_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        self.panel_body(&mut content, full);
+    }
+
+    fn panel_body(&mut self, ui: &mut egui::Ui, full: egui::Rect) {
         // Failure banner (0.4.0): the latest final failure, with
         // one-click retry — failures used to be easy to miss.
         if let Some(notice) = self.failure_notice.clone() {
@@ -132,25 +198,71 @@ impl App {
                 });
         }
 
-        // yt-dlp status / first-run install, in a card (0.5.0).
-        ui.add_space(8.0);
-        card_frame()
-            .show(ui, |ui| match &self.bin {
-                Some(bin) => {
-                    let version = self
-                        .ytdlp_version
-                        .clone()
-                        .unwrap_or_else(|| "…".into());
-                    ui.label(format!(
-                        "yt-dlp {version} — {}",
-                        source_label(&bin.source)
-                    ))
+        // yt-dlp / ffmpeg status — the ENGINE well (0.6.0):
+        // a recessed surface under a micro-label, per the
+        // premium mockup. The status rows are dot + strong
+        // item + faint right-aligned note; the install flows
+        // (ffmpeg missing / yt-dlp missing) keep their 0.5.0
+        // content inside the same well.
+        ui.add_space(10.0);
+        ui.label(section_heading("Engine"));
+        ui.add_space(4.0);
+        premium_well(ui, |ui| match &self.bin {
+            Some(bin) => {
+                let version = self.ytdlp_version.clone().unwrap_or_else(|| "…".into());
+                ui.horizontal(|ui| {
+                    status_dot(ui, OK_GREEN);
+                    ui.label(
+                        egui::RichText::new(format!("yt-dlp {version}"))
+                            .color(TEXT)
+                            .size(13.5),
+                    )
                     .on_hover_text(bin.path.display().to_string());
-                    if self.ffmpeg_ok {
-                        ui.label(egui::RichText::new("ffmpeg found — merging and MP3 conversion available.").color(TEXT_DIM));
-                    } else {
-                        ui.label(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail.").color(ACCENT));
-                        ui.horizontal(|ui| {
+                    let remaining = ui.available_width();
+                    if remaining > 40.0 {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(remaining, 20.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(source_label(&bin.source))
+                                            .color(TEXT_FAINT)
+                                            .size(11.5),
+                                    )
+                                    .truncate(),
+                                );
+                            },
+                        );
+                    }
+                });
+                if self.ffmpeg_ok {
+                    ui.horizontal(|ui| {
+                        status_dot(ui, OK_GREEN);
+                        ui.label(egui::RichText::new("ffmpeg found").color(TEXT).size(13.5));
+                        let remaining = ui.available_width();
+                        if remaining > 40.0 {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(remaining, 20.0),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(
+                                                "merging and MP3 conversion available",
+                                            )
+                                            .color(TEXT_FAINT)
+                                            .size(11.5),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                        }
+                    });
+                } else {
+                    ui.label(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail.").color(ACCENT));
+                    ui.horizontal(|ui| {
                             let busy = self.ffmpeg_fetch_rx.is_some();
                             if ui
                                 .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install ffmpeg" }))
@@ -165,16 +277,18 @@ impl App {
                                     .color(TEXT_DIM),
                             );
                         });
-                    }
                 }
-                None => {
-                    ui.label(
-                        egui::RichText::new("yt-dlp is not installed yet — ytTrayDL can't download without it.")
-                            .color(ACCENT)
-                            .strong(),
-                    );
-                    ui.label("One click installs the official standalone yt-dlp.exe from GitHub into ytTrayDL's own folder. Nothing else on your PC is changed.");
-                    ui.horizontal(|ui| {
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new(
+                        "yt-dlp is not installed yet — ytTrayDL can't download without it.",
+                    )
+                    .color(ACCENT)
+                    .strong(),
+                );
+                ui.label("One click installs the official standalone yt-dlp.exe from GitHub into ytTrayDL's own folder. Nothing else on your PC is changed.");
+                ui.horizontal(|ui| {
                         let busy = self.ytdlp_fetch_rx.is_some();
                         if ui
                             .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install yt-dlp" }))
@@ -202,23 +316,25 @@ impl App {
                             let _ = platform::open_url("https://github.com/yt-dlp/yt-dlp/releases");
                         }
                     });
-                },
-            });
+            }
+        });
 
-        // Quick controls.
+        // Quick controls — painter-drawn switches (0.6.0,
+        // replacing the checkboxes, per the premium mockup).
         ui.horizontal(|ui| {
             let mut monitoring = self.settings.monitoring_enabled;
-            if ui
-                .checkbox(&mut monitoring, "Monitoring")
+            if switch(ui, &mut monitoring)
                 .on_hover_text("Watch the clipboard for supported links")
                 .changed()
             {
                 self.settings.monitoring_enabled = monitoring;
                 self.settings_dirty = true;
             }
+            ui.label("Monitoring")
+                .on_hover_text("Watch the clipboard for supported links");
+            ui.add_space(24.0);
             let mut auto = self.settings.default_action == DefaultAction::AutoDownload;
-            if ui
-                .checkbox(&mut auto, "Auto-download")
+            if switch(ui, &mut auto)
                 .on_hover_text("Skip the popup and download with your default preset")
                 .changed()
             {
@@ -229,6 +345,8 @@ impl App {
                 };
                 self.settings_dirty = true;
             }
+            ui.label("Auto-download")
+                .on_hover_text("Skip the popup and download with your default preset");
         });
         ui.horizontal(|ui| {
             // Explicit equal shares (0.5.1): at the panel's
@@ -237,11 +355,11 @@ impl App {
             // the excess past the right edge instead of
             // shrinking them (v0.5.0 field captures). Each
             // button now gets a fixed third of the row and
-            // truncates its label inside that share.
+            // truncates its label inside that share. 0.6.0:
+            // drawn line icons instead of the ⚙/⬇/📂 glyphs.
             let share = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
-            let btn_size = egui::vec2(share, 30.0);
-            if ui
-                .add_sized(btn_size, egui::Button::new("⚙ Settings…").truncate())
+            let btn_size = egui::vec2(share, 34.0);
+            if icon_text_button(ui, IconKind::Gear, "Settings…", btn_size)
                 .on_hover_text("Show/hide the Settings window")
                 .clicked()
             {
@@ -252,19 +370,17 @@ impl App {
             }
             let active = self.downloads.active_count();
             let label = if active > 0 {
-                format!("⬇ Downloads ({active} active)…")
+                format!("Downloads ({active} active)…")
             } else {
-                "⬇ Downloads…".to_string()
+                "Downloads…".to_string()
             };
-            if ui
-                .add_sized(btn_size, egui::Button::new(label).truncate())
+            if icon_text_button(ui, IconKind::Download, &label, btn_size)
                 .on_hover_text("Active downloads and history")
                 .clicked()
             {
                 self.show_downloads = true;
             }
-            if ui
-                .add_sized(btn_size, egui::Button::new("📂 Download folder").truncate())
+            if icon_text_button(ui, IconKind::Folder, "Download folder", btn_size)
                 .on_hover_text("Open the download folder in Explorer")
                 .clicked()
             {
@@ -278,7 +394,7 @@ impl App {
 
         // Manual URL entry.
         ui.add_space(12.0);
-        ui.label(section_heading("Download a link directly"));
+        ui.label(section_heading("Download a link"));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             // Reserve the button FIRST (0.5.1). The 0.5.0 budget
@@ -301,6 +417,8 @@ impl App {
                         .desired_width(field_w),
                 )
                 .on_hover_text("Type or paste a URL, then press Enter or Download");
+            // Accent focus ring + deep-red outer glow (0.6.0).
+            paint_focus_ring_for_field(ui, &resp);
             let go = ui
                 .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
                 .on_hover_text("Open the download popup for this link")
@@ -365,51 +483,129 @@ impl App {
         if !self.history.entries.is_empty() {
             ui.add_space(8.0);
             ui.label(section_heading("Recent"));
-            let recent: Vec<(String, HistoryStatus, Option<std::path::PathBuf>)> = self
+            type RecentRow = (
+                String,
+                HistoryStatus,
+                Option<std::path::PathBuf>,
+                String,
+                String,
+                i64,
+            );
+            let recent: Vec<RecentRow> = self
                 .history
                 .recent(5)
                 .iter()
-                .map(|e| (e.title.clone(), e.status, e.file.clone()))
+                .map(|e| {
+                    (
+                        e.title.clone(),
+                        e.status,
+                        e.file.clone(),
+                        e.url.clone(),
+                        e.preset_label.clone(),
+                        e.finished_at_unix,
+                    )
+                })
                 .collect();
             let mut open_file: Option<std::path::PathBuf> = None;
-            for (title, status, file) in &recent {
-                ui.horizontal(|ui| {
-                    // Painted dot, not the "●" character
-                    // (0.5.1 — U+25CF is missing from egui's
-                    // default font and rendered as a hollow
-                    // square in the field captures).
-                    status_dot(ui, status_color(*status));
-                    // Explicit width budget (0.5.1): the folder
-                    // button used to be placed by a right-to-left
-                    // sub-layout BEFORE the title label, which
-                    // claimed the whole remaining row — the
-                    // title got no room at all and the button
-                    // landed on the panel's extreme edge, half
-                    // off it (field captures). Now the title
-                    // takes a fixed budget and truncates (full
-                    // title on hover), and the button follows it
-                    // at a fixed size.
-                    let btn_w = if file.is_some() { 30.0 } else { 0.0 };
-                    let title_w =
-                        (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(40.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(title_w, 22.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(egui::Label::new(title.clone()).truncate())
-                                .on_hover_text(title.clone());
-                        },
-                    );
-                    if let Some(f) = file {
-                        if ui
-                            .add_sized(egui::vec2(btn_w, 24.0), egui::Button::new("📂").small())
-                            .on_hover_text("Show in Explorer")
-                            .clicked()
-                        {
-                            open_file = Some(f.clone());
-                        }
-                    }
-                });
+            for (title, status, file, url, preset_label, finished_at) in &recent {
+                // Each entry is a small raised card (0.6.0):
+                // gradient thumbnail tile with a play triangle,
+                // two-line text (title + host · quality · time —
+                // history stores no uploader or duration, so the
+                // mockup's meta line is built from what history
+                // does record), the painted status dot, and the
+                // folder button. Widths are budgeted exactly as
+                // in 0.5.1: tile, text, dot and button all have
+                // fixed shares and the title truncates inside
+                // its share, so the row fits at 340px too.
+                let shown = egui::Frame::NONE
+                    .fill(CARD)
+                    .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+                    .corner_radius(RADIUS)
+                    .inner_margin(egui::Margin::symmetric(10, 7))
+                    .outer_margin(egui::Margin {
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        bottom: 6,
+                    })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (tile, _) = ui
+                                .allocate_exact_size(egui::vec2(56.0, 32.0), egui::Sense::hover());
+                            paint_vertical_gradient(
+                                ui.painter(),
+                                tile,
+                                7.0,
+                                egui::Color32::from_rgb(0x3A, 0x22, 0x26),
+                                egui::Color32::from_rgb(0x1C, 0x14, 0x18),
+                            );
+                            let c = tile.center();
+                            ui.painter().add(egui::Shape::convex_polygon(
+                                vec![
+                                    egui::pos2(c.x - 5.0, c.y - 7.0),
+                                    egui::pos2(c.x - 5.0, c.y + 7.0),
+                                    egui::pos2(c.x + 7.0, c.y),
+                                ],
+                                egui::Color32::WHITE,
+                                egui::Stroke::NONE,
+                            ));
+                            let spacing = ui.spacing().item_spacing.x;
+                            let btn_w = if file.is_some() { 30.0 } else { 0.0 };
+                            let text_w = (ui.available_width()
+                                - 10.0
+                                - spacing
+                                - btn_w
+                                - if file.is_some() { spacing } else { 0.0 })
+                            .max(40.0);
+                            let meta = format!(
+                                "{} · {} · {}",
+                                host_of(url),
+                                preset_label,
+                                local_time_hhmm(*finished_at)
+                            );
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(text_w, 34.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(title.clone())
+                                                .color(TEXT)
+                                                .size(13.0),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(title.clone());
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(meta).color(TEXT_FAINT).size(11.5),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                            // Painted dot, not the "●" character
+                            // (0.5.1 — U+25CF is missing from
+                            // egui's default font and rendered
+                            // as a hollow square in the field).
+                            status_dot(ui, status_color(*status));
+                            if let Some(f) = file {
+                                if icon_text_button(
+                                    ui,
+                                    IconKind::Folder,
+                                    "",
+                                    egui::vec2(btn_w, 24.0),
+                                )
+                                .on_hover_text("Show in Explorer")
+                                .clicked()
+                                {
+                                    open_file = Some(f.clone());
+                                }
+                            }
+                        });
+                    });
+                paint_top_highlight(ui.painter(), shown.response.rect, RADIUS as f32);
             }
             if let Some(f) = open_file {
                 if let Some(parent) = f.parent() {
@@ -476,18 +672,30 @@ impl App {
             }
         }
 
-        // Footer (0.5.0): pinned to the bottom of the window
-        // with a hairline above it, so a short panel no longer
-        // reads as content floating over an empty black void.
-        // When the content is taller than the window the spare
-        // height is negative and the footer just follows it.
-        let spare = ui.available_height() - 44.0;
+        // Footer (0.5.0), a recessed bar since 0.6.0: pinned
+        // to the bottom of the window, painted full-bleed to
+        // the window edges (WELL fill, dark top line) so a
+        // short panel no longer reads as content floating over
+        // an empty black void. When the content is taller than
+        // the window the spare height is negative and the
+        // footer just follows it. The buttons keep their
+        // 0.5.1 fixed sizes inside the bar.
+        let spare = ui.available_height() - 46.0;
         if spare > 8.0 {
             ui.add_space(spare);
         } else {
             ui.add_space(8.0);
         }
-        ui.separator();
+        let bar_rect =
+            egui::Rect::from_min_max(egui::pos2(full.min.x, ui.cursor().top()), full.max);
+        // painter_at: the content child's own clip is inset,
+        // and the bar must reach the window edges.
+        let bar_painter = ui.painter_at(bar_rect);
+        bar_painter.rect_filled(bar_rect, 0.0, WELL);
+        bar_painter.line_segment(
+            [bar_rect.left_top(), bar_rect.right_top()],
+            egui::Stroke::new(1.0_f32, STROKE_DARK),
+        );
         ui.horizontal(|ui| {
             // Explicit sizes (0.5.1): Exit used to be placed by
             // a nested right-to-left layout and landed on the
@@ -542,11 +750,68 @@ impl App {
             return;
         };
         let is_playlist = popup.info.as_ref().is_some_and(|i| i.is_playlist());
-        // Playlist links get an extra choice row, so the popup
-        // grows a little once the probe says "this is a playlist".
-        // (0.4.0: the folder row and thumbnail account for the
-        // rest of the height over the original 268.)
-        let size = egui::vec2(400.0, if is_playlist { 346.0 } else { 312.0 });
+        // Popup size (0.6.0 hero layout): fixed 430 wide; the
+        // height is built up from the sections actually shown
+        // — hero, title zone, channel row, URL row, format
+        // chips (wrapped; the row count is estimated from the
+        // chip label widths at the chip font size), checkbox,
+        // save-to row, actions, and the optional rows
+        // (already-downloaded note, custom-format line,
+        // playlist chips, countdown). Playlist links grow the
+        // popup once the probe says "this is a playlist".
+        let size = {
+            let font = egui::FontId::new(12.5, egui::FontFamily::Proportional);
+            let mut chip_rows = 1usize;
+            let mut x = 0.0f32;
+            for p in Preset::ALL {
+                let w = ctx.fonts_mut(|f| {
+                    f.layout_no_wrap(preset_chip_label(p).to_string(), font.clone(), TEXT)
+                        .size()
+                        .x
+                }) + 28.0;
+                if x > 0.0 && x + w > 406.0 {
+                    chip_rows += 1;
+                    x = 0.0;
+                }
+                x += w + 8.0;
+            }
+            let chips_h = chip_rows as f32 * 28.0 + (chip_rows - 1) as f32 * 8.0;
+            let mut h = 12.0
+                + 184.0 // hero
+                + 10.0
+                + 46.0 // title zone (two lines)
+                + 6.0
+                + 24.0 // channel row
+                + 6.0
+                + 18.0 // URL row
+                + 6.0
+                + 8.0
+                + chips_h
+                + 8.0
+                + 22.0 // always-auto checkbox
+                + 24.0 // save-to row
+                + 6.0
+                + 36.0 // actions
+                + 12.0;
+            if popup.info.is_none() {
+                // No channel row; the fallback title block is
+                // shorter than the two-line title zone.
+                h -= 46.0 + 6.0 + 24.0 - 38.0;
+            }
+            if popup.already_downloaded {
+                h += 38.0;
+            }
+            if popup.preset == Preset::Custom {
+                h += 18.0;
+            }
+            if is_playlist {
+                h += 34.0;
+            }
+            if self.settings.popup_timeout_secs > 0 {
+                h += 24.0;
+            }
+            egui::vec2(430.0, h)
+        };
         let pos = match self.settings.popup_position {
             PopupPosition::BottomRight => bottom_right(ctx, size, 0.0),
             PopupPosition::TopRight => {
@@ -600,52 +865,251 @@ impl App {
                     if ui.ui_contains_pointer() {
                         interacted = true;
                     }
-                    // Header: thumbnail + title block.
+                    // Hero header (0.6.0): a full-width
+                    // thumbnail with rounded corners and a soft
+                    // shadow, a source chip, a duration chip and
+                    // a painted play badge — or, while info /
+                    // the thumbnail is still loading, the
+                    // mockup's deep-red gradient placeholder with
+                    // the same furniture. Below it: the two-line
+                    // title and the channel row.
                     let thumb = match (&popup.info, &self.popup_thumb) {
                         (Some(info), Some((url, handle))) if info.thumbnail.as_ref() == Some(url) => {
                             Some(handle.clone())
                         }
                         _ => None,
                     };
-                    let header = |ui: &mut egui::Ui| {
+                    let hero_w = ui.available_width();
+                    let (hero, _) =
+                        ui.allocate_exact_size(egui::vec2(hero_w, 184.0), egui::Sense::hover());
+                    paint_soft_glow(ui.painter(), hero, 12.0, egui::Color32::BLACK);
+                    match &thumb {
+                        Some(handle) => {
+                            // The texture was centre-cropped to
+                            // this aspect when it was decoded
+                            // (process_thumbs), so an exact fit
+                            // does not distort it.
+                            ui.put(
+                                hero,
+                                egui::Image::new((handle.id(), hero.size()))
+                                    .corner_radius(12)
+                                    .fit_to_exact_size(hero.size()),
+                            );
+                        }
+                        None => {
+                            paint_vertical_gradient(
+                                ui.painter(),
+                                hero,
+                                12.0,
+                                egui::Color32::from_rgb(0x34, 0x1D, 0x21),
+                                egui::Color32::from_rgb(0x12, 0x0E, 0x12),
+                            );
+                        }
+                    }
+                    {
+                        let painter = ui.painter();
+                        // Light top edge over the hero.
+                        painter.line_segment(
+                            [
+                                egui::pos2(hero.left() + 12.0, hero.top() + 0.5),
+                                egui::pos2(hero.right() - 12.0, hero.top() + 0.5),
+                            ],
+                            egui::Stroke::new(
+                                1.0_f32,
+                                with_alpha(egui::Color32::from_rgb(0x6E, 0x54, 0x56), 150),
+                            ),
+                        );
+                        // Source chip (top-left): dark pill,
+                        // accent dot, host.
+                        let host_text = registrable(&popup.host).to_string();
+                        let host_galley = painter.layout_no_wrap(
+                            host_text.clone(),
+                            egui::FontId::new(11.0, egui::FontFamily::Proportional),
+                            TEXT,
+                        );
+                        let chip_rect = egui::Rect::from_min_size(
+                            hero.min + egui::vec2(12.0, 12.0),
+                            egui::vec2(host_galley.size().x + 34.0, 24.0),
+                        );
+                        painter.rect_filled(
+                            chip_rect,
+                            7.0,
+                            egui::Color32::from_rgba_unmultiplied(10, 10, 11, 235),
+                        );
+                        painter.rect_stroke(
+                            chip_rect,
+                            egui::CornerRadius::same(7),
+                            egui::Stroke::new(
+                                1.0_f32,
+                                egui::Color32::from_rgb(0x46, 0x3C, 0x3C),
+                            ),
+                            egui::epaint::StrokeKind::Inside,
+                        );
+                        painter.circle_filled(
+                            chip_rect.min + egui::vec2(13.0, 12.0),
+                            3.5,
+                            ACCENT,
+                        );
+                        painter.galley(
+                            chip_rect.min + egui::vec2(22.0, 12.0) - host_galley.size() / 2.0,
+                            host_galley,
+                            TEXT,
+                        );
+                        // Duration chip (bottom-right).
+                        if let Some(d) = popup.info.as_ref().and_then(|i| i.duration) {
+                            let dur = yttraydl::ytdlp::format_duration(d);
+                            if !dur.is_empty() {
+                                let galley = painter.layout_no_wrap(
+                                    dur,
+                                    egui::FontId::new(11.0, egui::FontFamily::Proportional),
+                                    egui::Color32::WHITE,
+                                );
+                                let dur_rect = egui::Rect::from_min_size(
+                                    hero.max - egui::vec2(galley.size().x + 26.0, 34.0),
+                                    egui::vec2(galley.size().x + 16.0, 24.0),
+                                );
+                                painter.rect_filled(
+                                    dur_rect,
+                                    6.0,
+                                    egui::Color32::from_rgba_unmultiplied(8, 8, 9, 235),
+                                );
+                                painter.galley(
+                                    dur_rect.center() - galley.size() / 2.0,
+                                    galley,
+                                    egui::Color32::WHITE,
+                                );
+                            }
+                        }
+                        // Play badge: dark ringed circle with a
+                        // white triangle, soft shadow beneath.
+                        let c = hero.center();
+                        painter.circle_filled(
+                            c + egui::vec2(0.0, 3.0),
+                            27.0,
+                            egui::Color32::from_black_alpha(110),
+                        );
+                        painter.circle_filled(
+                            c,
+                            27.0,
+                            egui::Color32::from_rgba_unmultiplied(14, 14, 16, 235),
+                        );
+                        painter.circle_stroke(
+                            c,
+                            27.0,
+                            egui::Stroke::new(
+                                1.0_f32,
+                                egui::Color32::from_rgb(0x78, 0x78, 0x7A),
+                            ),
+                        );
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![
+                                egui::pos2(c.x - 6.0, c.y - 14.0),
+                                egui::pos2(c.x - 6.0, c.y + 14.0),
+                                egui::pos2(c.x + 16.0, c.y),
+                            ],
+                            egui::Color32::WHITE,
+                            egui::Stroke::NONE,
+                        ));
+                    }
+                    ui.add_space(10.0);
                     match &popup.info {
                         Some(info) => {
-                            ui.label(
-                                egui::RichText::new(truncate(&info.display_title(), 78))
-                                    .strong()
-                                    .size(16.0)
-                                    .color(TEXT),
-                            )
-                            .on_hover_text(info.display_title());
-                            let mut meta: Vec<String> = Vec::new();
-                            if let Some(u) = info.display_uploader() {
-                                meta.push(u);
-                            }
-                            if let Some(res) = info.resolution_text() {
-                                meta.push(res);
-                            }
-                            if let Some(bytes) = info.size_bytes() {
-                                meta.push(format!(
-                                    "{}{}",
-                                    if info.size_is_approx() { "~" } else { "" },
-                                    yttraydl::ytdlp::format_bytes(bytes)
-                                ));
-                            }
-                            if let Some(d) = info.duration {
-                                let s = yttraydl::ytdlp::format_duration(d);
-                                if !s.is_empty() {
-                                    meta.push(s);
+                            // Two-line title (0.6.0): wrapped,
+                            // clipped to a fixed two-line zone;
+                            // the full title is on hover.
+                            let (zone, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 46.0),
+                                egui::Sense::hover(),
+                            );
+                            let mut title_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(zone)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            title_ui.set_clip_rect(zone);
+                            title_ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(truncate(&info.display_title(), 78))
+                                            .strong()
+                                            .size(16.0)
+                                            .color(TEXT),
+                                    )
+                                    .wrap(),
+                                )
+                                .on_hover_text(info.display_title());
+                            // Channel row: gradient-initial
+                            // avatar + uploader, then the faint
+                            // meta line (resolution · size ·
+                            // duration · host · playlist note) —
+                            // the same facts the old header meta
+                            // line carried.
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                let mut meta: Vec<String> = Vec::new();
+                                if let Some(res) = info.resolution_text() {
+                                    meta.push(res);
                                 }
-                            }
-                            meta.push(popup.host.clone());
-                            if info.is_playlist() {
-                                meta.push(if popup.playlist_all {
-                                    "whole playlist".into()
-                                } else {
-                                    "playlist — first item only".into()
-                                });
-                            }
-                            ui.label(egui::RichText::new(meta.join(" · ")).color(TEXT_DIM).small());
+                                if let Some(bytes) = info.size_bytes() {
+                                    meta.push(format!(
+                                        "{}{}",
+                                        if info.size_is_approx() { "~" } else { "" },
+                                        yttraydl::ytdlp::format_bytes(bytes)
+                                    ));
+                                }
+                                if let Some(d) = info.duration {
+                                    let s = yttraydl::ytdlp::format_duration(d);
+                                    if !s.is_empty() {
+                                        meta.push(s);
+                                    }
+                                }
+                                meta.push(popup.host.clone());
+                                if info.is_playlist() {
+                                    meta.push(if popup.playlist_all {
+                                        "whole playlist".into()
+                                    } else {
+                                        "playlist — first item only".into()
+                                    });
+                                }
+                                let uploader = info.display_uploader();
+                                if let Some(u) = &uploader {
+                                    let (av, _) = ui.allocate_exact_size(
+                                        egui::vec2(24.0, 24.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().circle_filled(av.center(), 12.0, CHIP_GRAD_TOP);
+                                    let initials: String = u
+                                        .split_whitespace()
+                                        .take(2)
+                                        .filter_map(|w| w.chars().next())
+                                        .collect::<String>()
+                                        .to_uppercase();
+                                    if !initials.is_empty() {
+                                        ui.painter().text(
+                                            av.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            initials,
+                                            egui::FontId::new(9.5, egui::FontFamily::Proportional),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
+                                    ui.label(egui::RichText::new(u.clone()).color(TEXT).size(12.5))
+                                        .on_hover_text(u.clone());
+                                }
+                                if !meta.is_empty() {
+                                    // After a channel name the meta
+                                    // reads as a continuation ("· …");
+                                    // without one it stands alone.
+                                    let text = if uploader.is_some() {
+                                        format!("· {}", meta.join(" · "))
+                                    } else {
+                                        meta.join(" · ")
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(text).color(TEXT_FAINT).size(12.0),
+                                    );
+                                }
+                            });
                         }
                         None => {
                             ui.label(egui::RichText::new(popup.host.clone()).strong().color(TEXT));
@@ -662,19 +1126,7 @@ impl App {
                             );
                         }
                     }
-                    };
-                    if let Some(handle) = &thumb {
-                        ui.horizontal(|ui| {
-                            // Rounded thumbnail corners (0.5.0).
-                            ui.add(
-                                egui::Image::new((handle.id(), egui::vec2(96.0, 54.0)))
-                                    .corner_radius(RADIUS),
-                            );
-                            ui.vertical(|ui| header(ui));
-                        });
-                    } else {
-                        header(ui);
-                    }
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(truncate(&popup.url, 46))
@@ -697,21 +1149,30 @@ impl App {
                         );
                     }
 
+                    // Format chips (0.6.0): the preset control
+                    // restyled from a combo box to the mockup's
+                    // chip row — same Preset values, same
+                    // change-marks-interaction behaviour; every
+                    // preset is a chip, wrapping to more rows,
+                    // and the full preset label is on each
+                    // chip's hover.
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.add_sized(egui::vec2(56.0, 24.0), egui::Label::new("Quality:"));
+                    {
                         let before = popup.preset;
-                        egui::ComboBox::from_id_salt(("popup-preset", &popup.url))
-                            .selected_text(popup.preset.label())
-                            .show_ui(ui, |ui| {
-                                for p in Preset::ALL {
-                                    ui.selectable_value(&mut popup.preset, p, p.label());
+                        ui.horizontal_wrapped(|ui| {
+                            for p in Preset::ALL {
+                                if chip(ui, preset_chip_label(p), popup.preset == p)
+                                    .on_hover_text(p.label())
+                                    .clicked()
+                                {
+                                    popup.preset = p;
                                 }
-                            });
+                            }
+                        });
                         if popup.preset != before {
                             interacted = true;
                         }
-                    });
+                    }
                     if popup.preset == Preset::Custom {
                         ui.label(egui::RichText::new(format!("Custom format: {custom_format}")).color(TEXT_FAINT).small());
                     }
@@ -728,16 +1189,14 @@ impl App {
                     if is_playlist {
                         ui.horizontal(|ui| {
                             ui.label("Playlist:");
-                            if ui
-                                .selectable_label(!popup.playlist_all, "Just this video")
+                            if chip(ui, "Just this video", !popup.playlist_all)
                                 .on_hover_text("Download only the linked/first item")
                                 .clicked()
                             {
                                 popup.playlist_all = false;
                                 interacted = true;
                             }
-                            if ui
-                                .selectable_label(popup.playlist_all, "Whole playlist")
+                            if chip(ui, "Whole playlist", popup.playlist_all)
                                 .on_hover_text("Download every item in the playlist, one by one")
                                 .clicked()
                             {
@@ -792,24 +1251,26 @@ impl App {
 
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        // Mockup order (0.6.0): Download, Later,
+                        // Not now, Ignore.
                         let download_label = if popup.already_downloaded {
                             "⬇ Download anyway"
                         } else {
                             "⬇ Download"
                         };
                         if ui
-                            .add(primary_button(download_label).min_size(egui::vec2(118.0, 30.0)))
+                            .add(primary_button(download_label).min_size(egui::vec2(150.0, 36.0)))
                             .on_hover_text("Download with the selected quality into your download folder")
                             .clicked()
                         {
                             action = Action::Download;
                             interacted = true;
                         }
-                        if ui.add(egui::Button::new("Not now").min_size(egui::vec2(0.0, 30.0))).on_hover_text("Dismiss. Copy the link again later to be asked again after the dedupe window.").clicked() {
-                            action = Action::Dismiss;
-                        }
-                        if ui.add(egui::Button::new("Later").min_size(egui::vec2(0.0, 30.0))).on_hover_text("Park this link in the panel's Saved list and download it whenever you're ready").clicked() {
+                        if ui.add(egui::Button::new("Later").min_size(egui::vec2(84.0, 36.0))).on_hover_text("Park this link in the panel's Saved list and download it whenever you're ready").clicked() {
                             action = Action::SaveLater;
+                        }
+                        if ui.add(egui::Button::new("Not now").min_size(egui::vec2(84.0, 36.0))).on_hover_text("Dismiss. Copy the link again later to be asked again after the dedupe window.").clicked() {
+                            action = Action::Dismiss;
                         }
                         ui.menu_button("Ignore ▾", |ui| {
                             if ui.button("Never ask for this link").on_hover_text("Adds this exact URL to your ignore list").clicked() {
@@ -910,6 +1371,31 @@ impl App {
                 );
             }
         }
+    }
+}
+
+/// Short chip labels for the popup's format chips (0.6.0):
+/// the full preset labels ("Up to 2160p (4K)", "Audio only —
+/// original format") are combo-box text; chips need the
+/// mockup's compact forms. The full label rides on each
+/// chip's tooltip, and the preset VALUES are untouched.
+pub fn preset_chip_label(p: Preset) -> &'static str {
+    match p {
+        Preset::Best => "Best",
+        Preset::P2160 => "2160p 4K",
+        Preset::P1440 => "1440p",
+        Preset::P1080 => "1080p",
+        Preset::P720 => "720p",
+        Preset::P480 => "480p",
+        Preset::P360 => "360p",
+        Preset::AudioMp3 => "MP3",
+        Preset::AudioM4a => "M4A",
+        Preset::AudioOpus => "Opus",
+        Preset::AudioFlac => "FLAC",
+        Preset::AudioWav => "WAV",
+        Preset::AudioOriginal => "Original audio",
+        Preset::SubtitlesOnly => "Subtitles only",
+        Preset::Custom => "Custom…",
     }
 }
 
@@ -1017,31 +1503,13 @@ impl App {
                         ui.label(
                             egui::RichText::new("Settings")
                                 .strong()
-                                .size(17.0)
+                                .size(20.0)
                                 .color(TEXT),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("✕").on_hover_text("Close settings").clicked() {
                                 close = true;
                             }
-                        });
-                    });
-                    // Tab bar as pills (0.5.0): the active tab is a filled,
-                    // selected button; the rest are plain buttons.
-                    ui.horizontal(|ui| {
-                        for (i, name) in ["General", "Downloads", "Domains & rules", "yt-dlp"]
-                            .iter()
-                            .enumerate()
-                        {
-                            if ui
-                                .add(egui::Button::new(*name).selected(tab == i))
-                                .on_hover_text("Switch settings section")
-                                .clicked()
-                            {
-                                tab = i;
-                            }
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new("Settings save automatically")
                                     .color(TEXT_FAINT)
@@ -1049,7 +1517,13 @@ impl App {
                             );
                         });
                     });
-                    ui.separator();
+                    ui.add_space(6.0);
+                    // Segmented tab bar (0.6.0): a recessed
+                    // track; the selected segment is filled
+                    // with the red gradient. (0.5.0 used pill
+                    // buttons; the save note moved up beside
+                    // the title, as in the mockup.)
+                    settings_tab_bar(ui, &mut tab);
                     egui::ScrollArea::vertical().show(ui, |ui| match tab {
                         0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
                         1 => settings_downloads(ui, &mut settings, &mut outcome),
@@ -1225,6 +1699,100 @@ fn slider_label(ui: &mut egui::Ui, text: &str) {
     ui.add_sized(egui::vec2(190.0, 24.0), egui::Label::new(text));
 }
 
+/// The value chip that replaces a slider's readout (0.6.0):
+/// a small raised pill (CARD2 fill, hairline stroke) holding
+/// the formatted value — "30 s", "300 s", "0 KB/s".
+fn value_chip(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::NONE
+        .fill(CARD2)
+        .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+        .corner_radius(7)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).color(TEXT).size(12.5));
+        });
+}
+
+/// Width a value chip will occupy for this text (measured at
+/// the chip's font size, plus its padding and stroke) — the
+/// slider row budgets the slider from what remains.
+fn value_chip_width(ui: &egui::Ui, text: &str) -> f32 {
+    ui.fonts_mut(|f| {
+        f.layout_no_wrap(
+            text.to_string(),
+            egui::FontId::new(12.5, egui::FontFamily::Proportional),
+            TEXT,
+        )
+        .size()
+        .x
+    }) + 22.0
+}
+
+/// A slider with the mockup's finish (0.6.0): thin track and
+/// accent trail from the theme, egui's editable value box
+/// replaced by a value chip, and the thumb painted white
+/// with a soft shadow. egui 0.33 has no thumb-colour API —
+/// its handle uses the widget visuals — so the white thumb
+/// is painted over egui's own at exactly the position the
+/// vendored slider code computes (handle radius =
+/// rect height / 2.5; travel range = the rect shrunk by that
+/// radius on both ends). Dragging, keyboard control and the
+/// changed() signal are egui's own, unchanged.
+fn slider_with_chip<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    chip_text: &str,
+    slider_width: f32,
+    tip: &str,
+) -> egui::Response {
+    let (min, max) = (range.start().to_f64(), range.end().to_f64());
+    ui.style_mut().spacing.slider_width = slider_width.max(40.0);
+    let resp = ui
+        .add(egui::Slider::new(value, range).show_value(false))
+        .on_hover_text(tip);
+    let frac = if max > min {
+        ((value.to_f64() - min) / (max - min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let rect = resp.rect;
+    let r = rect.height() / 2.5;
+    let cx = rect.left() + r + frac as f32 * (rect.width() - 2.0 * r);
+    let center = egui::pos2(cx, rect.center().y);
+    let painter = ui.painter();
+    painter.circle_filled(
+        center + egui::vec2(0.0, 1.0),
+        r + 1.0,
+        egui::Color32::from_black_alpha(70),
+    );
+    painter.circle_filled(center, r, egui::Color32::WHITE);
+    value_chip(ui, chip_text);
+    resp
+}
+
+/// A full slider row (0.6.0): fixed 190px label column (the
+/// 0.5.0 alignment), the slider, and its value chip. Returns
+/// the slider's response.
+fn slider_row<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    chip_text: &str,
+    tip: &str,
+) -> egui::Response {
+    let mut resp: Option<egui::Response> = None;
+    ui.horizontal(|ui| {
+        slider_label(ui, label);
+        let slider_w = ui.available_width()
+            - value_chip_width(ui, chip_text)
+            - 2.0 * ui.spacing().item_spacing.x;
+        resp = Some(slider_with_chip(ui, value, range, chip_text, slider_w, tip));
+    });
+    resp.expect("slider row always produces a response")
+}
+
 fn settings_general(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -1232,33 +1800,41 @@ fn settings_general(
     autostart_now: bool,
 ) {
     section_card(ui, "When a supported link is copied", |ui| {
-        if ui.checkbox(&mut s.monitoring_enabled, "Monitor the clipboard").on_hover_text("When off, ytTrayDL never reacts to copied links. You can still download from the panel.").changed() {
-        out.changed = true;
-    }
+        // Switch (0.6.0) instead of a checkbox, per the mockup.
         ui.horizontal(|ui| {
-            ui.label("Default action:");
-            if ui
-                .radio_value(
-                    &mut s.default_action,
-                    DefaultAction::Prompt,
-                    "Ask me (popup)",
-                )
-                .on_hover_text("Show the small download popup and let you pick quality each time")
+            if switch(ui, &mut s.monitoring_enabled)
+                .on_hover_text("When off, ytTrayDL never reacts to copied links. You can still download from the panel.")
                 .changed()
             {
                 out.changed = true;
             }
-            if ui
-                .radio_value(
-                    &mut s.default_action,
-                    DefaultAction::AutoDownload,
-                    "Auto-download",
-                )
-                .on_hover_text(
+            ui.label("Monitor the clipboard")
+                .on_hover_text("When off, ytTrayDL never reacts to copied links. You can still download from the panel.");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Default action:");
+            // Segmented control (0.6.0) instead of the radio
+            // pair, per the mockup; both options keep their
+            // radio tooltips.
+            let current = match s.default_action {
+                DefaultAction::Prompt => 0,
+                DefaultAction::AutoDownload => 1,
+            };
+            if let Some(picked) = segmented_choice(
+                ui,
+                &["Ask me (popup)", "Auto-download"],
+                &[
+                    "Show the small download popup and let you pick quality each time",
                     "Download immediately with your default quality — no popup, no interruption",
-                )
-                .changed()
-            {
+                ],
+                current,
+                300.0,
+            ) {
+                s.default_action = if picked == 1 {
+                    DefaultAction::AutoDownload
+                } else {
+                    DefaultAction::Prompt
+                };
                 out.changed = true;
             }
         });
@@ -1288,25 +1864,39 @@ fn settings_general(
     });
 
     section_card(ui, "Tray & startup", |ui| {
-        let mut visible = s.tray_icon_visible;
-        if ui.checkbox(&mut visible, "Show tray icon").on_hover_text("Uncheck to run invisibly. You can always get the icon back by launching ytTrayDL again or pressing Ctrl+Alt+G.").changed() {
-        if !visible {
-            out.confirm_hide_icon = true; // hiding needs the recovery explanation first
-        } else {
-            s.tray_icon_visible = true;
-            out.changed = true;
-        }
-    }
-        let mut autostart = autostart_now;
-        if ui
-            .checkbox(&mut autostart, "Start with Windows")
-            .on_hover_text(
+        // Switches (0.6.0) instead of checkboxes, per the
+        // mockup; the hide-icon switch keeps the checkbox's
+        // exact semantics (off asks for confirmation first and
+        // writes nothing until confirmed).
+        ui.horizontal(|ui| {
+            let mut visible = s.tray_icon_visible;
+            if switch(ui, &mut visible)
+                .on_hover_text("Uncheck to run invisibly. You can always get the icon back by launching ytTrayDL again or pressing Ctrl+Alt+G.")
+                .changed()
+            {
+                if !visible {
+                    out.confirm_hide_icon = true; // hiding needs the recovery explanation first
+                } else {
+                    s.tray_icon_visible = true;
+                    out.changed = true;
+                }
+            }
+            ui.label("Show tray icon")
+                .on_hover_text("Uncheck to run invisibly. You can always get the icon back by launching ytTrayDL again or pressing Ctrl+Alt+G.");
+            ui.add_space(24.0);
+            let mut autostart = autostart_now;
+            if switch(ui, &mut autostart)
+                .on_hover_text(
+                    "Adds ytTrayDL to your per-user startup (HKCU Run key). No admin rights needed.",
+                )
+                .changed()
+            {
+                out.set_autostart = Some(autostart);
+            }
+            ui.label("Start with Windows").on_hover_text(
                 "Adds ytTrayDL to your per-user startup (HKCU Run key). No admin rights needed.",
-            )
-            .changed()
-        {
-            out.set_autostart = Some(autostart);
-        }
+            );
+        });
         ui.horizontal(|ui| {
         ui.label("When I close the main window:")
             .on_hover_text("What the window's X button does. 'Ask every time' shows a choice dialog with a remember option.");
@@ -1368,26 +1958,44 @@ fn settings_general(
                 out.changed = true;
             }
         });
-        ui.horizontal(|ui| {
-        slider_label(ui, "Popup auto-close:");
-        let mut t = s.popup_timeout_secs;
-        if ui.add(egui::Slider::new(&mut t, 0..=300).suffix(" s")).on_hover_text("The popup closes without downloading after this long. 0 = stay until you decide. Hovering restarts the timer.").changed() {
-            s.popup_timeout_secs = t;
-            out.changed = true;
+        {
+            let mut t = s.popup_timeout_secs;
+            let chip_text = format!("{t} s");
+            if slider_row(
+                ui,
+                "Popup auto-close:",
+                &mut t,
+                0..=300,
+                &chip_text,
+                "The popup closes without downloading after this long. 0 = stay until you decide. Hovering restarts the timer.",
+            )
+            .changed()
+            {
+                s.popup_timeout_secs = t;
+                out.changed = true;
+            }
         }
-    });
-        ui.horizontal(|ui| {
-        slider_label(ui, "Ignore re-copies for:");
-        let mut d = s.dedupe_window_secs;
-        if ui.add(egui::Slider::new(&mut d, 0..=3600).suffix(" s")).on_hover_text("Copying the same link again within this window won't re-trigger ytTrayDL. 0 = always react.").changed() {
-            s.dedupe_window_secs = d;
-            out.changed = true;
+        {
+            let mut d = s.dedupe_window_secs;
+            let chip_text = format!("{d} s");
+            if slider_row(
+                ui,
+                "Ignore re-copies for:",
+                &mut d,
+                0..=3600,
+                &chip_text,
+                "Copying the same link again within this window won't re-trigger ytTrayDL. 0 = always react.",
+            )
+            .changed()
+            {
+                s.dedupe_window_secs = d;
+                out.changed = true;
+            }
         }
-    });
     });
 
-    card_frame().show(ui, |ui| {
-    egui::CollapsingHeader::new("Notifications (small toasts, bottom-right)")
+    premium_card(ui, |ui| {
+        egui::CollapsingHeader::new("Notifications (small toasts, bottom-right)")
         .default_open(false)
         .show(ui, |ui| {
             for (flag, label, tip) in [
@@ -1564,65 +2172,77 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
         if ui.checkbox(&mut s.skip_already_downloaded, "Skip videos already downloaded before").on_hover_text("Uses a yt-dlp download archive stored with your ytTrayDL settings, so re-copying an old link doesn't fetch it twice").changed() {
         out.changed = true;
     }
-        ui.horizontal(|ui| {
-            slider_label(ui, "Simultaneous downloads:");
+        {
             let mut n = s.max_concurrent_downloads;
-            if ui
-            .add(egui::Slider::new(&mut n, 1..=4))
-            .on_hover_text(
+            let chip_text = format!("{n}");
+            if slider_row(
+                ui,
+                "Simultaneous downloads:",
+                &mut n,
+                1..=4,
+                &chip_text,
                 "More parallelism isn't always faster — sites may throttle. 2 is a good default.",
             )
             .changed()
-        {
-            s.max_concurrent_downloads = n;
-            out.changed = true;
+            {
+                s.max_concurrent_downloads = n;
+                out.changed = true;
+            }
         }
-        });
-        ui.horizontal(|ui| {
-            slider_label(ui, "Speed limit:");
+        {
             let mut r = s.rate_limit_kbps;
-            if ui
-                .add(egui::Slider::new(&mut r, 0..=102_400).suffix(" KB/s"))
-                .on_hover_text(
-                    "Cap the download speed (passed to yt-dlp as --limit-rate). 0 = no limit.",
-                )
-                .changed()
+            let chip_text = format!("{r} KB/s");
+            if slider_row(
+                ui,
+                "Speed limit:",
+                &mut r,
+                0..=102_400,
+                &chip_text,
+                "Cap the download speed (passed to yt-dlp as --limit-rate). 0 = no limit.",
+            )
+            .changed()
             {
                 s.rate_limit_kbps = r;
                 out.changed = true;
             }
-        });
-        ui.horizontal(|ui| {
-        slider_label(ui, "Auto-retry failures:");
-        let mut a = s.auto_retry_attempts;
-        if ui
-            .add(egui::Slider::new(&mut a, 0..=5).suffix(" ×"))
-            .on_hover_text(
+        }
+        {
+            let mut a = s.auto_retry_attempts;
+            let chip_text = format!("{a} ×");
+            if slider_row(
+                ui,
+                "Auto-retry failures:",
+                &mut a,
+                0..=5,
+                &chip_text,
                 "Retry a failed download this many times with its original quality before giving up. 0 = off. A manual cancel is never retried.",
             )
             .changed()
-        {
-            s.auto_retry_attempts = a;
-            out.changed = true;
+            {
+                s.auto_retry_attempts = a;
+                out.changed = true;
+            }
         }
-    });
     });
 
     section_card(ui, "Disk space & automation", |ui| {
-        ui.horizontal(|ui| {
-        slider_label(ui, "Pause new downloads below:");
-        let mut mb = s.low_disk_threshold_mb;
-        if ui
-            .add(egui::Slider::new(&mut mb, 0..=10_240).suffix(" MB free"))
-            .on_hover_text(
+        {
+            let mut mb = s.low_disk_threshold_mb;
+            let chip_text = format!("{mb} MB free");
+            if slider_row(
+                ui,
+                "Pause new downloads below:",
+                &mut mb,
+                0..=10_240,
+                &chip_text,
                 "While the download drive has less free space than this, queued downloads wait (running ones finish). 0 = guard off.",
             )
             .changed()
-        {
-            s.low_disk_threshold_mb = mb;
-            out.changed = true;
+            {
+                s.low_disk_threshold_mb = mb;
+                out.changed = true;
+            }
         }
-    });
         ui.horizontal(|ui| {
         ui.label("After each download, run:");
         if ui
@@ -1635,8 +2255,8 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
     });
     });
 
-    card_frame().show(ui, |ui| {
-    egui::CollapsingHeader::new("Advanced")
+    premium_card(ui, |ui| {
+        egui::CollapsingHeader::new("Advanced")
         .default_open(false)
         .show(ui, |ui| {
     ui.horizontal(|ui| {
@@ -1707,27 +2327,27 @@ fn domain_list_editor(
     input: &mut String,
     out: &mut SettingsOutcome,
 ) {
-    card_frame().show(ui, |ui| {
-    ui.label(section_heading(title));
-    ui.label(egui::RichText::new(explanation).color(TEXT_DIM).small());
-    let mut remove: Option<String> = None;
-    for d in list.iter() {
+    premium_card(ui, |ui| {
+        ui.label(section_heading(title));
+        ui.label(egui::RichText::new(explanation).color(TEXT_DIM).small());
+        let mut remove: Option<String> = None;
+        for d in list.iter() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(d.clone()).monospace());
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Remove this rule")
+                    .clicked()
+                {
+                    remove = Some(d.clone());
+                }
+            });
+        }
+        if let Some(d) = remove {
+            list.retain(|x| x != &d);
+            out.changed = true;
+        }
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(d.clone()).monospace());
-            if ui
-                .small_button("✕")
-                .on_hover_text("Remove this rule")
-                .clicked()
-            {
-                remove = Some(d.clone());
-            }
-        });
-    }
-    if let Some(d) = remove {
-        list.retain(|x| x != &d);
-        out.changed = true;
-    }
-    ui.horizontal(|ui| {
         let resp = ui
             .add(egui::TextEdit::singleline(input).hint_text("example.com").desired_width(220.0))
             .on_hover_text("Type a domain — subdomains are included automatically (youtube.com also covers music.youtube.com)");
@@ -1909,10 +2529,20 @@ fn settings_domains(
         ui.horizontal(|ui| {
             ui.add_sized(egui::vec2(110.0, 24.0), egui::Label::new("Check every:"));
             let mut mins = s.watch_interval_mins;
-            if ui
-                .add(egui::Slider::new(&mut mins, 0..=720).suffix(" min"))
-                .on_hover_text("How often watched channels are polled. 0 = watcher off.")
-                .changed()
+            let chip_text = format!("{mins} min");
+            let slider_w = ui.available_width()
+                - value_chip_width(ui, &chip_text)
+                - 86.0
+                - 2.0 * ui.spacing().item_spacing.x;
+            if slider_with_chip(
+                ui,
+                &mut mins,
+                0..=720,
+                &chip_text,
+                slider_w,
+                "How often watched channels are polled. 0 = watcher off.",
+            )
+            .changed()
             {
                 s.watch_interval_mins = mins;
                 out.changed = true;
@@ -2177,29 +2807,31 @@ fn settings_ytdlp(
     });
     });
 
-    card_frame().show(ui, |ui| {
-    ui.label(egui::RichText::new("Danger zone").color(ACCENT).strong().size(15.0));
-    if *reset_armed {
-        ui.label("Reset every setting to defaults? Domain rules, folder and quality choices will be lost. Downloaded files are not touched.");
-        ui.horizontal(|ui| {
-            if ui
-                .add(primary_button("Yes, reset all settings"))
-                .clicked()
-            {
-                out.reset_all = true;
-                *reset_armed = false;
-            }
-            if ui.button("Cancel").clicked() {
-                *reset_armed = false;
-            }
-        });
-    } else if ui
-        .button("Reset all settings…")
-        .on_hover_text("Restore factory defaults (asks for confirmation)")
-        .clicked()
-    {
-        *reset_armed = true;
-    }
+    premium_card(ui, |ui| {
+        ui.label(
+            egui::RichText::new("Danger zone")
+                .color(ACCENT)
+                .strong()
+                .size(15.0),
+        );
+        if *reset_armed {
+            ui.label("Reset every setting to defaults? Domain rules, folder and quality choices will be lost. Downloaded files are not touched.");
+            ui.horizontal(|ui| {
+                if ui.add(primary_button("Yes, reset all settings")).clicked() {
+                    out.reset_all = true;
+                    *reset_armed = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    *reset_armed = false;
+                }
+            });
+        } else if ui
+            .button("Reset all settings…")
+            .on_hover_text("Restore factory defaults (asks for confirmation)")
+            .clicked()
+        {
+            *reset_armed = true;
+        }
     });
 }
 
@@ -2331,7 +2963,7 @@ impl App {
                         ui.separator();
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        card_frame().show(ui, |ui| {
+                        premium_card(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(section_heading("Active"));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2405,7 +3037,7 @@ impl App {
                         });
 
                         if !paused.is_empty() {
-                            card_frame().show(ui, |ui| {
+                            premium_card(ui, |ui| {
                             ui.label(section_heading("Paused"));
                             for (id, title, url, pct) in &paused {
                                 ui.horizontal(|ui| {
@@ -2431,7 +3063,7 @@ impl App {
                         }
 
                         if !finished.is_empty() {
-                            card_frame().show(ui, |ui| {
+                            premium_card(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(section_heading("Finished this session"));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2447,7 +3079,7 @@ impl App {
                             });
                         }
 
-                        card_frame().show(ui, |ui| {
+                        premium_card(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(section_heading("History"));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2573,10 +3205,16 @@ impl App {
                                 ToastKind::Error => ACCENT,
                                 ToastKind::Info => TEXT_DIM,
                             };
-                            egui::Frame::NONE
+                            let toast_shown = egui::Frame::NONE
                                 .fill(CARD)
                                 .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
                                 .corner_radius(RADIUS)
+                                .shadow(egui::epaint::Shadow {
+                                    offset: [0, 4],
+                                    blur: 12,
+                                    spread: 0,
+                                    color: egui::Color32::from_black_alpha(80),
+                                })
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .outer_margin(egui::Margin {
                                     left: 0,
@@ -2608,6 +3246,12 @@ impl App {
                                         );
                                     });
                                 });
+                            // Card top highlight (0.6.0).
+                            paint_top_highlight(
+                                ui.painter(),
+                                toast_shown.response.rect,
+                                RADIUS as f32,
+                            );
                         }
                     });
             },
@@ -2642,7 +3286,7 @@ impl App {
                     ui.heading(egui::RichText::new("ytTrayDL").color(TEXT));
                     ui.label(egui::RichText::new(format!("Version {} · MIT License · by Sean Shaffer", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
                     ui.add_space(8.0);
-                    card_frame().show(ui, |ui| {
+                    premium_card(ui, |ui| {
                         ui.label("ytTrayDL watches your clipboard for links yt-dlp can download. Copy a link and it either asks (with a small popup) or quietly downloads with your defaults — your choice, per domain if you like.");
                         ui.add_space(4.0);
                         ui.label("All downloading is done by yt-dlp; ytTrayDL is a friendly shell around it. No telemetry, no accounts, settings stay on this PC.");
@@ -2689,7 +3333,7 @@ impl App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.label(egui::RichText::new("ytTrayDL will keep running and monitoring — there just won't be an icon.").strong().size(16.0).color(TEXT));
                     ui.add_space(8.0);
-                    card_frame().show(ui, |ui| {
+                    premium_card(ui, |ui| {
                         ui.label(egui::RichText::new("To get the icon and settings back, any of these works:").strong());
                         ui.add_space(4.0);
                         ui.label("• Launch ytTrayDL again (Start menu / the .exe) — the running copy restores its icon and opens Settings.");

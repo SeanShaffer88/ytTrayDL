@@ -16,7 +16,7 @@ downloads silently with your defaults — your rules per site, no
 duplicates, nothing leaves your PC. It's for anyone who downloads
 videos regularly and wants it to feel built into Windows rather
 than like a chore in a terminal. Free and open source (MIT),
-for Windows 10/11, in 64-bit and 32-bit builds, as an installer
+for Windows 10/11, in a 64-bit build, as an installer
 or a portable zip.
 
 ## How it works
@@ -142,17 +142,16 @@ recoverable:
 
 Two ways to get it from the
 [Releases page](https://github.com/SeanShaffer88/ytTrayDL/releases)
-— every download comes in 64-bit (`-x64`) and 32-bit (`-x86`)
-builds; the 32-bit build also runs on 64-bit Windows:
+— downloads are 64-bit (`-x64`) builds:
 
-- **Installer** — `ytTrayDL-Setup-vX.Y.Z-windows-x64.exe` (or
-  `-windows-x86.exe`): per-user install (no admin) to
+- **Installer** — `ytTrayDL-Setup-vX.Y.Z-windows-x64.exe`:
+  per-user install (no admin) to
   `%LOCALAPPDATA%\Programs\ytTrayDL`, with a Start-menu entry,
   optional desktop shortcut and start-with-Windows, and a
   standard uninstaller. Your settings/history in
   `%APPDATA%\ytTrayDL` are kept on uninstall.
-- **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip` (or
-  `-windows-x86.zip`): unzip anywhere and run `yttraydl.exe`.
+- **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip`:
+  unzip anywhere and run `yttraydl.exe`.
   Nothing is installed.
 
 Then:
@@ -230,7 +229,7 @@ fully unit-tested; the tray/Win32 parts compile for Windows.
 ```powershell
 cargo build --release          # produces target\release\yttraydl.exe
 cargo test                     # full test suite (unit + end-to-end)
-cargo clippy --all-targets     # lint gate (CI also lints/checks both Windows targets, x86_64 and i686)
+cargo clippy --all-targets     # lint gate (CI also lints/checks the x86_64 Windows target)
 ```
 
 Windows 10 and 11 are the target platforms. A release is a single
@@ -239,9 +238,9 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.4.1. The core library is covered by unit tests and the whole crate
+v0.5.0. The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
-and linted for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
+and linted for `x86_64-pc-windows-msvc`
 in CI. Runtime behaviour on a real Windows machine is tracked in
 [docs/DESIGN.md](docs/DESIGN.md#verification-matrix) with Verified /
 Partially verified / Unverified labels — nothing is claimed as
@@ -269,8 +268,8 @@ full on-machine pass.
 
 Issues and pull requests are welcome. If you're changing code,
 please run the project gate first (see [AGENTS.md](AGENTS.md)):
-`cargo fmt`, clippy on the host and both Windows targets
-(x86_64 and i686), and the full test suite — CI runs the same
+`cargo fmt`, clippy on the host and the x86_64 Windows target,
+and the full test suite — CI runs the same
 checks. Screenshots in this README are real captures from a
 Windows machine; please don't add placeholder images.
 

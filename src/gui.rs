@@ -33,8 +33,92 @@ pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xF5, 0xF5, 0xF5);
 pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xA8, 0xA8, 0xA8);
 pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6E, 0x6E);
 pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0x4C, 0xC3, 0x6B);
+/// Card fill: panels-within-the-panel (0.5.0 polish pass).
+pub const CARD: egui::Color32 = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+/// Control fill at rest / on hover (0.5.0).
+pub const CONTROL_BG: egui::Color32 = egui::Color32::from_rgb(0x1C, 0x1C, 0x1C);
+pub const CONTROL_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(0x28, 0x28, 0x28);
+/// Slightly stronger outline than HAIRLINE, for interactive
+/// controls on hover so they read as touchable (0.5.0).
+pub const STROKE_SOFT: egui::Color32 = egui::Color32::from_rgb(0x3A, 0x3A, 0x3A);
+/// Tinted fill for the panel failure banner (0.5.0; was an
+/// inline colour in the panel before).
+pub const DANGER_BG: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x0E, 0x0E);
+/// Corner-radius tokens (0.5.0): cards/windows/widgets share
+/// the large radius; egui applies ONE radius per widget state,
+/// so small controls inherit it too (noted in DESIGN.md).
+pub const RADIUS: u8 = 8;
 /// Width of the slide-out settings drawer (0.2.1).
 pub const SETTINGS_DRAWER_W: f32 = 530.0;
+
+/// A card frame (0.5.0): CARD fill, hairline outline, rounded
+/// corners, 12px inner padding, 8px of space below so stacked
+/// cards separate on the 4/8 grid.
+pub fn card_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .fill(CARD)
+        .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+        .corner_radius(RADIUS)
+        .inner_margin(egui::Margin::same(12))
+        .outer_margin(egui::Margin {
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 8,
+        })
+}
+
+/// Small strong section heading used at the top of a card and
+/// for panel sections (0.5.0).
+pub fn section_heading(text: &str) -> egui::RichText {
+    egui::RichText::new(text).strong().color(TEXT).size(15.0)
+}
+
+/// A card with a section heading on top (0.5.0). Returns
+/// whatever the body closure returns.
+pub fn section_card<R>(
+    ui: &mut egui::Ui,
+    heading: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    card_frame()
+        .show(ui, |ui| {
+            ui.label(section_heading(heading));
+            ui.add_space(6.0);
+            add_contents(ui)
+        })
+        .inner
+}
+
+/// The primary action button (0.5.0): bright accent-red fill
+/// with strong white text — the one button in a view that
+/// should draw the eye (Download, Hide the icon…).
+pub fn primary_button(text: &str) -> egui::Button<'_> {
+    egui::Button::new(egui::RichText::new(text).color(TEXT).strong())
+        .fill(ACCENT)
+        .stroke(egui::Stroke::new(1.0_f32, ACCENT))
+}
+
+/// A rounded status pill (0.5.0): coloured dot + strong main
+/// text + dim suffix, inside a card-fill pill outline. Used for
+/// the panel's monitoring status line, replacing the plain
+/// outlined box the status used to sit in.
+pub fn status_pill(ui: &mut egui::Ui, dot: egui::Color32, main: &str, suffix: &str, tip: &str) {
+    egui::Frame::NONE
+        .fill(CARD)
+        .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+        .corner_radius(14)
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("●").color(dot));
+                ui.label(egui::RichText::new(main).strong().color(TEXT));
+                ui.label(egui::RichText::new("·").color(TEXT_FAINT));
+                ui.label(egui::RichText::new(suffix).color(TEXT_DIM))
+                    .on_hover_text(tip);
+            });
+        });
+}
 
 /// Runtime-generated window/tray icon: white down-arrow on a black
 /// rounded square with a red outline (matches assets/icon.ico).
@@ -116,19 +200,116 @@ pub fn pick_folder(initial: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
+/// The central theme (0.5.0 polish pass). Before 0.5.0 this
+/// only swapped colours onto egui's defaults — square corners,
+/// default spacing, default type sizes — which is why the app
+/// read as "default egui". Now it sets the full style: a type
+/// scale, a 4/8 spacing grid, corner radii, widget visuals for
+/// every interaction state, window shadow/stroke, and slider /
+/// scrollbar / progress styling (those widgets all read their
+/// look from these visuals and spacing values).
 pub fn apply_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+
+    // Type scale: Heading 20 / Body 14 / Button 14 / Small 12,
+    // keeping each style's existing font family.
+    let resized = |styles: &std::collections::BTreeMap<egui::TextStyle, egui::FontId>,
+                   key: &egui::TextStyle,
+                   size: f32|
+     -> egui::FontId {
+        styles
+            .get(key)
+            .map(|f| egui::FontId::new(size, f.family.clone()))
+            .unwrap_or_else(|| egui::FontId::new(size, egui::FontFamily::Proportional))
+    };
+    let old = &style.text_styles;
+    style.text_styles = [
+        (
+            egui::TextStyle::Heading,
+            resized(old, &egui::TextStyle::Heading, 20.0),
+        ),
+        (
+            egui::TextStyle::Body,
+            resized(old, &egui::TextStyle::Body, 14.0),
+        ),
+        (
+            egui::TextStyle::Button,
+            resized(old, &egui::TextStyle::Button, 14.0),
+        ),
+        (
+            egui::TextStyle::Small,
+            resized(old, &egui::TextStyle::Small, 12.0),
+        ),
+        (
+            egui::TextStyle::Monospace,
+            resized(old, &egui::TextStyle::Monospace, 13.0),
+        ),
+    ]
+    .into();
+
+    // Spacing on a 4/8 grid.
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.window_margin = egui::Margin::same(12);
+    style.spacing.menu_margin = egui::Margin::same(8);
+    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.interact_size = egui::vec2(40.0, 24.0);
+    style.spacing.indent = 18.0;
+    style.spacing.icon_width = 18.0;
+    style.spacing.icon_spacing = 6.0;
+    style.spacing.slider_width = 150.0;
+    style.spacing.combo_width = 150.0;
+    style.spacing.text_edit_width = 220.0;
+    style.spacing.tooltip_width = 320.0;
+    style.spacing.scroll.bar_width = 10.0;
+    style.spacing.scroll.handle_min_length = 24.0;
+
+    // Widget + window visuals.
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = PANEL_BG;
     visuals.window_fill = PANEL_BG;
     visuals.extreme_bg_color = egui::Color32::BLACK;
-    visuals.faint_bg_color = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, HAIRLINE);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(0x1C, 0x1C, 0x1C);
-    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(0x28, 0x28, 0x28);
-    visuals.widgets.active.bg_fill = ACCENT_DARK;
-    visuals.selection.bg_fill = ACCENT_DARK;
+    visuals.faint_bg_color = CARD;
+    visuals.code_bg_color = CARD;
     visuals.hyperlink_color = ACCENT;
-    ctx.set_visuals(visuals);
+    visuals.warn_fg_color = egui::Color32::from_rgb(0xE5, 0xA0, 0x3C);
+    visuals.error_fg_color = ACCENT;
+    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS);
+    visuals.window_stroke = egui::Stroke::new(1.0_f32, HAIRLINE);
+    visuals.window_shadow = egui::epaint::Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(96),
+    };
+    visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 16,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(80),
+    };
+    // Sliders show their filled portion in the selection
+    // colour (the deep red below).
+    visuals.slider_trailing_fill = true;
+
+    let wv = |bg: egui::Color32, stroke: egui::Color32| egui::style::WidgetVisuals {
+        bg_fill: bg,
+        weak_bg_fill: bg,
+        bg_stroke: egui::Stroke::new(1.0_f32, stroke),
+        corner_radius: egui::CornerRadius::same(RADIUS),
+        fg_stroke: egui::Stroke::new(1.0_f32, TEXT),
+        expansion: 0.0,
+    };
+    visuals.widgets.noninteractive = wv(PANEL_BG, HAIRLINE);
+    visuals.widgets.inactive = wv(CONTROL_BG, HAIRLINE);
+    visuals.widgets.hovered = wv(CONTROL_BG_HOVER, STROKE_SOFT);
+    visuals.widgets.active = wv(ACCENT_DARK, ACCENT_DARK);
+    visuals.widgets.open = wv(CONTROL_BG_HOVER, STROKE_SOFT);
+    visuals.selection.bg_fill = ACCENT_DARK;
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, TEXT);
+
+    style.visuals = visuals;
+    ctx.set_style(style);
 }
 
 #[derive(Clone)]
@@ -2064,7 +2245,7 @@ impl eframe::App for App {
                         .frame(
                             egui::Frame::NONE
                                 .fill(egui::Color32::from_rgb(0x0B, 0x0B, 0x0B))
-                                .inner_margin(egui::Margin::same(10)),
+                                .inner_margin(egui::Margin::same(12)),
                         )
                         .show_inside(ui, |ui| {
                             self.settings_drawer_ui(ui);

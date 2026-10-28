@@ -62,31 +62,37 @@ impl App {
                 }
             });
         });
-        ui.separator();
+        ui.add_space(8.0);
 
-        // Status line.
+        // Status pill (0.5.0): dot + state + mode, in a rounded
+        // pill instead of a line of loose labels.
         let (dot, word) = if self.settings.monitoring_enabled {
             (OK_GREEN, "Monitoring clipboard")
         } else {
             (ACCENT, "Monitoring paused")
         };
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("●").color(dot));
-            ui.label(word);
-            ui.label(egui::RichText::new("·").color(TEXT_FAINT));
-            ui.label(match self.settings.default_action {
-                DefaultAction::Prompt => "asks before downloading",
-                DefaultAction::AutoDownload => "auto-downloads with your defaults",
-            })
-            .on_hover_text("Change this in Settings → General, or from the tray menu.");
+            status_pill(
+                ui,
+                dot,
+                word,
+                match self.settings.default_action {
+                    DefaultAction::Prompt => "asks before downloading",
+                    DefaultAction::AutoDownload => "auto-downloads with your defaults",
+                },
+                "Change this in Settings → General, or from the tray menu.",
+            );
         });
 
         // Failure banner (0.4.0): the latest final failure, with
         // one-click retry — failures used to be easy to miss.
         if let Some(notice) = self.failure_notice.clone() {
-            ui.add_space(6.0);
-            egui::Frame::group(ui.style())
-                .fill(egui::Color32::from_rgb(0x2A, 0x0E, 0x0E))
+            ui.add_space(8.0);
+            egui::Frame::NONE
+                .fill(DANGER_BG)
+                .stroke(egui::Stroke::new(1.0_f32, ACCENT_DARK))
+                .corner_radius(RADIUS)
+                .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(format!(
@@ -105,7 +111,7 @@ impl App {
                     .on_hover_text(notice.error.clone());
                     ui.horizontal(|ui| {
                         if ui
-                            .button("↻ Retry")
+                            .add(primary_button("↻ Retry"))
                             .on_hover_text("Download it again with the same quality and folder")
                             .clicked()
                         {
@@ -118,10 +124,9 @@ impl App {
                 });
         }
 
-        // yt-dlp status / first-run install.
-        ui.add_space(6.0);
-        egui::Frame::group(ui.style())
-            .fill(egui::Color32::from_rgb(0x18, 0x18, 0x18))
+        // yt-dlp status / first-run install, in a card (0.5.0).
+        ui.add_space(8.0);
+        card_frame()
             .show(ui, |ui| match &self.bin {
                 Some(bin) => {
                     let version = self
@@ -140,7 +145,7 @@ impl App {
                         ui.horizontal(|ui| {
                             let busy = self.ffmpeg_fetch_rx.is_some();
                             if ui
-                                .add_enabled(!busy, egui::Button::new(if busy { "Downloading…" } else { "⬇ Install ffmpeg" }))
+                                .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install ffmpeg" }))
                                 .on_hover_text("Download the GyanD essentials build (about 110 MB) from gyan.dev into %APPDATA%\\ytTrayDL\\bin — the same folder as the managed yt-dlp")
                                 .clicked()
                             {
@@ -164,7 +169,7 @@ impl App {
                     ui.horizontal(|ui| {
                         let busy = self.ytdlp_fetch_rx.is_some();
                         if ui
-                            .add_enabled(!busy, egui::Button::new(if busy { "Downloading…" } else { "⬇ Install yt-dlp" }))
+                            .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install yt-dlp" }))
                             .on_hover_text("Download yt-dlp.exe from github.com/yt-dlp/yt-dlp releases into %APPDATA%\\ytTrayDL\\bin")
                             .clicked()
                         {
@@ -193,7 +198,6 @@ impl App {
             });
 
         // Quick controls.
-        ui.add_space(6.0);
         ui.horizontal(|ui| {
             let mut monitoring = self.settings.monitoring_enabled;
             if ui
@@ -255,18 +259,23 @@ impl App {
         });
 
         // Manual URL entry.
-        ui.add_space(6.0);
-        ui.label(egui::RichText::new("Download a link directly").color(TEXT_DIM));
+        ui.add_space(12.0);
+        ui.label(section_heading("Download a link directly"));
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
+            // The field takes whatever width the Download button
+            // doesn't need, so the row stays aligned at any
+            // panel width (0.5.0; was a fixed 240px field).
+            let field_w = (ui.available_width() - 112.0).max(120.0);
             let resp = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.manual_url)
                         .hint_text("Paste a video URL…")
-                        .desired_width(240.0),
+                        .desired_width(field_w),
                 )
                 .on_hover_text("Type or paste a URL, then press Enter or Download");
             let go = ui
-                .button("Download…")
+                .add(primary_button("Download…").min_size(egui::vec2(104.0, 0.0)))
                 .on_hover_text("Open the download popup for this link")
                 .clicked();
             if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
@@ -295,7 +304,7 @@ impl App {
             .collect();
         if !active.is_empty() {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Downloading").strong());
+            ui.label(section_heading("Downloading"));
             let mut cancel: Option<u64> = None;
             for (id, title, pct, eta, state) in &active {
                 ui.horizontal(|ui| {
@@ -328,7 +337,7 @@ impl App {
         // Recent history.
         if !self.history.entries.is_empty() {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Recent").strong());
+            ui.label(section_heading("Recent"));
             let recent: Vec<(String, HistoryStatus, Option<std::path::PathBuf>)> = self
                 .history
                 .recent(5)
@@ -339,16 +348,24 @@ impl App {
             for (title, status, file) in &recent {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("●").color(status_color(*status)));
-                    ui.label(truncate(title, 34)).on_hover_text(title.clone());
                     if let Some(f) = file {
-                        if ui
-                            .small_button("📂")
-                            .on_hover_text("Show in Explorer")
-                            .clicked()
-                        {
+                        // Folder button pinned right; the title
+                        // label below gets the remaining width
+                        // and truncates cleanly with an ellipsis
+                        // (full title stays on hover) — 0.5.0.
+                        let mut clicked = false;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            clicked = ui
+                                .small_button("📂")
+                                .on_hover_text("Show in Explorer")
+                                .clicked();
+                        });
+                        if clicked {
                             open_file = Some(f.clone());
                         }
                     }
+                    ui.add(egui::Label::new(title.clone()).truncate())
+                        .on_hover_text(title.clone());
                 });
             }
             if let Some(f) = open_file {
@@ -361,7 +378,7 @@ impl App {
         // Saved for later (0.4.0): links parked from the popup.
         if !self.saved_links.is_empty() {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Saved for later").strong());
+            ui.label(section_heading("Saved for later"));
             let mut act: Option<(usize, bool)> = None; // (index, download?)
             for (i, link) in self.saved_links.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -416,7 +433,17 @@ impl App {
             }
         }
 
-        ui.add_space(8.0);
+        // Footer (0.5.0): pinned to the bottom of the window
+        // with a hairline above it, so a short panel no longer
+        // reads as content floating over an empty black void.
+        // When the content is taller than the window the spare
+        // height is negative and the footer just follows it.
+        let spare = ui.available_height() - 44.0;
+        if spare > 8.0 {
+            ui.add_space(spare);
+        } else {
+            ui.add_space(8.0);
+        }
         ui.separator();
         ui.horizontal(|ui| {
             if ui
@@ -525,6 +552,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new(truncate(&info.display_title(), 78))
                                     .strong()
+                                    .size(16.0)
                                     .color(TEXT),
                             )
                             .on_hover_text(info.display_title());
@@ -576,7 +604,11 @@ impl App {
                     };
                     if let Some(handle) = &thumb {
                         ui.horizontal(|ui| {
-                            ui.image((handle.id(), egui::vec2(96.0, 54.0)));
+                            // Rounded thumbnail corners (0.5.0).
+                            ui.add(
+                                egui::Image::new((handle.id(), egui::vec2(96.0, 54.0)))
+                                    .corner_radius(RADIUS),
+                            );
                             ui.vertical(|ui| header(ui));
                         });
                     } else {
@@ -604,9 +636,9 @@ impl App {
                         );
                     }
 
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label("Quality:");
+                        ui.add_sized(egui::vec2(56.0, 24.0), egui::Label::new("Quality:"));
                         let before = popup.preset;
                         egui::ComboBox::from_id_salt(("popup-preset", &popup.url))
                             .selected_text(popup.preset.label())
@@ -655,7 +687,7 @@ impl App {
                     }
 
                     ui.horizontal(|ui| {
-                        ui.label("Save to:");
+                        ui.add_sized(egui::vec2(56.0, 24.0), egui::Label::new("Save to:"));
                         match &popup.folder {
                             Some(f) => {
                                 ui.label(
@@ -705,17 +737,17 @@ impl App {
                             "⬇ Download"
                         };
                         if ui
-                            .add(egui::Button::new(egui::RichText::new(download_label).color(TEXT)).fill(ACCENT_DARK))
+                            .add(primary_button(download_label).min_size(egui::vec2(118.0, 30.0)))
                             .on_hover_text("Download with the selected quality into your download folder")
                             .clicked()
                         {
                             action = Action::Download;
                             interacted = true;
                         }
-                        if ui.button("Not now").on_hover_text("Dismiss. Copy the link again later to be asked again after the dedupe window.").clicked() {
+                        if ui.add(egui::Button::new("Not now").min_size(egui::vec2(0.0, 30.0))).on_hover_text("Dismiss. Copy the link again later to be asked again after the dedupe window.").clicked() {
                             action = Action::Dismiss;
                         }
-                        if ui.button("Later").on_hover_text("Park this link in the panel's Saved list and download it whenever you're ready").clicked() {
+                        if ui.add(egui::Button::new("Later").min_size(egui::vec2(0.0, 30.0))).on_hover_text("Park this link in the panel's Saved list and download it whenever you're ready").clicked() {
                             action = Action::SaveLater;
                         }
                         ui.menu_button("Ignore ▾", |ui| {
@@ -733,6 +765,7 @@ impl App {
                     let timeout = timeout_secs;
                     if timeout > 0 {
                         let left = timeout.saturating_sub(popup.last_interaction.elapsed().as_secs());
+                        ui.add_space(6.0);
                         ui.label(
                             egui::RichText::new(format!("Closes automatically in {left}s — nothing downloads unless you click Download."))
                                 .color(TEXT_FAINT)
@@ -903,11 +936,17 @@ impl App {
 
         ui.set_clip_rect(ui.available_rect_before_wrap());
         ui.set_min_width(SETTINGS_DRAWER_W - 28.0);
-        // Condensed layout (0.2.1): tighter row spacing than
-        // egui's default throughout the drawer.
-        ui.style_mut().spacing.item_spacing = egui::vec2(6.0, 3.0);
+        // Row spacing follows the same 4/8 grid as the central
+        // theme (0.5.0; the 0.2.1 drawer overrode it to a
+        // cramped 6x3, which made rows run together).
+        ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 6.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Settings").strong());
+            ui.label(
+                egui::RichText::new("Settings")
+                    .strong()
+                    .size(17.0)
+                    .color(TEXT),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .button("✕")
@@ -918,13 +957,15 @@ impl App {
                 }
             });
         });
+        // Tab bar as pills (0.5.0): the active tab is a filled,
+        // selected button; the rest are plain buttons.
         ui.horizontal(|ui| {
             for (i, name) in ["General", "Downloads", "Domains & rules", "yt-dlp"]
                 .iter()
                 .enumerate()
             {
                 if ui
-                    .selectable_label(tab == i, *name)
+                    .add(egui::Button::new(*name).selected(tab == i))
                     .on_hover_text("Switch settings section")
                     .clicked()
                 {
@@ -1104,49 +1145,57 @@ impl App {
     }
 }
 
+/// Fixed-width label for a slider row (0.5.0): every slider
+/// label in Settings gets the same 190px column, so the
+/// sliders (and their value boxes, e.g. "30 s") line up in
+/// columns instead of starting wherever the label ended.
+fn slider_label(ui: &mut egui::Ui, text: &str) {
+    ui.add_sized(egui::vec2(190.0, 24.0), egui::Label::new(text));
+}
+
 fn settings_general(
     ui: &mut egui::Ui,
     s: &mut Settings,
     out: &mut SettingsOutcome,
     autostart_now: bool,
 ) {
-    ui.label(egui::RichText::new("When a supported link is copied").strong());
-    if ui.checkbox(&mut s.monitoring_enabled, "Monitor the clipboard").on_hover_text("When off, ytTrayDL never reacts to copied links. You can still download from the panel.").changed() {
+    section_card(ui, "When a supported link is copied", |ui| {
+        if ui.checkbox(&mut s.monitoring_enabled, "Monitor the clipboard").on_hover_text("When off, ytTrayDL never reacts to copied links. You can still download from the panel.").changed() {
         out.changed = true;
     }
-    ui.horizontal(|ui| {
-        ui.label("Default action:");
-        if ui
-            .radio_value(
-                &mut s.default_action,
-                DefaultAction::Prompt,
-                "Ask me (popup)",
-            )
-            .on_hover_text("Show the small download popup and let you pick quality each time")
-            .changed()
-        {
-            out.changed = true;
-        }
-        if ui
-            .radio_value(
-                &mut s.default_action,
-                DefaultAction::AutoDownload,
-                "Auto-download",
-            )
-            .on_hover_text(
-                "Download immediately with your default quality — no popup, no interruption",
-            )
-            .changed()
-        {
-            out.changed = true;
-        }
+        ui.horizontal(|ui| {
+            ui.label("Default action:");
+            if ui
+                .radio_value(
+                    &mut s.default_action,
+                    DefaultAction::Prompt,
+                    "Ask me (popup)",
+                )
+                .on_hover_text("Show the small download popup and let you pick quality each time")
+                .changed()
+            {
+                out.changed = true;
+            }
+            if ui
+                .radio_value(
+                    &mut s.default_action,
+                    DefaultAction::AutoDownload,
+                    "Auto-download",
+                )
+                .on_hover_text(
+                    "Download immediately with your default quality — no popup, no interruption",
+                )
+                .changed()
+            {
+                out.changed = true;
+            }
+        });
+        ui.label(egui::RichText::new("Per-domain rules (Domains & rules tab) can override this: a domain can always auto-download, or always be ignored.").color(TEXT_DIM).small());
     });
-    ui.label(egui::RichText::new("Per-domain rules (Domains & rules tab) can override this: a domain can always auto-download, or always be ignored.").color(TEXT_DIM).small());
 
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("Which links count as supported").strong());
-    let mut scope = s.detection_scope;
-    egui::ComboBox::from_id_salt("scope")
+    section_card(ui, "Which links count as supported", |ui| {
+        let mut scope = s.detection_scope;
+        egui::ComboBox::from_id_salt("scope")
         .selected_text(match scope {
             DetectionScope::KnownSitesOnly => "Known video/audio sites only",
             DetectionScope::AllUrls => "Any web link",
@@ -1160,15 +1209,15 @@ fn settings_general(
             ui.selectable_value(&mut scope, DetectionScope::AllowListOnly, "Only my allow list")
                 .on_hover_text("React only to domains on the Domains & rules tab allow list");
         });
-    if scope != s.detection_scope {
-        s.detection_scope = scope;
-        out.changed = true;
-    }
+        if scope != s.detection_scope {
+            s.detection_scope = scope;
+            out.changed = true;
+        }
+    });
 
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("Tray & startup").strong());
-    let mut visible = s.tray_icon_visible;
-    if ui.checkbox(&mut visible, "Show tray icon").on_hover_text("Uncheck to run invisibly. You can always get the icon back by launching ytTrayDL again or pressing Ctrl+Alt+G.").changed() {
+    section_card(ui, "Tray & startup", |ui| {
+        let mut visible = s.tray_icon_visible;
+        if ui.checkbox(&mut visible, "Show tray icon").on_hover_text("Uncheck to run invisibly. You can always get the icon back by launching ytTrayDL again or pressing Ctrl+Alt+G.").changed() {
         if !visible {
             out.confirm_hide_icon = true; // hiding needs the recovery explanation first
         } else {
@@ -1176,17 +1225,17 @@ fn settings_general(
             out.changed = true;
         }
     }
-    let mut autostart = autostart_now;
-    if ui
-        .checkbox(&mut autostart, "Start with Windows")
-        .on_hover_text(
-            "Adds ytTrayDL to your per-user startup (HKCU Run key). No admin rights needed.",
-        )
-        .changed()
-    {
-        out.set_autostart = Some(autostart);
-    }
-    ui.horizontal(|ui| {
+        let mut autostart = autostart_now;
+        if ui
+            .checkbox(&mut autostart, "Start with Windows")
+            .on_hover_text(
+                "Adds ytTrayDL to your per-user startup (HKCU Run key). No admin rights needed.",
+            )
+            .changed()
+        {
+            out.set_autostart = Some(autostart);
+        }
+        ui.horizontal(|ui| {
         ui.label("When I close the main window:")
             .on_hover_text("What the window's X button does. 'Ask every time' shows a choice dialog with a remember option.");
         let mut action = s.close_action;
@@ -1202,10 +1251,10 @@ fn settings_general(
             out.changed = true;
         }
     });
-    if ui.checkbox(&mut s.animate_settings_drawer, "Animate the Settings panel").on_hover_text("The Settings drawer slides open and the window grows sideways. Turn this off to open and close it instantly, with no animation.").changed() {
+        if ui.checkbox(&mut s.animate_settings_drawer, "Animate the Settings panel").on_hover_text("The Settings drawer slides open and the window grows sideways. Turn this off to open and close it instantly, with no animation.").changed() {
         out.changed = true;
     }
-    ui.horizontal(|ui| {
+        ui.horizontal(|ui| {
         ui.label("When the download queue empties:")
             .on_hover_text("Runs once when a queue that had active downloads finishes completely — never just because the app is idle.");
         let mut qe = s.queue_empty_action;
@@ -1221,49 +1270,54 @@ fn settings_general(
             out.changed = true;
         }
     });
-    ui.horizontal(|ui| {
-        ui.label("Popup position:");
-        let mut pos = s.popup_position;
-        egui::ComboBox::from_id_salt("popup-pos")
-            .selected_text(match pos {
-                PopupPosition::BottomRight => "Bottom-right",
-                PopupPosition::TopRight => "Top-right",
-                PopupPosition::TopLeft => "Top-left",
-                PopupPosition::BottomLeft => "Bottom-left",
-                PopupPosition::Center => "Center of the screen",
-                PopupPosition::NearCursor => "Near the mouse cursor",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut pos, PopupPosition::BottomRight, "Bottom-right");
-                ui.selectable_value(&mut pos, PopupPosition::TopRight, "Top-right");
-                ui.selectable_value(&mut pos, PopupPosition::TopLeft, "Top-left");
-                ui.selectable_value(&mut pos, PopupPosition::BottomLeft, "Bottom-left");
-                ui.selectable_value(&mut pos, PopupPosition::Center, "Center of the screen");
-                ui.selectable_value(&mut pos, PopupPosition::NearCursor, "Near the mouse cursor");
-            });
-        if pos != s.popup_position {
-            s.popup_position = pos;
-            out.changed = true;
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Popup auto-close:");
+        ui.horizontal(|ui| {
+            ui.label("Popup position:");
+            let mut pos = s.popup_position;
+            egui::ComboBox::from_id_salt("popup-pos")
+                .selected_text(match pos {
+                    PopupPosition::BottomRight => "Bottom-right",
+                    PopupPosition::TopRight => "Top-right",
+                    PopupPosition::TopLeft => "Top-left",
+                    PopupPosition::BottomLeft => "Bottom-left",
+                    PopupPosition::Center => "Center of the screen",
+                    PopupPosition::NearCursor => "Near the mouse cursor",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut pos, PopupPosition::BottomRight, "Bottom-right");
+                    ui.selectable_value(&mut pos, PopupPosition::TopRight, "Top-right");
+                    ui.selectable_value(&mut pos, PopupPosition::TopLeft, "Top-left");
+                    ui.selectable_value(&mut pos, PopupPosition::BottomLeft, "Bottom-left");
+                    ui.selectable_value(&mut pos, PopupPosition::Center, "Center of the screen");
+                    ui.selectable_value(
+                        &mut pos,
+                        PopupPosition::NearCursor,
+                        "Near the mouse cursor",
+                    );
+                });
+            if pos != s.popup_position {
+                s.popup_position = pos;
+                out.changed = true;
+            }
+        });
+        ui.horizontal(|ui| {
+        slider_label(ui, "Popup auto-close:");
         let mut t = s.popup_timeout_secs;
-        if ui.add(egui::Slider::new(&mut t, 0..=300).suffix("s")).on_hover_text("The popup closes without downloading after this long. 0 = stay until you decide. Hovering restarts the timer.").changed() {
+        if ui.add(egui::Slider::new(&mut t, 0..=300).suffix(" s")).on_hover_text("The popup closes without downloading after this long. 0 = stay until you decide. Hovering restarts the timer.").changed() {
             s.popup_timeout_secs = t;
             out.changed = true;
         }
     });
-    ui.horizontal(|ui| {
-        ui.label("Ignore re-copies for:");
+        ui.horizontal(|ui| {
+        slider_label(ui, "Ignore re-copies for:");
         let mut d = s.dedupe_window_secs;
-        if ui.add(egui::Slider::new(&mut d, 0..=3600).suffix("s")).on_hover_text("Copying the same link again within this window won't re-trigger ytTrayDL. 0 = always react.").changed() {
+        if ui.add(egui::Slider::new(&mut d, 0..=3600).suffix(" s")).on_hover_text("Copying the same link again within this window won't re-trigger ytTrayDL. 0 = always react.").changed() {
             s.dedupe_window_secs = d;
             out.changed = true;
         }
     });
+    });
 
-    ui.add_space(8.0);
+    card_frame().show(ui, |ui| {
     egui::CollapsingHeader::new("Notifications (small toasts, bottom-right)")
         .default_open(false)
         .show(ui, |ui| {
@@ -1309,141 +1363,142 @@ fn settings_general(
                 out.changed = true;
             }
         });
+    });
 }
 
 fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOutcome) {
-    ui.label(egui::RichText::new("Where downloads go").strong());
-    ui.horizontal(|ui| {
-        let mut folder = s.download_folder.display().to_string();
-        if ui
-            .add(egui::TextEdit::singleline(&mut folder).desired_width(360.0))
-            .on_hover_text("Downloads are saved here")
-            .changed()
-        {
-            s.download_folder = std::path::PathBuf::from(folder);
-            out.changed = true;
-        }
-        if ui
-            .button("Browse…")
-            .on_hover_text("Pick the download folder")
-            .clicked()
-        {
-            if let Some(f) = pick_folder(&s.download_folder) {
-                s.download_folder = f;
+    section_card(ui, "Where downloads go", |ui| {
+        ui.horizontal(|ui| {
+            let mut folder = s.download_folder.display().to_string();
+            if ui
+                .add(egui::TextEdit::singleline(&mut folder).desired_width(360.0))
+                .on_hover_text("Downloads are saved here")
+                .changed()
+            {
+                s.download_folder = std::path::PathBuf::from(folder);
                 out.changed = true;
             }
-        }
-    });
-    ui.horizontal(|ui| {
+            if ui
+                .button("Browse…")
+                .on_hover_text("Pick the download folder")
+                .clicked()
+            {
+                if let Some(f) = pick_folder(&s.download_folder) {
+                    s.download_folder = f;
+                    out.changed = true;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
         ui.label("File name template:");
         if ui.add(egui::TextEdit::singleline(&mut s.filename_template).desired_width(300.0)).on_hover_text("yt-dlp output template, e.g. %(title)s [%(id)s].%(ext)s — see yt-dlp's output template documentation").changed() {
             out.changed = true;
         }
     });
+    });
 
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("Default quality").strong());
-    ui.horizontal(|ui| {
-        ui.label("Preset:");
-        let mut preset = s.default_preset;
-        egui::ComboBox::from_id_salt("default-preset")
-            .selected_text(preset.label())
-            .show_ui(ui, |ui| {
-                for p in Preset::ALL {
-                    ui.selectable_value(&mut preset, p, p.label());
+    section_card(ui, "Default quality", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Preset:");
+            let mut preset = s.default_preset;
+            egui::ComboBox::from_id_salt("default-preset")
+                .selected_text(preset.label())
+                .show_ui(ui, |ui| {
+                    for p in Preset::ALL {
+                        ui.selectable_value(&mut preset, p, p.label());
+                    }
+                });
+            if preset != s.default_preset {
+                s.default_preset = preset;
+                out.changed = true;
+            }
+        });
+        if s.default_preset == Preset::Custom {
+            ui.horizontal(|ui| {
+                ui.label("Custom -f:");
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut s.custom_format)
+                            .desired_width(300.0)
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .on_hover_text("A yt-dlp format selector, passed as the -f argument")
+                    .changed()
+                {
+                    out.changed = true;
                 }
             });
-        if preset != s.default_preset {
-            s.default_preset = preset;
-            out.changed = true;
         }
-    });
-    if s.default_preset == Preset::Custom {
         ui.horizontal(|ui| {
-            ui.label("Custom -f:");
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut s.custom_format)
-                        .desired_width(300.0)
-                        .font(egui::TextStyle::Monospace),
-                )
-                .on_hover_text("A yt-dlp format selector, passed as the -f argument")
-                .changed()
-            {
+            ui.label("Container:");
+            let mut c = s.container;
+            egui::ComboBox::from_id_salt("container")
+                .selected_text(c.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut c, Container::Mp4, "MP4");
+                    ui.selectable_value(&mut c, Container::Mkv, "MKV");
+                    ui.selectable_value(&mut c, Container::Original, "Original (no remux)");
+                });
+            if c != s.container {
+                s.container = c;
                 out.changed = true;
             }
         });
-    }
-    ui.horizontal(|ui| {
-        ui.label("Container:");
-        let mut c = s.container;
-        egui::ComboBox::from_id_salt("container")
-            .selected_text(c.label())
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut c, Container::Mp4, "MP4");
-                ui.selectable_value(&mut c, Container::Mkv, "MKV");
-                ui.selectable_value(&mut c, Container::Original, "Original (no remux)");
-            });
-        if c != s.container {
-            s.container = c;
-            out.changed = true;
-        }
-    });
-    if ui
-        .checkbox(&mut s.embed_thumbnail, "Embed thumbnail")
-        .on_hover_text(
-            "Embed the cover art / thumbnail into the file when the container supports it",
-        )
-        .changed()
-    {
-        out.changed = true;
-    }
-    if ui
-        .checkbox(&mut s.embed_metadata, "Embed metadata (title, uploader, …)")
-        .on_hover_text("Writes title/artist metadata into the file")
-        .changed()
-    {
-        out.changed = true;
-    }
-    if ui
-        .checkbox(
-            &mut s.write_subtitles,
-            "Download subtitles and embed them in video",
-        )
-        .on_hover_text("Includes auto-generated subtitles when no manual ones exist")
-        .changed()
-    {
-        out.changed = true;
-    }
-    if s.write_subtitles {
-        ui.horizontal(|ui| {
-            ui.label("Subtitle languages:");
-            if ui
-                .add(egui::TextEdit::singleline(&mut s.subtitle_languages).desired_width(160.0))
-                .on_hover_text("yt-dlp --sub-langs pattern, e.g. en.* for all English variants")
-                .changed()
-            {
-                out.changed = true;
-            }
-        });
-    }
-    if ui.checkbox(&mut s.allow_playlists, "Download whole playlists").on_hover_text("Off (default): a playlist link downloads just the linked/first item. On: the entire playlist, item by item. Either way, the popup lets you choose per download.").changed() {
-        out.changed = true;
-    }
-    if ui.checkbox(&mut s.sponsorblock_remove, "Remove sponsored segments (SponsorBlock)").on_hover_text("yt-dlp cuts SponsorBlock-marked segments — sponsors, self-promos, interaction reminders — out of the downloaded file. Needs ffmpeg.").changed() {
-        out.changed = true;
-    }
-    if ui.checkbox(&mut s.split_chapters, "Split chapters into separate files").on_hover_text("A chaptered video (streams, albums, podcasts) downloads as one file per chapter instead of one long file. Needs ffmpeg.").changed() {
-        out.changed = true;
-    }
-    ui.label(egui::RichText::new("Tip: the “Subtitles only” quality preset downloads just the subtitle files (as .srt) — no video or audio. It uses the subtitle languages above.").color(TEXT_DIM).small());
-    if ui.checkbox(&mut s.skip_already_downloaded, "Skip videos already downloaded before").on_hover_text("Uses a yt-dlp download archive stored with your ytTrayDL settings, so re-copying an old link doesn't fetch it twice").changed() {
-        out.changed = true;
-    }
-    ui.horizontal(|ui| {
-        ui.label("Simultaneous downloads:");
-        let mut n = s.max_concurrent_downloads;
         if ui
+            .checkbox(&mut s.embed_thumbnail, "Embed thumbnail")
+            .on_hover_text(
+                "Embed the cover art / thumbnail into the file when the container supports it",
+            )
+            .changed()
+        {
+            out.changed = true;
+        }
+        if ui
+            .checkbox(&mut s.embed_metadata, "Embed metadata (title, uploader, …)")
+            .on_hover_text("Writes title/artist metadata into the file")
+            .changed()
+        {
+            out.changed = true;
+        }
+        if ui
+            .checkbox(
+                &mut s.write_subtitles,
+                "Download subtitles and embed them in video",
+            )
+            .on_hover_text("Includes auto-generated subtitles when no manual ones exist")
+            .changed()
+        {
+            out.changed = true;
+        }
+        if s.write_subtitles {
+            ui.horizontal(|ui| {
+                ui.label("Subtitle languages:");
+                if ui
+                    .add(egui::TextEdit::singleline(&mut s.subtitle_languages).desired_width(160.0))
+                    .on_hover_text("yt-dlp --sub-langs pattern, e.g. en.* for all English variants")
+                    .changed()
+                {
+                    out.changed = true;
+                }
+            });
+        }
+        if ui.checkbox(&mut s.allow_playlists, "Download whole playlists").on_hover_text("Off (default): a playlist link downloads just the linked/first item. On: the entire playlist, item by item. Either way, the popup lets you choose per download.").changed() {
+        out.changed = true;
+    }
+        if ui.checkbox(&mut s.sponsorblock_remove, "Remove sponsored segments (SponsorBlock)").on_hover_text("yt-dlp cuts SponsorBlock-marked segments — sponsors, self-promos, interaction reminders — out of the downloaded file. Needs ffmpeg.").changed() {
+        out.changed = true;
+    }
+        if ui.checkbox(&mut s.split_chapters, "Split chapters into separate files").on_hover_text("A chaptered video (streams, albums, podcasts) downloads as one file per chapter instead of one long file. Needs ffmpeg.").changed() {
+        out.changed = true;
+    }
+        ui.label(egui::RichText::new("Tip: the “Subtitles only” quality preset downloads just the subtitle files (as .srt) — no video or audio. It uses the subtitle languages above.").color(TEXT_DIM).small());
+        if ui.checkbox(&mut s.skip_already_downloaded, "Skip videos already downloaded before").on_hover_text("Uses a yt-dlp download archive stored with your ytTrayDL settings, so re-copying an old link doesn't fetch it twice").changed() {
+        out.changed = true;
+    }
+        ui.horizontal(|ui| {
+            slider_label(ui, "Simultaneous downloads:");
+            let mut n = s.max_concurrent_downloads;
+            if ui
             .add(egui::Slider::new(&mut n, 1..=4))
             .on_hover_text(
                 "More parallelism isn't always faster — sites may throttle. 2 is a good default.",
@@ -1453,26 +1508,26 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             s.max_concurrent_downloads = n;
             out.changed = true;
         }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Speed limit:");
-        let mut r = s.rate_limit_kbps;
-        if ui
-            .add(egui::Slider::new(&mut r, 0..=102_400).suffix(" KB/s"))
-            .on_hover_text(
-                "Cap the download speed (passed to yt-dlp as --limit-rate). 0 = no limit.",
-            )
-            .changed()
-        {
-            s.rate_limit_kbps = r;
-            out.changed = true;
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Auto-retry failures:");
+        });
+        ui.horizontal(|ui| {
+            slider_label(ui, "Speed limit:");
+            let mut r = s.rate_limit_kbps;
+            if ui
+                .add(egui::Slider::new(&mut r, 0..=102_400).suffix(" KB/s"))
+                .on_hover_text(
+                    "Cap the download speed (passed to yt-dlp as --limit-rate). 0 = no limit.",
+                )
+                .changed()
+            {
+                s.rate_limit_kbps = r;
+                out.changed = true;
+            }
+        });
+        ui.horizontal(|ui| {
+        slider_label(ui, "Auto-retry failures:");
         let mut a = s.auto_retry_attempts;
         if ui
-            .add(egui::Slider::new(&mut a, 0..=5).suffix("×"))
+            .add(egui::Slider::new(&mut a, 0..=5).suffix(" ×"))
             .on_hover_text(
                 "Retry a failed download this many times with its original quality before giving up. 0 = off. A manual cancel is never retried.",
             )
@@ -1482,11 +1537,11 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             out.changed = true;
         }
     });
+    });
 
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("Disk space & automation").strong());
-    ui.horizontal(|ui| {
-        ui.label("Pause new downloads below:");
+    section_card(ui, "Disk space & automation", |ui| {
+        ui.horizontal(|ui| {
+        slider_label(ui, "Pause new downloads below:");
         let mut mb = s.low_disk_threshold_mb;
         if ui
             .add(egui::Slider::new(&mut mb, 0..=10_240).suffix(" MB free"))
@@ -1499,7 +1554,7 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             out.changed = true;
         }
     });
-    ui.horizontal(|ui| {
+        ui.horizontal(|ui| {
         ui.label("After each download, run:");
         if ui
             .add(egui::TextEdit::singleline(&mut s.post_download_command).desired_width(300.0).font(egui::TextStyle::Monospace))
@@ -1509,8 +1564,9 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
             out.changed = true;
         }
     });
+    });
 
-    ui.add_space(8.0);
+    card_frame().show(ui, |ui| {
     egui::CollapsingHeader::new("Advanced")
         .default_open(false)
         .show(ui, |ui| {
@@ -1570,6 +1626,7 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
         }
     });
         });
+    });
 }
 
 fn domain_list_editor(
@@ -1581,7 +1638,8 @@ fn domain_list_editor(
     input: &mut String,
     out: &mut SettingsOutcome,
 ) {
-    ui.label(egui::RichText::new(title).strong());
+    card_frame().show(ui, |ui| {
+    ui.label(section_heading(title));
     ui.label(egui::RichText::new(explanation).color(TEXT_DIM).small());
     let mut remove: Option<String> = None;
     for d in list.iter() {
@@ -1617,7 +1675,7 @@ fn domain_list_editor(
         }
         let _ = id;
     });
-    ui.add_space(6.0);
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1657,192 +1715,193 @@ fn settings_domains(
     domain_list_editor(ui, "allow", "✓ Allowed domains — count as supported", "Extra domains treated as supported sites (also the only sites that count under 'Only my allow list' scope).", &mut s.allowed_domains, rule_allow, out);
 
     // Per-domain quality pins.
-    ui.label(egui::RichText::new("🎚 Quality by domain").strong());
-    ui.label(
+    section_card(ui, "🎚 Quality by domain", |ui| {
+        ui.label(
         egui::RichText::new("Links from these domains start with the pinned quality instead of your global default — in the popup (you can still change it there) and in auto-downloads.")
             .color(TEXT_DIM)
             .small(),
     );
-    let mut remove_preset: Option<String> = None;
-    for dp in s.domain_presets.iter() {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(dp.domain.clone()).monospace());
-            ui.label(egui::RichText::new(format!("→ {}", dp.preset.label())).color(TEXT_DIM));
-            if ui
-                .small_button("✕")
-                .on_hover_text("Remove this quality pin")
-                .clicked()
-            {
-                remove_preset = Some(dp.domain.clone());
-            }
-        });
-    }
-    if let Some(d) = remove_preset {
-        s.domain_presets.retain(|dp| dp.domain != d);
-        out.changed = true;
-    }
-    ui.horizontal(|ui| {
-        let resp = ui
-            .add(
-                egui::TextEdit::singleline(rule_preset_domain)
-                    .hint_text("example.com")
-                    .desired_width(160.0),
-            )
-            .on_hover_text("Domain to pin — subdomains included, like the other rules");
-        egui::ComboBox::from_id_salt("domain-preset-choice")
-            .selected_text(rule_preset_choice.label())
-            .show_ui(ui, |ui| {
-                for p in Preset::ALL {
-                    ui.selectable_value(rule_preset_choice, p, p.label());
+        let mut remove_preset: Option<String> = None;
+        for dp in s.domain_presets.iter() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(dp.domain.clone()).monospace());
+                ui.label(egui::RichText::new(format!("→ {}", dp.preset.label())).color(TEXT_DIM));
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Remove this quality pin")
+                    .clicked()
+                {
+                    remove_preset = Some(dp.domain.clone());
                 }
             });
-        let add = ui
-            .button("Add")
-            .on_hover_text("Pin this quality for the domain")
-            .clicked();
-        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (add || enter) && !rule_preset_domain.trim().is_empty() {
-            let d = yttraydl::settings::normalize_domain(rule_preset_domain);
-            if !d.is_empty() {
-                s.domain_presets.retain(|dp| dp.domain != d);
-                s.domain_presets.push(yttraydl::settings::DomainPreset {
-                    domain: d,
-                    preset: *rule_preset_choice,
-                });
-                s.domain_presets.sort_by(|a, b| a.domain.cmp(&b.domain));
-                out.changed = true;
-            }
-            rule_preset_domain.clear();
         }
+        if let Some(d) = remove_preset {
+            s.domain_presets.retain(|dp| dp.domain != d);
+            out.changed = true;
+        }
+        ui.horizontal(|ui| {
+            let resp = ui
+                .add(
+                    egui::TextEdit::singleline(rule_preset_domain)
+                        .hint_text("example.com")
+                        .desired_width(160.0),
+                )
+                .on_hover_text("Domain to pin — subdomains included, like the other rules");
+            egui::ComboBox::from_id_salt("domain-preset-choice")
+                .selected_text(rule_preset_choice.label())
+                .show_ui(ui, |ui| {
+                    for p in Preset::ALL {
+                        ui.selectable_value(rule_preset_choice, p, p.label());
+                    }
+                });
+            let add = ui
+                .button("Add")
+                .on_hover_text("Pin this quality for the domain")
+                .clicked();
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (add || enter) && !rule_preset_domain.trim().is_empty() {
+                let d = yttraydl::settings::normalize_domain(rule_preset_domain);
+                if !d.is_empty() {
+                    s.domain_presets.retain(|dp| dp.domain != d);
+                    s.domain_presets.push(yttraydl::settings::DomainPreset {
+                        domain: d,
+                        preset: *rule_preset_choice,
+                    });
+                    s.domain_presets.sort_by(|a, b| a.domain.cmp(&b.domain));
+                    out.changed = true;
+                }
+                rule_preset_domain.clear();
+            }
+        });
     });
-    ui.add_space(6.0);
 
     // Channel watcher.
-    ui.label(egui::RichText::new("📺 Channel watcher").strong());
-    ui.label(
+    section_card(ui, "📺 Channel watcher", |ui| {
+        ui.label(
         egui::RichText::new("ytTrayDL quietly checks these channels/playlists on an interval and auto-downloads new uploads with the chosen quality. The first check only takes stock — it never dumps a channel's back-catalogue. Checks happen only while ytTrayDL is running.")
             .color(TEXT_DIM)
             .small(),
     );
-    let mut remove_sub: Option<String> = None;
-    for sub in s.subscriptions.iter() {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(truncate(&sub.url, 44))
-                    .monospace()
-                    .small(),
-            )
-            .on_hover_text(sub.url.clone());
-            ui.label(egui::RichText::new(format!("→ {}", sub.preset.label())).color(TEXT_DIM));
-            if ui
-                .small_button("✕")
-                .on_hover_text("Stop watching this channel/playlist")
-                .clicked()
-            {
-                remove_sub = Some(sub.url.clone());
-            }
-        });
-    }
-    if let Some(u) = remove_sub {
-        s.subscriptions.retain(|x| x.url != u);
-        out.changed = true;
-    }
-    ui.horizontal(|ui| {
-        let resp = ui
-            .add(
-                egui::TextEdit::singleline(rule_watch_url)
-                    .hint_text("https://www.youtube.com/@channel")
-                    .desired_width(220.0),
-            )
-            .on_hover_text("A channel page or a playlist URL to watch");
-        egui::ComboBox::from_id_salt("watch-preset-choice")
-            .selected_text(rule_watch_preset.label())
-            .show_ui(ui, |ui| {
-                for p in Preset::ALL {
-                    ui.selectable_value(rule_watch_preset, p, p.label());
+        let mut remove_sub: Option<String> = None;
+        for sub in s.subscriptions.iter() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(truncate(&sub.url, 44))
+                        .monospace()
+                        .small(),
+                )
+                .on_hover_text(sub.url.clone());
+                ui.label(egui::RichText::new(format!("→ {}", sub.preset.label())).color(TEXT_DIM));
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Stop watching this channel/playlist")
+                    .clicked()
+                {
+                    remove_sub = Some(sub.url.clone());
                 }
             });
-        let add = ui
-            .button("Watch")
-            .on_hover_text("Start watching this channel/playlist")
-            .clicked();
-        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (add || enter) && !rule_watch_url.trim().is_empty() {
-            let u = rule_watch_url.trim().to_string();
-            if !s.subscriptions.iter().any(|x| x.url == u) {
-                s.subscriptions.push(yttraydl::settings::Subscription {
-                    url: u,
-                    preset: *rule_watch_preset,
-                });
-                out.changed = true;
-            }
-            rule_watch_url.clear();
         }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Check every:");
-        let mut mins = s.watch_interval_mins;
-        if ui
-            .add(egui::Slider::new(&mut mins, 0..=720).suffix(" min"))
-            .on_hover_text("How often watched channels are polled. 0 = watcher off.")
-            .changed()
-        {
-            s.watch_interval_mins = mins;
+        if let Some(u) = remove_sub {
+            s.subscriptions.retain(|x| x.url != u);
             out.changed = true;
         }
-        if ui
-            .button("Check now")
-            .on_hover_text("Poll all watched channels right away")
-            .clicked()
-        {
-            out.check_watch_now = true;
-        }
-    });
-    ui.add_space(6.0);
-
-    ui.label(egui::RichText::new("🚫 Ignored links").strong());
-    ui.label(
-        egui::RichText::new("Specific URLs you chose 'Never ask for this link' on.")
-            .color(TEXT_DIM)
-            .small(),
-    );
-    let mut remove_url: Option<String> = None;
-    for u in s.ignored_urls.iter() {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(truncate(u, 52)).monospace().small())
-                .on_hover_text(u.clone());
-            if ui
-                .small_button("✕")
-                .on_hover_text("Stop ignoring this link")
-                .clicked()
-            {
-                remove_url = Some(u.clone());
+            let resp = ui
+                .add(
+                    egui::TextEdit::singleline(rule_watch_url)
+                        .hint_text("https://www.youtube.com/@channel")
+                        .desired_width(220.0),
+                )
+                .on_hover_text("A channel page or a playlist URL to watch");
+            egui::ComboBox::from_id_salt("watch-preset-choice")
+                .selected_text(rule_watch_preset.label())
+                .show_ui(ui, |ui| {
+                    for p in Preset::ALL {
+                        ui.selectable_value(rule_watch_preset, p, p.label());
+                    }
+                });
+            let add = ui
+                .button("Watch")
+                .on_hover_text("Start watching this channel/playlist")
+                .clicked();
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (add || enter) && !rule_watch_url.trim().is_empty() {
+                let u = rule_watch_url.trim().to_string();
+                if !s.subscriptions.iter().any(|x| x.url == u) {
+                    s.subscriptions.push(yttraydl::settings::Subscription {
+                        url: u,
+                        preset: *rule_watch_preset,
+                    });
+                    out.changed = true;
+                }
+                rule_watch_url.clear();
             }
         });
-    }
-    if let Some(u) = remove_url {
-        s.ignored_urls.retain(|x| x != &u);
-        out.changed = true;
-    }
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(rule_url)
-                .hint_text("https://…")
-                .desired_width(300.0),
-        );
-        if ui
-            .button("Add")
-            .on_hover_text("Ignore this exact link")
-            .clicked()
-            && !rule_url.trim().is_empty()
-        {
-            let u = rule_url.trim().to_string();
-            if !s.ignored_urls.contains(&u) {
-                s.ignored_urls.push(u);
+        ui.horizontal(|ui| {
+            ui.add_sized(egui::vec2(110.0, 24.0), egui::Label::new("Check every:"));
+            let mut mins = s.watch_interval_mins;
+            if ui
+                .add(egui::Slider::new(&mut mins, 0..=720).suffix(" min"))
+                .on_hover_text("How often watched channels are polled. 0 = watcher off.")
+                .changed()
+            {
+                s.watch_interval_mins = mins;
                 out.changed = true;
             }
-            rule_url.clear();
+            if ui
+                .button("Check now")
+                .on_hover_text("Poll all watched channels right away")
+                .clicked()
+            {
+                out.check_watch_now = true;
+            }
+        });
+    });
+
+    section_card(ui, "🚫 Ignored links", |ui| {
+        ui.label(
+            egui::RichText::new("Specific URLs you chose 'Never ask for this link' on.")
+                .color(TEXT_DIM)
+                .small(),
+        );
+        let mut remove_url: Option<String> = None;
+        for u in s.ignored_urls.iter() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(truncate(u, 52)).monospace().small())
+                    .on_hover_text(u.clone());
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Stop ignoring this link")
+                    .clicked()
+                {
+                    remove_url = Some(u.clone());
+                }
+            });
         }
+        if let Some(u) = remove_url {
+            s.ignored_urls.retain(|x| x != &u);
+            out.changed = true;
+        }
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(rule_url)
+                    .hint_text("https://…")
+                    .desired_width(300.0),
+            );
+            if ui
+                .button("Add")
+                .on_hover_text("Ignore this exact link")
+                .clicked()
+                && !rule_url.trim().is_empty()
+            {
+                let u = rule_url.trim().to_string();
+                if !s.ignored_urls.contains(&u) {
+                    s.ignored_urls.push(u);
+                    out.changed = true;
+                }
+                rule_url.clear();
+            }
+        });
     });
 }
 
@@ -1869,25 +1928,27 @@ fn settings_ytdlp(
     fetching: bool,
     reset_armed: &mut bool,
 ) {
-    ui.label(egui::RichText::new("yt-dlp").strong());
-    match bin_info {
-        Some((path, source, version)) => {
-            ui.label(format!("Version {version} — {source}"));
-            ui.label(
-                egui::RichText::new(path.clone())
-                    .monospace()
-                    .small()
-                    .color(TEXT_DIM),
-            );
-        }
-        None => {
-            ui.label(
-                egui::RichText::new("Not found. Downloads can't run until yt-dlp is installed.")
+    section_card(ui, "yt-dlp", |ui| {
+        match bin_info {
+            Some((path, source, version)) => {
+                ui.label(format!("Version {version} — {source}"));
+                ui.label(
+                    egui::RichText::new(path.clone())
+                        .monospace()
+                        .small()
+                        .color(TEXT_DIM),
+                );
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new(
+                        "Not found. Downloads can't run until yt-dlp is installed.",
+                    )
                     .color(ACCENT),
-            );
+                );
+            }
         }
-    }
-    ui.horizontal(|ui| {
+        ui.horizontal(|ui| {
         if ui.add_enabled(!fetching, egui::Button::new(if fetching { "Downloading…" } else if bin_info.is_some() { "Update yt-dlp (managed copy)" } else { "⬇ Install yt-dlp" }))
             .on_hover_text("Downloads the latest official yt-dlp.exe from GitHub into %APPDATA%\\ytTrayDL\\bin. If you use your own copy elsewhere, update that one yourself.")
             .clicked()
@@ -1901,25 +1962,25 @@ fn settings_ytdlp(
             let _ = platform::open_url("https://github.com/yt-dlp/yt-dlp/releases");
         }
     });
-    if !s.ytdlp_path.as_os_str().is_empty() {
+        if !s.ytdlp_path.as_os_str().is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("Your path: {}", s.ytdlp_path.display()))
+                        .small()
+                        .color(TEXT_DIM),
+                );
+                if ui
+                    .small_button("Clear")
+                    .on_hover_text("Go back to automatic locating")
+                    .clicked()
+                {
+                    s.ytdlp_path.clear();
+                    out.changed = true;
+                    out.relocalize = true;
+                }
+            });
+        }
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!("Your path: {}", s.ytdlp_path.display()))
-                    .small()
-                    .color(TEXT_DIM),
-            );
-            if ui
-                .small_button("Clear")
-                .on_hover_text("Go back to automatic locating")
-                .clicked()
-            {
-                s.ytdlp_path.clear();
-                out.changed = true;
-                out.relocalize = true;
-            }
-        });
-    }
-    ui.horizontal(|ui| {
         if ui
             .add_enabled(
                 !tools.update_checking,
@@ -1967,15 +2028,15 @@ fn settings_ytdlp(
             None => {}
         }
     });
+    });
 
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("ffmpeg").strong());
-    ui.label(if tools.ffmpeg_ok {
+    section_card(ui, "ffmpeg", |ui| {
+        ui.label(if tools.ffmpeg_ok {
         "Found — merging and MP3 conversion are available."
     } else {
         "Not found — downloads that need merging (most best-quality) and MP3 conversion will fail. Install it here, put it on PATH, next to ytTrayDL, or choose it below."
     });
-    ui.horizontal(|ui| {
+        ui.horizontal(|ui| {
         if ui
             .add_enabled(
                 !tools.ffmpeg_fetching,
@@ -2007,29 +2068,29 @@ fn settings_ytdlp(
             out.relocalize = true;
         }
     });
-
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("ytTrayDL data").strong());
-    ui.label(egui::RichText::new("Settings, history and the download archive live in %APPDATA%\\ytTrayDL. Nothing is sent anywhere — ytTrayDL has no telemetry.").color(TEXT_DIM).small());
-    ui.horizontal(|ui| {
-        if ui
-            .button("Open config folder")
-            .on_hover_text("Open %APPDATA%\\ytTrayDL in Explorer")
-            .clicked()
-        {
-            out.open_config_dir = true;
-        }
-        if ui
-            .button("Clear download history")
-            .on_hover_text(
-                "Removes the history list only — downloaded files and the yt-dlp archive stay",
-            )
-            .clicked()
-        {
-            out.clear_history = true;
-        }
     });
-    ui.horizontal(|ui| {
+
+    section_card(ui, "ytTrayDL data", |ui| {
+        ui.label(egui::RichText::new("Settings, history and the download archive live in %APPDATA%\\ytTrayDL. Nothing is sent anywhere — ytTrayDL has no telemetry.").color(TEXT_DIM).small());
+        ui.horizontal(|ui| {
+            if ui
+                .button("Open config folder")
+                .on_hover_text("Open %APPDATA%\\ytTrayDL in Explorer")
+                .clicked()
+            {
+                out.open_config_dir = true;
+            }
+            if ui
+                .button("Clear download history")
+                .on_hover_text(
+                    "Removes the history list only — downloaded files and the yt-dlp archive stay",
+                )
+                .clicked()
+            {
+                out.clear_history = true;
+            }
+        });
+        ui.horizontal(|ui| {
         if ui
             .button("Export settings…")
             .on_hover_text("Save all settings — including domain rules and quality pins — to a JSON file you can keep or move to another PC")
@@ -2045,14 +2106,15 @@ fn settings_ytdlp(
             out.import_settings = true;
         }
     });
+    });
 
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new("Danger zone").color(ACCENT).strong());
+    card_frame().show(ui, |ui| {
+    ui.label(egui::RichText::new("Danger zone").color(ACCENT).strong().size(15.0));
     if *reset_armed {
         ui.label("Reset every setting to defaults? Domain rules, folder and quality choices will be lost. Downloaded files are not touched.");
         ui.horizontal(|ui| {
             if ui
-                .add(egui::Button::new("Yes, reset all settings").fill(ACCENT_DARK))
+                .add(primary_button("Yes, reset all settings"))
                 .clicked()
             {
                 out.reset_all = true;
@@ -2069,6 +2131,7 @@ fn settings_ytdlp(
     {
         *reset_armed = true;
     }
+    });
 }
 
 // ---------------- Downloads window ----------------
@@ -2199,8 +2262,9 @@ impl App {
                         ui.separator();
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
+                        card_frame().show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Active").strong());
+                            ui.label(section_heading("Active"));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.add_enabled(any_active || !paused.is_empty(), egui::Button::new("✕ Cancel all").small()).on_hover_text("Cancel everything queued, paused and running (partial files are kept)").clicked() {
                                     cancel_all_flag = true;
@@ -2269,10 +2333,11 @@ impl App {
                             ui.label(egui::RichText::new(format!("Queued — #{} in queue", qi + 1)).color(TEXT_FAINT).small());
                             ui.add_space(4.0);
                         }
+                        });
 
                         if !paused.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new("Paused").strong());
+                            card_frame().show(ui, |ui| {
+                            ui.label(section_heading("Paused"));
                             for (id, title, url, pct) in &paused {
                                 ui.horizontal(|ui| {
                                     ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
@@ -2293,12 +2358,13 @@ impl App {
                                 ui.label(egui::RichText::new(txt).color(TEXT_FAINT).small());
                                 ui.add_space(4.0);
                             }
+                            });
                         }
 
                         if !finished.is_empty() {
-                            ui.separator();
+                            card_frame().show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Finished this session").strong());
+                                ui.label(section_heading("Finished this session"));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.small_button("Clear finished").on_hover_text("Remove all finished entries from this list (files stay)").clicked() {
                                         clear_finished_flag = true;
@@ -2307,12 +2373,14 @@ impl App {
                             });
                             for row in &finished {
                                 job_row(ui, row, &mut open_target, &mut retry_finished, &mut remove_finished);
+                                ui.add_space(2.0);
                             }
+                            });
                         }
 
-                        ui.separator();
+                        card_frame().show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("History").strong());
+                            ui.label(section_heading("History"));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.small_button("Clear history").on_hover_text("Clear the stored history (files stay)").clicked() {
                                     clear_history = true;
@@ -2339,6 +2407,7 @@ impl App {
                                 }
                             });
                         }
+                        });
                     });
                 });
             },
@@ -2410,7 +2479,7 @@ impl App {
         } else {
             0.0
         };
-        let size = egui::vec2(360.0, (toasts.len() as f32) * 46.0 + 12.0);
+        let size = egui::vec2(360.0, (toasts.len() as f32) * 52.0 + 12.0);
         let pos = bottom_right(ctx, size, lift);
         let mut dismiss: Option<usize> = None;
         ctx.show_viewport_immediate(
@@ -2422,28 +2491,56 @@ impl App {
                 .with_always_on_top()
                 .with_taskbar(false),
             |ctx, _class| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    for (i, t) in toasts.iter().enumerate() {
-                        ui.horizontal(|ui| {
+                // Each toast is its own rounded card (0.5.0)
+                // with a coloured accent bar for its kind; the
+                // viewport panel itself stays transparent so
+                // the cards read as floating notifications.
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        for (i, t) in toasts.iter().enumerate() {
                             let color = match t.kind {
                                 ToastKind::Success => OK_GREEN,
                                 ToastKind::Error => ACCENT,
                                 ToastKind::Info => TEXT_DIM,
                             };
-                            ui.label(egui::RichText::new("●").color(color));
-                            ui.label(truncate(&t.text, 56))
-                                .on_hover_text(t.text.clone());
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button("✕").on_hover_text("Dismiss").clicked() {
-                                        dismiss = Some(i);
-                                    }
-                                },
-                            );
-                        });
-                    }
-                });
+                            egui::Frame::NONE
+                                .fill(CARD)
+                                .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
+                                .corner_radius(RADIUS)
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .outer_margin(egui::Margin {
+                                    left: 0,
+                                    right: 0,
+                                    top: 0,
+                                    bottom: 6,
+                                })
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        // Accent bar.
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(4.0, 22.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(rect, 2.0, color);
+                                        ui.label(truncate(&t.text, 52))
+                                            .on_hover_text(t.text.clone());
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .small_button("✕")
+                                                    .on_hover_text("Dismiss")
+                                                    .clicked()
+                                                {
+                                                    dismiss = Some(i);
+                                                }
+                                            },
+                                        );
+                                    });
+                                });
+                        }
+                    });
             },
         );
         if let Some(i) = dismiss {
@@ -2473,22 +2570,25 @@ impl App {
                     open = false;
                 }
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.heading("ytTrayDL");
-                    ui.label(format!("Version {} · MIT License · by Sean Shaffer", env!("CARGO_PKG_VERSION")));
-                    ui.add_space(6.0);
-                    ui.label("ytTrayDL watches your clipboard for links yt-dlp can download. Copy a link and it either asks (with a small popup) or quietly downloads with your defaults — your choice, per domain if you like.");
-                    ui.add_space(4.0);
-                    ui.label("All downloading is done by yt-dlp; ytTrayDL is a friendly shell around it. No telemetry, no accounts, settings stay on this PC.");
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Tray icon hidden? Launch ytTrayDL again, or press Ctrl+Alt+G, and it comes back with Settings open.").color(TEXT_DIM));
+                    ui.heading(egui::RichText::new("ytTrayDL").color(TEXT));
+                    ui.label(egui::RichText::new(format!("Version {} · MIT License · by Sean Shaffer", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
                     ui.add_space(8.0);
+                    card_frame().show(ui, |ui| {
+                        ui.label("ytTrayDL watches your clipboard for links yt-dlp can download. Copy a link and it either asks (with a small popup) or quietly downloads with your defaults — your choice, per domain if you like.");
+                        ui.add_space(4.0);
+                        ui.label("All downloading is done by yt-dlp; ytTrayDL is a friendly shell around it. No telemetry, no accounts, settings stay on this PC.");
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Tray icon hidden? Launch ytTrayDL again, or press Ctrl+Alt+G, and it comes back with Settings open.").color(TEXT_DIM));
+                    });
                     ui.horizontal(|ui| {
                         if ui.button("yt-dlp on GitHub").on_hover_text("The download engine ytTrayDL drives").clicked() {
                             let _ = platform::open_url("https://github.com/yt-dlp/yt-dlp");
                         }
-                        if ui.button("Close").clicked() {
-                            close = true;
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(primary_button("Close")).on_hover_text("Close this window").clicked() {
+                                close = true;
+                            }
+                        });
                     });
                 });
             },
@@ -2518,17 +2618,19 @@ impl App {
                     open = false;
                 }
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.label(egui::RichText::new("ytTrayDL will keep running and monitoring — there just won't be an icon.").strong());
-                    ui.add_space(6.0);
-                    ui.label("To get the icon and settings back, any of these works:");
-                    ui.label("• Launch ytTrayDL again (Start menu / the .exe) — the running copy restores its icon and opens Settings.");
-                    ui.label("• Press Ctrl+Alt+G anywhere.");
-                    ui.label("• Run:  yttraydl.exe --show");
-                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("ytTrayDL will keep running and monitoring — there just won't be an icon.").strong().size(16.0).color(TEXT));
+                    ui.add_space(8.0);
+                    card_frame().show(ui, |ui| {
+                        ui.label(egui::RichText::new("To get the icon and settings back, any of these works:").strong());
+                        ui.add_space(4.0);
+                        ui.label("• Launch ytTrayDL again (Start menu / the .exe) — the running copy restores its icon and opens Settings.");
+                        ui.label("• Press Ctrl+Alt+G anywhere.");
+                        ui.label("• Run:  yttraydl.exe --show");
+                    });
                     ui.label(egui::RichText::new("Downloads and clipboard monitoring are not affected.").color(TEXT_DIM));
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new("Hide the icon").fill(ACCENT_DARK)).on_hover_text("Hide the tray icon now").clicked() {
+                        if ui.add(primary_button("Hide the icon")).on_hover_text("Hide the tray icon now").clicked() {
                             hide = true;
                         }
                         if ui.button("Keep the icon").on_hover_text("Cancel — keep the tray icon visible").clicked() {
@@ -2583,15 +2685,13 @@ impl App {
                         egui::RichText::new(
                             "ytTrayDL keeps watching your clipboard unless you exit.",
                         )
-                        .strong(),
+                        .strong()
+                        .size(16.0)
+                        .color(TEXT),
                     );
                     ui.add_space(8.0);
                     if ui
-                        .add(
-                            egui::Button::new("Exit ytTrayDL")
-                                .fill(ACCENT_DARK)
-                                .min_size(egui::vec2(200.0, 0.0)),
-                        )
+                        .add(primary_button("Exit ytTrayDL").min_size(egui::vec2(300.0, 28.0)))
                         .on_hover_text("Quit completely — clipboard monitoring stops")
                         .clicked()
                     {
@@ -2604,7 +2704,7 @@ impl App {
                     );
                     ui.add_space(4.0);
                     if ui
-                        .button("Minimize to tray")
+                        .add(egui::Button::new("Minimize to tray").min_size(egui::vec2(300.0, 28.0)))
                         .on_hover_text("Close the window; the tray icon stays for one-click reopening")
                         .clicked()
                     {
@@ -2617,7 +2717,7 @@ impl App {
                     );
                     ui.add_space(4.0);
                     if ui
-                        .button("Minimize to taskbar")
+                        .add(egui::Button::new("Minimize to taskbar").min_size(egui::vec2(300.0, 28.0)))
                         .on_hover_text("Keep the window, minimized to the taskbar like a normal app")
                         .clicked()
                     {
@@ -2630,7 +2730,7 @@ impl App {
                     );
                     ui.add_space(4.0);
                     if ui
-                        .button("Hide entirely — keep running in the background")
+                        .add(egui::Button::new("Hide entirely — keep running in the background").min_size(egui::vec2(300.0, 28.0)))
                         .on_hover_text("No window, no tray icon. Ctrl+Alt+G or relaunching brings ytTrayDL back")
                         .clicked()
                     {

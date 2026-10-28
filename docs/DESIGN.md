@@ -371,6 +371,94 @@ Field-driven (eleventh field report, on v0.5.0):
   the tray icon itself, not a menu item, and has worked in
   the field since 0.2.7; a judgment call, recorded here.
 
+## 0.6.0 premium polish pass
+
+Visual only — no behaviour, settings, or argument changes,
+and the 0.5.1 width budgets + hard panel clip are untouched
+in behaviour (the panel body moved into an inset child of a
+now margin-free root frame so the band and footer bar can
+run full-bleed; every row still budgets from
+`available_width` exactly as in 0.5.1). Built to the
+approved mockups in `mockups-v060/` (kept local, not
+shipped). The system:
+
+- **Depth.** Two new surface tokens: raised `CARD2`
+  (#1E1E1F) for controls sitting on cards, recessed `WELL`
+  (#0B0B0C) for inset areas (text fields via
+  `extreme_bg_color`, the engine well, the segmented track,
+  the footer bar). Cards keep a real `Frame` shadow and gain
+  a painter-drawn 1px top highlight (`premium_card` /
+  `paint_top_highlight`); wells get the inverse — a dark
+  inset line at the top (`premium_well`).
+- **Gradients.** egui has no gradient fill, so
+  `paint_vertical_gradient` draws horizontal strips clipped
+  by the corner circles. It powers the panel header band
+  (near-black → deep-red tint, full-bleed), the primary
+  buttons (light accent → deep red, pill-shaped, with a
+  nested-rect fake glow in deep red — egui's painter has no
+  blur), the selected Settings segment, and the selected
+  format chip (darker pair + accent outline). Primary
+  buttons are a custom `GradientButton` widget so every
+  0.5.0 call site (add / add_enabled / add_sized /
+  min_size) is unchanged; interaction is the stock
+  `Sense::click` path.
+- **Panel.** Gradient band with a drawn logo tile; status
+  pill recoloured for the band; ENGINE micro-label over the
+  engine well (dot + item + faint right-aligned note rows);
+  Monitoring / Auto-download are painter-drawn switches
+  (`switch`, 36×20, white knob); the Settings / Downloads /
+  Download-folder trio are custom buttons with drawn line
+  icons (gear / download / folder — `paint_icon`), labels
+  truncate inside the same 0.5.1 fixed shares; the link
+  field paints an accent focus ring + deep-red outer glow
+  while focused; Recent entries are mini cards with a
+  gradient thumbnail tile + play triangle and a two-line
+  text block (title + host · quality · time — history
+  records no uploader/duration, so the mockup's meta line
+  is built from what history has); the footer buttons keep
+  their 0.5.1 fixed sizes inside the recessed bar.
+- **Popup.** Hero layout (430 wide, height computed from
+  the sections shown): full-width thumbnail, centre-cropped
+  to the hero aspect at decode time (`process_thumbs`) so
+  the exact-fit paint does not distort; source chip,
+  duration chip, and a painted play badge over it (or the
+  mockup's gradient placeholder before the thumbnail
+  lands). Two-line wrapped title in a clipped fixed zone;
+  channel row with an initial avatar + the old meta facts.
+  The quality combo box is now chips for all 15 presets
+  (compact labels, full label on hover, wrapping rows are
+  counted when sizing the window); the playlist choice is
+  chips too. Actions follow the mockup's order (Download,
+  Later, Not now, Ignore) at 36px tall.
+- **Settings.** Segmented tab bar on a recessed track
+  (selected = gradient, `settings_tab_bar`); the General
+  tab's Default action is a two-way segmented control with
+  the old radio tooltips on the segments; clipboard / tray
+  / startup toggles are switches (the tray-icon switch
+  keeps the checkbox's confirm-first semantics exactly);
+  section headings are micro-labels (small, strong,
+  uppercase — egui has no letter-spacing API, so the
+  mockups' letterspaced headings are approximated by case,
+  size and weight). Sliders: 4px rail and accent trail from
+  the theme, the editable value box replaced by a value
+  chip, and the thumb painted white at the exact position
+  the vendored slider code computes (`slider_with_chip`;
+  egui exposes no thumb colour).
+- **Everywhere else.** Downloads cards, toasts (with a
+  Frame shadow), About and the dialogs use the same
+  `premium_card`, gradient primaries, and theme: control
+  rest fill is CARD2, hairlines are #2B2B2C, and the
+  selection colour is the bright accent — which also makes
+  progress bars and slider trails bright red.
+- **Known limits.** No blur exists in egui's painter, so
+  shadows/glows are nested-alpha approximations (cards use
+  the real `Frame` shadow where a frame exists); stock
+  buttons/checkboxes can't take a painted top highlight, so
+  that cue lives on cards, chips, segments and the custom
+  buttons; the segmented labels and headings approximate
+  letter-spacing as described above. All of it is
+  **Unverified** on-machine until a real Windows run.
+
 ## Verification matrix
 
 | Area | State | Evidence |
@@ -389,6 +477,7 @@ Field-driven (eleventh field report, on v0.5.0):
 | Tenth field report (2026-10-23) | v0.4.1 fix **Verified** | SEAN ran 0.4.1 and confirmed "all good" — restoring from the tray after closing with Settings open now returns a working window; the settings-close-first fix is field-verified |
 | Eleventh field report (2026-10-27) | Panel right-edge clipping + tray autostart exit on v0.5.0 | SEAN's captures of the real v0.5.0 install: at launch the status pill and the manual-link Download button run off the panel's right edge and the footer Exit button truncates; after a resize Exit still clips and a Recent row's folder button sits half off the edge; with the Settings drawer open, panel content paints under the drawer. The status dots also render as hollow squares (the ● character, U+25CF, is missing from egui's default font). Separately: unticking "Start with Windows" in the tray menu exits the program — prime suspect is the handler calling set_checked on the muda item inside muda's own dispatch (the RefCell-borrowed panic class proven in the eighth report); mechanism not yet proven, so the 0.5.1 autostart branch logs every step (current → target, registry done, settings saved) to pinpoint it if it recurs. 0.5.1: Settings is its own window (drawer machinery removed), panel rows are width-budgeted with a hard clip at the panel rect, dots are painted circles, and tray checkmarks are owned by sync_tray in app context. Fix **Unverified** until SEAN's next run |
 | 0.5.0 polish pass (theme, panel, settings, popup, downloads, toasts, dialogs) | **Partially verified** on-machine (rendering) | Theme/layout code compiles and passes the full gate on the build VM; egui style values were checked against the vendored egui 0.33.3 source. SEAN's 2026-10-27 captures of a real v0.5.0 install show the new look rendering (panel, cards, pill tabs, primary buttons) — and found the right-edge clipping defect fixed in 0.5.1 (eleventh field report) |
+| 0.6.0 premium polish pass (depth system, gradient band + primary buttons, hero popup, segmented Settings, chips, switches) | **Unverified** on-machine | Code compiles and passes the full gate on the build VM; custom-painted pieces (gradient strips, slider thumb overlay, chip/segment geometry) were derived from the vendored egui 0.33.3 source. No Windows run yet — the premium rendering, the popup's computed height against real video info, and the white-thumb overlay alignment all need SEAN's machine |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
 | Eighth field report (2026-10-23) | "Everything works fine" on 0.2.7, with full log | FIELD-CONFIRMED: sends=drained (29/29, 38/38), heartbeats continue across tray interactions, left-click OS restore fires (`show_main_window -> true`), handler-direct Exit executes. Two findings in the same log: (1) the exit path PANICKED — `muda windows mod.rs:122: RefCell already borrowed`, then "panic in a function that cannot unwind" — because the handler dropped the tray handles (muda objects) inside muda's own menu dispatch, which holds that RefCell; the process aborted mid-drop, which still read as "exited" to the user. (2) Menu-ID correction: the handler log proves MenuId 1011 = **Exit** (the 0.2.7 handler names it from the stored ids) — the sixth/seventh reports' arithmetic inference (1011 = Hide icon) was wrong; in 0.2.5 SEAN was clicking Exit ×3 + one other item. Code never relied on the arithmetic (ids are captured from the item objects), only the report narrative did. 0.2.8: Exit routes through the app's graceful shutdown (event forwarded) + a 750 ms forced-exit fallback thread; nothing is dropped inside the dispatch. SEAN-requested in the same report: single left-click toggles the window — `platform::toggle_main_window` (reads real OS visibility; SW_HIDE/SW_SHOW+foreground), handler sends `TrayUiEvent::WindowToggled(visible)` which the app adopts as `show_panel`; 350 ms debounce because Windows delivers a second Up for double-clicks (visible in this very log), which would toggle twice. |
 | In-app ffmpeg install (0.2.0) | **Unverified** on-machine | Download/unpack logic mirrors the yt-dlp installer (curl.exe + tar.exe, both in-box); the archive-layout finder `find_ffmpeg_exes` and the managed `--ffmpeg-location` wiring are unit-tested. Needs a real click-through. |

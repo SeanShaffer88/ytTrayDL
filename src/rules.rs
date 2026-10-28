@@ -11,7 +11,7 @@
 //! 6. The global default action                      → Prompt / AutoDownload
 
 use crate::settings::{domain_matches, DefaultAction, DetectionScope, Preset, Settings};
-use crate::url_detect::{host_of, is_known_site, normalize_url};
+use crate::url_detect::{host_of, is_known_site, normalized_url_eq};
 
 /// The per-domain quality pin for a URL, if one applies
 /// (Settings → Domains & rules → Quality by domain). Used as
@@ -56,11 +56,14 @@ impl IgnoreReason {
 }
 
 pub fn decide(url: &str, settings: &Settings, already_downloaded: bool) -> Decision {
-    let normalized = normalize_url(url);
+    // Canonical-URL equality without allocating (perf): this
+    // used to run a full `normalize_url` (several heap strings)
+    // for the input AND for every stored ignored URL, on every
+    // detected link.
     if settings
         .ignored_urls
         .iter()
-        .any(|u| normalize_url(u) == normalized)
+        .any(|u| normalized_url_eq(u, url))
     {
         return Decision::Ignore(IgnoreReason::IgnoredUrl);
     }
@@ -229,5 +232,27 @@ mod tests {
             decide("https://youtu.be/never#frag", &s, false),
             Decision::Ignore(IgnoreReason::IgnoredUrl)
         );
+    }
+
+    #[test]
+    fn ignored_url_matching_is_canonical() {
+        // A stored rule in non-canonical spelling (uppercase
+        // scheme/host, default port, fragment) still matches —
+        // the allocation-free equality in `decide` must behave
+        // exactly like the old normalize-both-sides comparison.
+        let mut s = settings();
+        s.ignored_urls = vec![
+            "https://vimeo.com/123".into(),
+            "HTTPS://YOUTU.BE:443/never#t=1".into(),
+        ];
+        assert_eq!(
+            decide("https://youtu.be/never", &s, false),
+            Decision::Ignore(IgnoreReason::IgnoredUrl)
+        );
+        assert_eq!(
+            decide("https://vimeo.com/123", &s, false),
+            Decision::Ignore(IgnoreReason::IgnoredUrl)
+        );
+        assert_eq!(decide("https://vimeo.com/124", &s, false), Decision::Prompt);
     }
 }

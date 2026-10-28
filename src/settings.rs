@@ -303,8 +303,10 @@ pub struct Settings {
     /// the choice dialog with a "remember" option; the choice can
     /// be changed later in Settings → General.
     pub close_action: CloseAction,
-    /// Animate the Settings drawer sliding open/closed. When
-    /// false, the drawer (and the window resize) is instant.
+    /// Legacy field, kept only so existing settings.json files
+    /// keep loading unchanged: it animated the Settings drawer
+    /// slide in 0.2.1–0.5.0. Since 0.5.1 Settings is its
+    /// own window and nothing reads this.
     pub animate_settings_drawer: bool,
 
     // --- Domain rules (host names, lowercase, no scheme) ---

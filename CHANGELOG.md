@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.1 — 2026-10-27
+
+- **Settings opens in its own window.** Settings no longer
+  slides out from the side of the main window; it opens as a
+  separate window, like Downloads and About.
+- **Control panel clipping fixed.** At the default and
+  minimum window widths the status pill, the manual-link
+  Download button, the Recent list and the footer buttons
+  could run past the window's right edge; every row now
+  stays inside the window.
+- **Status dots render correctly.** The status dots in the
+  panel, Recent list and Downloads history showed as hollow
+  squares; they are now drawn as filled circles.
+- **Tray Start with Windows fix.** Unticking "Start with
+  Windows" in the tray menu could close the program; the
+  tray toggles no longer change menu checkmarks from inside
+  the menu's own event handling.
+
+
 ## 0.5.0 — 2026-10-27
 
 - **Visual polish pass — no behaviour changes.** Every window

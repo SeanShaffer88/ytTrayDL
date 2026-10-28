@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.0 — 2026-10-27
+
+- **Premium visual pass — no behaviour changes.** A second
+  design layer over 0.5.0: raised cards with a light top
+  edge and soft shadow, recessed wells for inset areas, and
+  gradient accents throughout, in the same black/red look.
+- **Control panel.** A gradient header band (near-black
+  shading into a deep-red tint) carries the logo tile, title
+  and status pill; the yt-dlp/ffmpeg status sits in a
+  recessed "Engine" well; the Monitoring / Auto-download
+  checkboxes are now toggle switches; the Settings /
+  Downloads / Download folder buttons use drawn line icons;
+  the link field shows an accent focus ring; Recent entries
+  are cards with a thumbnail tile and a second info line;
+  the footer is a recessed bar.
+- **Download popup.** A full-width hero thumbnail with
+  rounded corners, a source chip, a duration chip and a play
+  badge; a two-line title; a channel row; and the quality
+  choices as selectable chips (selected = deep red) instead
+  of a drop-down list. The playlist choice uses chips too.
+- **Settings.** The tab bar is a segmented control on a
+  recessed track with the selected tab filled in red; the
+  clipboard / tray / startup toggles are switches; the
+  Default action is a segmented choice; sliders have a thin
+  track, a white thumb, and their value in a chip ("30 s",
+  "300 s").
+- **Downloads, toasts, dialogs.** The same depth and
+  gradient language: cards with light top edges and shadows,
+  gradient primary buttons, brighter red progress bars.
+
 ## 0.5.1 — 2026-10-27
 
 - **Settings opens in its own window.** Settings no longer

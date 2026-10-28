@@ -628,12 +628,39 @@ pub fn normalize_domain(input: &str) -> String {
 /// Does `host` match a domain rule? A rule matches the host itself or
 /// any subdomain of it (`youtube.com` matches `music.youtube.com`).
 pub fn domain_matches(host: &str, rule: &str) -> bool {
+    // Fast path (perf): the rules engine calls this for every
+    // rule on every detected link. Rules stored in Settings were
+    // normalized when the settings loaded, and hosts come from
+    // `host_of` already lowercase — that common case needs no
+    // allocation at all. Anything else (hand-typed rules, mixed
+    // case) takes the original normalizing path below.
+    if is_normalized_domain(rule)
+        && host.is_ascii()
+        && !host.bytes().any(|b| b.is_ascii_uppercase())
+    {
+        return crate::url_detect::ends_with_domain(host, rule);
+    }
     let host = host.to_lowercase();
     let rule = normalize_domain(rule);
     if rule.is_empty() {
         return false;
     }
-    host == rule || host.ends_with(&format!(".{rule}"))
+    crate::url_detect::ends_with_domain(&host, &rule)
+}
+
+/// Is `rule` already in the exact form `normalize_domain` would
+/// return? True only when every step of `normalize_domain` is
+/// provably a no-op: nothing to trim or lowercase (bytes are
+/// lowercase letters, digits, `-`, `.` only), no scheme, port,
+/// path or decoration to strip, and no leading/trailing dot for
+/// its prefix/suffix trims to remove.
+fn is_normalized_domain(rule: &str) -> bool {
+    !rule.is_empty()
+        && !rule.starts_with('.')
+        && !rule.ends_with('.')
+        && rule
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
 }
 
 #[cfg(test)]
@@ -687,6 +714,27 @@ mod tests {
         assert!(domain_matches("youtube.com", "youtube.com"));
         assert!(!domain_matches("notyoutube.com", "youtube.com"));
         assert!(!domain_matches("youtube.com.evil.example", "youtube.com"));
+    }
+
+    #[test]
+    fn domain_matching_unnormalized_inputs_still_work() {
+        // The allocation-free fast path must never change a
+        // result: hand-typed rules (mixed case, decoration,
+        // ports) and mixed-case hosts take the normalizing path
+        // and behave exactly as before.
+        assert!(domain_matches("music.youtube.com", "YouTube.com"));
+        assert!(domain_matches("music.youtube.com", "*.youtube.com"));
+        assert!(domain_matches(
+            "music.youtube.com",
+            " HTTPS://YouTube.com/watch "
+        ));
+        assert!(domain_matches("youtube.com", "youtube.com:443"));
+        assert!(domain_matches("Music.YouTube.com", "youtube.com"));
+        assert!(domain_matches("youtube.com", ".youtube.com."));
+        assert!(!domain_matches("youtube.com", ""));
+        assert!(!domain_matches("youtube.com", "."));
+        assert!(!domain_matches("music.youtube.com", "tube.com"));
+        assert!(!domain_matches("youtube.com", "youtube.com.evil.example"));
     }
 
     #[test]

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.1 — 2026-10-27
+
+- **Performance improvements — no behaviour changes.**
+  Everything works exactly as in 0.6.0; the work is under
+  the hood.
+- **Faster link detection.** Checking a copied link against
+  the known sites and your domain rules no longer builds
+  throwaway text for every comparison, so the
+  pop-up-or-download decision comes back several times
+  faster.
+- **Less work while downloading.** Progress updates are
+  now only passed to the window when a displayed value
+  actually changes, instead of on every line of yt-dlp
+  output.
+- **Lighter idle tray upkeep.** The tray icon's tooltip
+  and menu ticks are now only updated when they change,
+  and the start-with-Windows registry check runs once a
+  second instead of on every screen refresh.
+
 ## 0.6.0 — 2026-10-27
 
 - **Premium visual pass — no behaviour changes.** A second

@@ -1460,6 +1460,25 @@ pub struct App {
     /// `handle_tray_menu_direct`).
     #[cfg_attr(not(windows), allow(dead_code))]
     tray_autostart_checked: Option<bool>,
+    /// Last tooltip text + Monitoring/Auto checkmarks pushed by
+    /// `sync_tray` (perf): muda setters reach Win32 on every
+    /// call and `sync_tray` runs on every update pass (~5/s), so
+    /// it pushes only on change, like the pause-all label and
+    /// the autostart checkmark already did. `None` = not pushed.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    tray_tooltip_sent: Option<String>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    tray_monitoring_checked: Option<bool>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    tray_auto_checked: Option<bool>,
+    /// When the autostart registry value was last read by
+    /// `sync_tray` (perf): the registry is the source of truth
+    /// for that checkmark, but re-reading it on every 200 ms
+    /// pass is waste — a 1 s cadence (the same as the settings
+    /// file watch) keeps the checkmark just as current to a
+    /// human eye.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    last_autostart_poll: Instant,
     pub show_downloads: bool,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
@@ -1575,6 +1594,10 @@ impl App {
             show_panel: false,
             show_settings: false,
             tray_autostart_checked: None,
+            tray_tooltip_sent: None,
+            tray_monitoring_checked: None,
+            tray_auto_checked: None,
+            last_autostart_poll: Instant::now(),
             show_downloads: false,
             show_about: false,
             confirm_hide_icon: false,
@@ -2896,22 +2919,47 @@ impl App {
                 });
             });
         }
-        with_tray_handles(|t| {
-            t._tray.set_tooltip(Some(self.downloads.summary())).ok();
-            t.monitoring.set_checked(self.settings.monitoring_enabled);
-            t.auto_mode
-                .set_checked(self.settings.default_action == DefaultAction::AutoDownload);
-        });
+        // Tooltip + Monitoring/Auto checkmarks (perf): push
+        // only on change — the muda setters issue Win32 calls
+        // every time, and this runs on every update pass.
+        let summary = self.downloads.summary();
+        if self.tray_tooltip_sent.as_deref() != Some(summary.as_str()) {
+            self.tray_tooltip_sent = Some(summary);
+            let tip = self.tray_tooltip_sent.clone();
+            with_tray_handles(|t| {
+                t._tray.set_tooltip(tip.as_deref()).ok();
+            });
+        }
+        let monitoring = self.settings.monitoring_enabled;
+        if self.tray_monitoring_checked != Some(monitoring) {
+            self.tray_monitoring_checked = Some(monitoring);
+            with_tray_handles(|t| t.monitoring.set_checked(monitoring));
+        }
+        let auto = self.settings.default_action == DefaultAction::AutoDownload;
+        if self.tray_auto_checked != Some(auto) {
+            self.tray_auto_checked = Some(auto);
+            with_tray_handles(|t| t.auto_mode.set_checked(auto));
+        }
         // Autostart checkmark (0.5.1): owned here, in app
         // context, never in the tray handler (see
         // handle_tray_menu_direct). Read back from the registry
         // (the source of truth) and pushed only on change, so
         // a handler-side toggle shows up within a pass or two
         // once the app adopts the handler's settings save.
-        let autostart_now = platform::Platform::autostart_enabled();
-        if self.tray_autostart_checked != Some(autostart_now) {
-            self.tray_autostart_checked = Some(autostart_now);
-            with_tray_handles(|t| t.autostart.set_checked(autostart_now));
+        // The registry read itself is throttled to a 1 s cadence
+        // (perf) — the only writers of that value are this app's
+        // own handler and Settings window, and the app adopts
+        // handler changes via the settings-file watch on the
+        // same 1 s cadence.
+        if self.tray_autostart_checked.is_none()
+            || self.last_autostart_poll.elapsed() >= Duration::from_secs(1)
+        {
+            self.last_autostart_poll = Instant::now();
+            let autostart_now = platform::Platform::autostart_enabled();
+            if self.tray_autostart_checked != Some(autostart_now) {
+                self.tray_autostart_checked = Some(autostart_now);
+                with_tray_handles(|t| t.autostart.set_checked(autostart_now));
+            }
         }
     }
 }

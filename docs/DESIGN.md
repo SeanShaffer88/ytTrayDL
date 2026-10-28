@@ -321,6 +321,56 @@ instead of only swapping colours onto egui's defaults:
   polish is limited to what egui 0.33's style system can
   express.
 
+## 0.5.1 fixes
+
+Field-driven (eleventh field report, on v0.5.0):
+
+- **Settings is its own window again.** The slide-out drawer
+  (0.2.1–0.5.0) is removed: `settings_ui` renders a separate
+  viewport (600×640 default, 480×420 minimum), built like
+  Downloads/About and reusing the same tab content functions
+  and 0.5.0 styling. The drawer animation, the window
+  grow/shrink resize, and the 0.4.1 deferred panel hide are
+  gone with it; `begin_panel_hide` is direct again and also
+  closes the Settings window so nothing floats alone while
+  the app sits in the tray. The `animate_settings_drawer`
+  settings field remains in the file format, unused, and
+  its Settings row is removed.
+- **Panel width budgets.** The status pill truncates its
+  suffix inside the pill (full line on hover); the
+  manual-link row reserves its Download button first and
+  subtracts the text field's frame margin (egui's TextEdit
+  outer width is desired_width + margin — the 0.5.0 budget
+  missed it, and treated the button's min_size as its
+  width); the Settings/Downloads/Download-folder buttons
+  and the footer buttons get explicit sizes with truncating
+  labels; Recent rows budget the title before the folder
+  button instead of placing the button with a
+  right-to-left sub-layout first (which claimed the whole
+  row, starved the title, and landed the button on the
+  panel's extreme edge). The panel also clips at its own
+  content rect, so any residual overflow is cut at the
+  panel edge. The budgets hold at the 400px default and
+  the 340px minimum width.
+- **Painted status dots.** The ● character (U+25CF) is
+  not in egui's default font and rendered as a hollow
+  square; status dots (panel pill, Recent rows, Downloads
+  history) are now painted filled circles (`status_dot`).
+- **Tray toggles no longer mutate muda in-dispatch.** The
+  tray handlers keep their settings-file/registry work but
+  no longer call `set_checked` inside muda's menu dispatch
+  (the RefCell-borrowed panic class proven in the eighth
+  report; prime suspect — not yet proven — for the tray
+  "Start with Windows" untick exiting the program).
+  `sync_tray`, in app context, owns all three checkmarks:
+  monitoring and auto-download follow the live settings,
+  autostart is read back from the registry and pushed only
+  on change. The autostart handler branch logs each step
+  so a recurrence is pinpointed by the log. The hide-icon
+  branch keeps its in-handler `set_visible` — it mutates
+  the tray icon itself, not a menu item, and has worked in
+  the field since 0.2.7; a judgment call, recorded here.
+
 ## Verification matrix
 
 | Area | State | Evidence |
@@ -337,7 +387,8 @@ instead of only swapping colours onto egui's defaults:
 | 0.4.0 feature set | Logic verified; UI **Partially verified** on-machine (rendering) | Arg tests cover subtitles-only, audio-convert formats, split-chapters and the output-dir override; unit tests cover playlist-entry parsing and the watcher's baseline/new-entry diffing. SEAN's 2026-10-23 captures of a real 0.4.0 run show the panel and all four Settings tabs rendering with the new controls present (animation toggle + queue-empty action; split chapters + disk guard + post-download command; channel watcher editor; quality-by-domain) and the hide-icon dialog. The behaviours themselves — watcher end-to-end, popup thumbnail, per-download folder, saved list, failure banner, queue-empty actions, disk guard, post-download command, portable mode — still need a real-machine pass |
 | Ninth field report (2026-10-23) | Blank window on restore from tray (0.4.0) | SEAN ran 0.4.0 (captures above; a completed download sits in Recent, ffmpeg found, managed yt-dlp 2026.08.19). Closing the window to the tray with the Settings drawer open, then restoring, showed a blank window. Cause: the close paths reset the drawer state and hid the window in the same frame — the OS window kept its drawer-open width while hidden and the shrink-back resize never ran. 0.4.1 routes every panel hide through `begin_panel_hide` (drawer closes fully first, then the hide lands) |
 | Tenth field report (2026-10-23) | v0.4.1 fix **Verified** | SEAN ran 0.4.1 and confirmed "all good" — restoring from the tray after closing with Settings open now returns a working window; the settings-close-first fix is field-verified |
-| 0.5.0 polish pass (theme, panel, settings, popup, downloads, toasts, dialogs) | **Unverified** on-machine | Theme/layout code compiles and passes the full gate on the build VM; egui style values were checked against the vendored egui 0.33.3 source. No Windows run has seen the new look yet — visual confirmation needs a real-machine run and fresh screenshots |
+| Eleventh field report (2026-10-27) | Panel right-edge clipping + tray autostart exit on v0.5.0 | SEAN's captures of the real v0.5.0 install: at launch the status pill and the manual-link Download button run off the panel's right edge and the footer Exit button truncates; after a resize Exit still clips and a Recent row's folder button sits half off the edge; with the Settings drawer open, panel content paints under the drawer. The status dots also render as hollow squares (the ● character, U+25CF, is missing from egui's default font). Separately: unticking "Start with Windows" in the tray menu exits the program — prime suspect is the handler calling set_checked on the muda item inside muda's own dispatch (the RefCell-borrowed panic class proven in the eighth report); mechanism not yet proven, so the 0.5.1 autostart branch logs every step (current → target, registry done, settings saved) to pinpoint it if it recurs. 0.5.1: Settings is its own window (drawer machinery removed), panel rows are width-budgeted with a hard clip at the panel rect, dots are painted circles, and tray checkmarks are owned by sync_tray in app context. Fix **Unverified** until SEAN's next run |
+| 0.5.0 polish pass (theme, panel, settings, popup, downloads, toasts, dialogs) | **Partially verified** on-machine (rendering) | Theme/layout code compiles and passes the full gate on the build VM; egui style values were checked against the vendored egui 0.33.3 source. SEAN's 2026-10-27 captures of a real v0.5.0 install show the new look rendering (panel, cards, pill tabs, primary buttons) — and found the right-edge clipping defect fixed in 0.5.1 (eleventh field report) |
 | Whole-crate compile, Windows target | Partially verified | `cargo check/clippy --target x86_64-pc-windows-msvc` + Windows CI |
 | Eighth field report (2026-10-23) | "Everything works fine" on 0.2.7, with full log | FIELD-CONFIRMED: sends=drained (29/29, 38/38), heartbeats continue across tray interactions, left-click OS restore fires (`show_main_window -> true`), handler-direct Exit executes. Two findings in the same log: (1) the exit path PANICKED — `muda windows mod.rs:122: RefCell already borrowed`, then "panic in a function that cannot unwind" — because the handler dropped the tray handles (muda objects) inside muda's own menu dispatch, which holds that RefCell; the process aborted mid-drop, which still read as "exited" to the user. (2) Menu-ID correction: the handler log proves MenuId 1011 = **Exit** (the 0.2.7 handler names it from the stored ids) — the sixth/seventh reports' arithmetic inference (1011 = Hide icon) was wrong; in 0.2.5 SEAN was clicking Exit ×3 + one other item. Code never relied on the arithmetic (ids are captured from the item objects), only the report narrative did. 0.2.8: Exit routes through the app's graceful shutdown (event forwarded) + a 750 ms forced-exit fallback thread; nothing is dropped inside the dispatch. SEAN-requested in the same report: single left-click toggles the window — `platform::toggle_main_window` (reads real OS visibility; SW_HIDE/SW_SHOW+foreground), handler sends `TrayUiEvent::WindowToggled(visible)` which the app adopts as `show_panel`; 350 ms debounce because Windows delivers a second Up for double-clicks (visible in this very log), which would toggle twice. |
 | In-app ffmpeg install (0.2.0) | **Unverified** on-machine | Download/unpack logic mirrors the yt-dlp installer (curl.exe + tar.exe, both in-box); the archive-layout finder `find_ffmpeg_exes` and the managed `--ffmpeg-location` wiring are unit-tested. Needs a real click-through. |

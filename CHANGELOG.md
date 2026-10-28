@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0 — 2026-10-27
+
+- **Visual polish pass — no behaviour changes.** Every window
+  (control panel, download popup, Settings, Downloads, toasts,
+  About, and the confirmation dialogs) now uses one design
+  system: rounded corners, a consistent spacing grid, larger
+  and clearer type, and styled buttons, checkboxes, sliders,
+  dropdowns, scrollbars and progress bars in the existing
+  black/red look.
+- **Control panel.** The monitoring status is now a pill with
+  a coloured dot; the yt-dlp/ffmpeg status sits in a card;
+  recent downloads truncate cleanly with the full title on
+  hover; the Hide tray icon / Exit footer is pinned to the
+  bottom of the window behind a divider.
+- **Settings.** Each section is a card with its own heading,
+  the tab bar uses filled pills for the active tab, and
+  slider rows line up in columns — fixed-width label, slider,
+  and a value with a unit ("30 s", "300 s").
+- **Popup.** A larger title, a thumbnail with rounded
+  corners, aligned Quality / Save to rows, and a bright red
+  Download button as the clear primary action.
+- **64-bit only.** Releases are 64-bit (x64) only from this
+  version; there are no 32-bit (x86) builds.
+- **Downloads, toasts, dialogs.** Downloads sections are
+  cards; each toast is a rounded card with a coloured accent
+  bar for its kind (green success, red error); dialog action
+  buttons share the panel's primary/secondary styling.
+
 ## 0.4.1 — 2026-10-23
 
 - **Fix: blank window after restoring from the tray.** Closing

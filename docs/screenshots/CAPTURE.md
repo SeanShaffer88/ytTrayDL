@@ -8,7 +8,13 @@ folder). Captured so far: `settings.png` and `hide-icon.png`
 `panel.png`, `settings.png`, `hide-icon.png`, plus the three
 remaining Settings tabs (`settings-downloads.png`,
 `settings-domains.png`, `settings-ytdlp.png`) — all seven are
-in the README. The list is complete: a `downloads.png`
+in the README. Refreshed from a v0.6.0 run (2026-10-27):
+`panel.png` and the four Settings captures (`settings.png`,
+`settings-downloads.png`, `settings-domains.png`,
+`settings-ytdlp.png`) — the premium design. `popup.png` and
+`hide-icon.png` still show the pre-0.6.0 design; fresh
+captures of those two are owed when convenient. The list is
+otherwise complete: a `downloads.png`
 (Downloads window) capture was dropped at SEAN's direction
 on 2026-10-23 — the Downloads window stays undocumented by
 screenshot unless he asks again.
@@ -17,7 +23,7 @@ screenshot unless he asks again.
 | --- | --- |
 | `panel.png` | The main window on its own (Settings closed), default size, showing the yt-dlp/ffmpeg status lines. Bonus: one recent download in the activity area. |
 | `popup.png` | The "Link detected" popup right after copying a real video link, once the title/uploader/duration have filled in. |
-| `settings.png` | The main window with the Settings drawer fully slid out, General tab visible. |
+| `settings.png` | The Settings window (its own window since 0.5.1), General tab visible. |
 | `settings-downloads.png` | The same window, Downloads tab visible. |
 | `settings-domains.png` | The same window, Domains & rules tab visible. |
 | `settings-ytdlp.png` | The same window, yt-dlp tab visible. |

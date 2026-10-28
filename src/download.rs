@@ -478,6 +478,60 @@ impl DownloadManager {
     }
 }
 
+/// The display-relevant snapshot of a job: every field the UI
+/// renders (panel rows, Downloads window, tray text, taskbar).
+/// The diagnostic tail is deliberately excluded — nothing shows
+/// a running job's tail, and the Finished event always carries
+/// the complete job. `run_job` keeps the last-sent snapshot so
+/// an `Updated` event (a full `Job` clone + channel hop, plus
+/// another clone when the UI applies it) is only paid when
+/// something shown actually changed; most yt-dlp lines —
+/// extractor chatter, repeated steady-state progress — change
+/// nothing displayed (perf).
+#[derive(PartialEq)]
+struct DisplayState {
+    state: JobState,
+    percent: f32,
+    title: String,
+    size_text: Option<String>,
+    speed_text: Option<String>,
+    eta_text: Option<String>,
+    final_file: Option<PathBuf>,
+    error: Option<String>,
+    already_downloaded: bool,
+}
+
+impl DisplayState {
+    fn of(job: &Job) -> Self {
+        Self {
+            state: job.state,
+            percent: job.percent,
+            title: job.title.clone(),
+            size_text: job.size_text.clone(),
+            speed_text: job.speed_text.clone(),
+            eta_text: job.eta_text.clone(),
+            final_file: job.final_file.clone(),
+            error: job.error.clone(),
+            already_downloaded: job.already_downloaded,
+        }
+    }
+
+    /// Field-by-field compare against a live job — no allocation,
+    /// so the per-line check costs a few short string compares
+    /// instead of a full `Job` clone.
+    fn differs_from(&self, job: &Job) -> bool {
+        self.state != job.state
+            || self.percent != job.percent
+            || self.title != job.title
+            || self.size_text != job.size_text
+            || self.speed_text != job.speed_text
+            || self.eta_text != job.eta_text
+            || self.final_file != job.final_file
+            || self.error != job.error
+            || self.already_downloaded != job.already_downloaded
+    }
+}
+
 fn run_job(
     bin: PathBuf,
     args: Vec<String>,
@@ -486,10 +540,6 @@ fn run_job(
     pause: Arc<AtomicBool>,
     tx: Sender<DownloadEvent>,
 ) {
-    let send_update = |job: &Job| {
-        let _ = tx.send(DownloadEvent::Updated(job.clone()));
-    };
-
     let spawned = Command::new(&bin)
         .args(&args)
         .stdout(Stdio::piped())
@@ -536,6 +586,11 @@ fn run_job(
     drop(line_tx);
 
     let mut last_destination: Option<PathBuf> = None;
+    // The display state the UI last received for this job; the
+    // pump created the UI's copy from this same initial job, so
+    // it starts out in sync and `None` forces a first send only
+    // if a line changes something before any send happened.
+    let mut last_sent: Option<DisplayState> = None;
     loop {
         if cancel.load(Ordering::SeqCst) {
             let _ = child.kill();
@@ -615,9 +670,19 @@ fn run_job(
                 if job.tail_lines.len() > 30 {
                     job.tail_lines.remove(0);
                 }
-                let snap = job.clone();
-                drop(job);
-                send_update(&snap);
+                // Send an Updated event only when a displayed
+                // field moved (see DisplayState); all other
+                // lines are absorbed into the shared job, whose
+                // complete state ships with the Finished event.
+                if last_sent
+                    .as_ref()
+                    .map_or(true, |prev| prev.differs_from(&job))
+                {
+                    last_sent = Some(DisplayState::of(&job));
+                    let snap = job.clone();
+                    drop(job);
+                    let _ = tx.send(DownloadEvent::Updated(snap));
+                }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -832,6 +897,54 @@ mod tests {
             .finished_jobs()
             .iter()
             .all(|j| j.state == JobState::Cancelled));
+    }
+
+    #[test]
+    fn display_state_tracks_only_displayed_fields() {
+        // The Updated-event gate: a line that changes nothing
+        // the UI shows (only the diagnostic tail grows) must not
+        // count as a change; any displayed field moving must.
+        let job = Job {
+            id: 1,
+            url: "https://youtu.be/x".into(),
+            title: "t".into(),
+            preset: Preset::Best,
+            state: JobState::Running,
+            percent: 42.0,
+            size_text: Some("10MiB".into()),
+            speed_text: Some("1MiB/s".into()),
+            eta_text: Some("00:09".into()),
+            final_file: None,
+            already_downloaded: false,
+            use_archive: true,
+            attempts: 0,
+            playlist_all: None,
+            output_dir: None,
+            error: None,
+            tail_lines: vec!["line".into()],
+        };
+        let sent = DisplayState::of(&job);
+        assert!(!sent.differs_from(&job));
+
+        let mut tail_only = job.clone();
+        tail_only.tail_lines.push("another line".into());
+        assert!(!sent.differs_from(&tail_only));
+
+        let mut moved = job.clone();
+        moved.percent = 43.0;
+        assert!(sent.differs_from(&moved));
+
+        let mut stated = job.clone();
+        stated.state = JobState::PostProcessing;
+        assert!(sent.differs_from(&stated));
+
+        let mut errored = job.clone();
+        errored.error = Some("ERROR: boom".into());
+        assert!(sent.differs_from(&errored));
+
+        let mut filed = job.clone();
+        filed.final_file = Some(PathBuf::from("C:\\Videos\\x.mp4"));
+        assert!(sent.differs_from(&filed));
     }
 
     #[test]

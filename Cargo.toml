@@ -1,8 +1,8 @@
 [package]
 name = "yttraydl"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.89"
 authors = ["Sean Shaffer"]
 description = "ytTrayDL — a quiet system-tray companion for yt-dlp. Copy a supported link and ytTrayDL offers to download it, or downloads it silently with your defaults."
 license = "MIT"
@@ -52,9 +52,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
+    "Win32_System_JobObjects",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Power",
+    "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -70,3 +73,13 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+# Regression-only executable; release builds/packaging select --bin yttraydl.
+[[bin]]
+name = "process_fixture"
+path = "tests/fixtures/process_fixture.rs"
+test = false
+bench = false
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

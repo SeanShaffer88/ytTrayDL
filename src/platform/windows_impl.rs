@@ -21,7 +21,7 @@ use windows_sys::Win32::System::DataExchange::{
     OpenClipboard, RemoveClipboardFormatListener,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
@@ -235,18 +235,7 @@ unsafe fn read_clipboard_text_with_retry() -> Option<String> {
         let result = if data.is_null() {
             None
         } else {
-            let ptr = GlobalLock(data) as *const u16;
-            if ptr.is_null() {
-                None
-            } else {
-                let mut len = 0usize;
-                while *ptr.add(len) != 0 && len < 1_000_000 {
-                    len += 1;
-                }
-                let s = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
-                GlobalUnlock(data);
-                Some(s)
-            }
+            decode_global_text(data)
         };
         CloseClipboard();
         return result;
@@ -621,6 +610,217 @@ pub fn set_taskbar_progress(frac: Option<f64>) {
             None => {
                 let _ = set_state(obj, hwnd, TBPF_NOPROGRESS);
             }
+        }
+    }
+}
+
+// The allocation remains locked throughout the bounded copy. No clipboard state
+// is modified, allowing this acquisition path to be tested with owned memory.
+unsafe fn decode_global_text(data: windows_sys::Win32::Foundation::HGLOBAL) -> Option<String> {
+    let units = super::clipboard_allocation_units(GlobalSize(data))?;
+    let ptr = GlobalLock(data) as *const u16;
+    if ptr.is_null() {
+        return None;
+    }
+    let units = std::slice::from_raw_parts(ptr, units);
+    let result = super::decode_clipboard_units(units);
+    GlobalUnlock(data);
+    result
+}
+
+/// Owns a kill-on-close job. The root is spawned suspended and resumed only
+/// after successful assignment; no child code can escape before containment.
+pub(crate) struct ProcessTree(HANDLE);
+unsafe impl Send for ProcessTree {}
+impl ProcessTree {
+    pub(crate) fn spawn(
+        command: &mut std::process::Command,
+    ) -> std::io::Result<(std::process::Child, Self)> {
+        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::JobObjects::*;
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let job = Self(handle);
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of_val(&limits) as u32,
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut child = command
+                .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
+                .spawn()?;
+            let result = if AssignProcessToJobObject(handle, child.as_raw_handle()) == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                resume_suspended_root(child.id())
+            };
+            if let Err(error) = result {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+            Ok((child, job))
+        }
+    }
+    pub(crate) fn terminate(&self) -> std::io::Result<()> {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        if unsafe { TerminateJobObject(self.0, 1) } == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            use windows_sys::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
+                    unsafe { std::mem::zeroed() };
+                if unsafe {
+                    QueryInformationJobObject(
+                        self.0,
+                        JobObjectBasicAccountingInformation,
+                        &mut accounting as *mut _ as *mut _,
+                        std::mem::size_of_val(&accounting) as u32,
+                        std::ptr::null_mut(),
+                    )
+                } == 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if accounting.ActiveProcesses == 0 {
+                    return Ok(());
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "owned process tree did not acknowledge termination",
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+}
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+unsafe fn resume_suspended_root(pid: u32) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+    let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut entry: THREADENTRY32 = std::mem::zeroed();
+    entry.dwSize = std::mem::size_of_val(&entry) as u32;
+    let mut found = Thread32First(snapshot, &mut entry);
+    let mut result = Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "suspended root thread missing",
+    ));
+    while found != 0 {
+        if entry.th32OwnerProcessID == pid {
+            let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+            if thread.is_null() {
+                result = Err(std::io::Error::last_os_error());
+            } else {
+                result = if ResumeThread(thread) == u32::MAX {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                };
+                CloseHandle(thread);
+            }
+            break;
+        }
+        found = Thread32Next(snapshot, &mut entry);
+    }
+    CloseHandle(snapshot);
+    result
+}
+
+/// Poll only our anonymous read pipe. Reading at most the bytes already
+/// available prevents synchronous ReadFile from blocking shutdown forever if
+/// native tree termination fails. The supervisor always joins these readers.
+pub(crate) fn read_owned_pipe<R: std::io::Read + std::os::windows::io::AsRawHandle>(
+    pipe: &mut R,
+    buffer: &mut [u8],
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<usize> {
+    use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA};
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(0);
+        }
+        let mut available = 0;
+        if unsafe {
+            PeekNamedPipe(
+                pipe.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32)
+                || error.raw_os_error() == Some(ERROR_NO_DATA as i32)
+            {
+                return Ok(0);
+            }
+            return Err(error);
+        }
+        if available > 0 {
+            let count = buffer.len().min(available as usize);
+            return pipe.read(&mut buffer[..count]);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod owned_clipboard_tests {
+    #[test]
+    fn native_owned_allocation_is_bounded() {
+        use windows_sys::Win32::System::Memory::*;
+        unsafe {
+            let data = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 4);
+            assert!(!data.is_null());
+            let ptr = GlobalLock(data) as *mut u16;
+            assert!(!ptr.is_null());
+            *ptr = 65;
+            *ptr.add(1) = 0;
+            GlobalUnlock(data);
+            assert_eq!(super::decode_global_text(data), Some("A".into()));
+            let ptr = GlobalLock(data) as *mut u16;
+            // Fill the actual rounded allocation; no terminator may be read
+            // beyond the allocation even if Windows rounds its size upward.
+            for i in 0..GlobalSize(data) / 2 {
+                *ptr.add(i) = 65;
+            }
+            GlobalUnlock(data);
+            assert_eq!(super::decode_global_text(data), None);
+            windows_sys::Win32::Foundation::GlobalFree(data);
         }
     }
 }

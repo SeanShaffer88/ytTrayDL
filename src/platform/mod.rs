@@ -285,3 +285,47 @@ pub fn launched_with_show_flag(args: &[String]) -> bool {
     args.iter()
         .any(|a| a == "--show" || a == "--settings" || a == "/show")
 }
+
+#[cfg(any(windows, test))]
+fn clipboard_allocation_units(bytes: usize) -> Option<usize> {
+    if bytes < 2 || !bytes.is_multiple_of(2) {
+        None
+    } else {
+        Some((bytes / 2).min(1_000_000))
+    }
+}
+/// Interpret only a validated allocation, requiring a terminator within the cap.
+#[cfg(any(windows, test))]
+fn decode_clipboard_units(units: &[u16]) -> Option<String> {
+    let bounded = &units[..units.len().min(1_000_000)];
+    let end = bounded.iter().position(|unit| *unit == 0)?;
+    Some(String::from_utf16_lossy(&bounded[..end]))
+}
+
+#[cfg(windows)]
+pub(crate) use windows_impl::{read_owned_pipe, ProcessTree};
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::{clipboard_allocation_units, decode_clipboard_units};
+    #[test]
+    fn clipboard_allocation_must_hold_whole_units() {
+        assert_eq!(clipboard_allocation_units(0), None);
+        assert_eq!(clipboard_allocation_units(1), None);
+        assert_eq!(clipboard_allocation_units(3), None);
+        assert_eq!(clipboard_allocation_units(2), Some(1));
+        assert_eq!(clipboard_allocation_units(usize::MAX - 1), Some(1_000_000));
+    }
+    #[test]
+    fn bounded_clipboard_requires_terminator() {
+        assert_eq!(decode_clipboard_units(&[]), None);
+        assert_eq!(decode_clipboard_units(&[65]), None);
+        assert_eq!(decode_clipboard_units(&[0]), Some(String::new()));
+        assert_eq!(decode_clipboard_units(&[65, 0, 66]), Some("A".into()));
+        let mut units = vec![65; 1_000_001];
+        units[1_000_000] = 0;
+        assert_eq!(decode_clipboard_units(&units), None);
+        units[999_999] = 0;
+        assert_eq!(decode_clipboard_units(&units).unwrap().len(), 999_999);
+    }
+}

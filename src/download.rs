@@ -8,15 +8,19 @@
 //! `--continue` resumes it next time). At most
 //! `max_concurrent_downloads` jobs run at once; the rest wait.
 
+use crate::process::{
+    CancellationToken, OutputStream, OwnedProcess, ProcessError, ProcessLimits, ProcessSpec,
+};
 use crate::settings::{Preset, Settings};
-use crate::ytdlp::{build_download_args_full, parse_progress_line, ProgressEvent};
+use crate::ytdlp::{
+    build_download_args_full, effective_destination, parse_progress_line, ProgressEvent,
+};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobState {
@@ -106,6 +110,8 @@ struct RunningJob {
     job: Job,
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
+    stop: CancellationToken,
+    worker: std::thread::JoinHandle<()>,
 }
 
 pub struct DownloadManager {
@@ -119,6 +125,8 @@ pub struct DownloadManager {
     finished: Vec<Job>,
     tx: Sender<DownloadEvent>,
     pub rx: Receiver<DownloadEvent>,
+    disk_blocked: Vec<(u64, Instant)>,
+    shutting_down: bool,
 }
 
 impl Default for DownloadManager {
@@ -138,6 +146,8 @@ impl DownloadManager {
             finished: Vec::new(),
             tx,
             rx,
+            disk_blocked: Vec::new(),
+            shutting_down: false,
         }
     }
 
@@ -239,11 +249,73 @@ impl DownloadManager {
     /// enqueue and whenever a job finishes. `bin` is the resolved
     /// yt-dlp path; jobs stay queued when it is `None`.
     pub fn pump(&mut self, settings: &Settings, bin: Option<&std::path::Path>) {
-        let Some(bin) = bin else { return };
+        self.pump_with_disk(settings, bin, Instant::now(), |path| {
+            let mut probe = path.to_path_buf();
+            while !probe.exists() && probe.pop() {}
+            let free = crate::platform::free_disk_bytes(&probe);
+            if free.is_none() {
+                crate::diag_log(&format!(
+                    "Disk space unknown for {}; allowing download",
+                    path.display()
+                ));
+            }
+            free
+        });
+    }
+
+    /// Injected clock and disk query keep admission and recovery testable.
+    pub fn pump_with_disk(
+        &mut self,
+        settings: &Settings,
+        bin: Option<&std::path::Path>,
+        now: Instant,
+        mut free_bytes: impl FnMut(&std::path::Path) -> Option<u64>,
+    ) {
+        self.disk_blocked
+            .retain(|(id, _)| self.queue.iter().any(|j| j.id == *id));
+        if settings.low_disk_threshold_mb == 0 {
+            self.disk_blocked.clear();
+        }
+        let Some(bin) = bin else {
+            for (_, next) in &mut self.disk_blocked {
+                if *next <= now {
+                    *next = now + Duration::from_secs(2);
+                }
+            }
+            return;
+        };
+        if self.shutting_down {
+            return;
+        }
         while self.running.len() < settings.max_concurrent_downloads.max(1) {
-            let Some(mut job) = self.queue.pop_front() else {
+            let Some(pos) = self.queue.iter().position(|job| {
+                if settings.low_disk_threshold_mb == 0 {
+                    return true;
+                }
+                if self
+                    .disk_blocked
+                    .iter()
+                    .any(|(id, next)| *id == job.id && now < *next)
+                {
+                    return false;
+                }
+                self.disk_blocked.retain(|(id, _)| *id != job.id);
+                let path = effective_destination(settings, job.output_dir.as_deref());
+                match free_bytes(path) {
+                    Some(free)
+                        if free < settings.low_disk_threshold_mb.saturating_mul(1024 * 1024) =>
+                    {
+                        self.disk_blocked
+                            .push((job.id, now + Duration::from_secs(2)));
+                        false
+                    }
+                    None => true,
+                    Some(_) => true,
+                }
+            }) else {
                 break;
             };
+            let mut job = self.queue.remove(pos).unwrap();
             job.state = JobState::Running;
             let cancel = Arc::new(AtomicBool::new(false));
             let pause = Arc::new(AtomicBool::new(false));
@@ -261,11 +333,45 @@ impl DownloadManager {
             let thread_shared = shared;
             let thread_cancel = cancel.clone();
             let thread_pause = pause.clone();
-            std::thread::spawn(move || {
-                run_job(bin, args, thread_shared, thread_cancel, thread_pause, tx);
+            let stop = CancellationToken::default();
+            let thread_stop = stop.clone();
+            let worker = std::thread::spawn(move || {
+                run_job(
+                    bin,
+                    args,
+                    thread_shared,
+                    thread_cancel,
+                    thread_pause,
+                    thread_stop,
+                    tx,
+                );
             });
-            self.running.push(RunningJob { job, cancel, pause });
+            self.running.push(RunningJob {
+                job,
+                cancel,
+                pause,
+                stop,
+                worker,
+            });
         }
+        // Occupied slots must not leave an expired retry requesting zero-delay
+        // repaints while running downloads finish.
+        if self.running.len() >= settings.max_concurrent_downloads.max(1) {
+            for (_, next) in &mut self.disk_blocked {
+                if *next <= now {
+                    *next = now + Duration::from_secs(2);
+                }
+            }
+        }
+    }
+
+    /// Remaining delay until blocked queued destinations need another check.
+    pub fn disk_recheck_after(&self, now: Instant) -> Option<Duration> {
+        self.disk_blocked
+            .iter()
+            .filter(|(id, _)| self.queue.iter().any(|j| j.id == *id))
+            .map(|(_, next)| next.saturating_duration_since(now))
+            .min()
     }
 
     /// Drain pending events into local state. Returns true when
@@ -280,7 +386,9 @@ impl DownloadManager {
                     }
                 }
                 DownloadEvent::Finished(job) => {
-                    self.running.retain(|r| r.job.id != job.id);
+                    if let Some(pos) = self.running.iter().position(|r| r.job.id == job.id) {
+                        let _ = self.running.remove(pos).worker.join();
+                    }
                     if job.state == JobState::Paused {
                         // A paused job is not finished — it waits
                         // in the paused list for an explicit resume.
@@ -295,6 +403,17 @@ impl DownloadManager {
             events.push(ev);
         }
         events
+    }
+
+    /// Cancel and join every owned download before returning.
+    pub fn shutdown(&mut self) {
+        self.shutting_down = true;
+        self.cancel_all();
+        for running in self.running.drain(..) {
+            if running.worker.join().is_err() {
+                crate::diag_log("download shutdown: worker panicked");
+            }
+        }
     }
 
     pub fn cancel(&mut self, id: u64) {
@@ -312,6 +431,7 @@ impl DownloadManager {
         }
         if let Some(r) = self.running.iter().find(|r| r.job.id == id) {
             r.cancel.store(true, Ordering::SeqCst);
+            r.stop.cancel();
         }
     }
 
@@ -328,6 +448,7 @@ impl DownloadManager {
         }
         if let Some(r) = self.running.iter().find(|r| r.job.id == id) {
             r.pause.store(true, Ordering::SeqCst);
+            r.stop.cancel();
         }
     }
 
@@ -351,6 +472,7 @@ impl DownloadManager {
         }
         for r in &self.running {
             r.pause.store(true, Ordering::SeqCst);
+            r.stop.cancel();
         }
     }
 
@@ -426,6 +548,7 @@ impl DownloadManager {
         }
         for r in &self.running {
             r.cancel.store(true, Ordering::SeqCst);
+            r.stop.cancel();
         }
     }
 
@@ -532,203 +655,128 @@ impl DisplayState {
     }
 }
 
+fn apply_output_line(job: &mut Job, line: String, authoritative_final: &mut bool) {
+    match parse_progress_line(&line) {
+        ProgressEvent::Destination(path) | ProgressEvent::ProcessedPath(path)
+            if !*authoritative_final =>
+        {
+            if line.starts_with("[Merger]") || line.starts_with("[ExtractAudio]") {
+                job.state = JobState::PostProcessing;
+            }
+            if job.title.is_empty() || job.title == job.url {
+                if let Some(name) = path.file_stem() {
+                    job.title = name.to_string_lossy().into_owned();
+                }
+            }
+            job.final_file = Some(path);
+        }
+        ProgressEvent::FinalPath(path) => {
+            *authoritative_final = true;
+            job.final_file = Some(path);
+        }
+        ProgressEvent::Progress {
+            percent,
+            total,
+            speed,
+            eta,
+        } => {
+            job.state = JobState::Running;
+            job.percent = percent;
+            if total.is_some() {
+                job.size_text = total;
+            }
+            job.speed_text = speed;
+            job.eta_text = eta;
+        }
+        ProgressEvent::AlreadyDownloaded => {
+            job.percent = 100.0;
+            job.already_downloaded = true;
+        }
+        ProgressEvent::PostProcessing(_) => job.state = JobState::PostProcessing,
+        _ => {}
+    }
+    if line.contains("ERROR") {
+        job.error = Some(line.trim().trim_start_matches("ERROR:").trim().to_string());
+    }
+    job.tail_lines.push(line);
+    if job.tail_lines.len() > 30 {
+        job.tail_lines.remove(0);
+    }
+}
+
 fn run_job(
     bin: PathBuf,
     args: Vec<String>,
     shared: Arc<Mutex<Job>>,
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
+    stop: CancellationToken,
     tx: Sender<DownloadEvent>,
 ) {
-    let spawned = Command::new(&bin)
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-
-    let mut child: Child = match spawned {
-        Ok(c) => c,
-        Err(e) => {
-            let mut job = shared.lock().unwrap();
-            job.state = JobState::Failed;
-            job.error = Some(format!("could not start yt-dlp ({}): {e}", bin.display()));
-            let done = job.clone();
-            drop(job);
-            let _ = tx.send(DownloadEvent::Finished(done));
-            return;
-        }
-    };
-
-    // yt-dlp prints progress to stdout with --newline, errors and
-    // some progress to stderr. Merge by reading stderr on a helper
-    // thread into the same line channel.
-    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
-    if let Some(out) = child.stdout.take() {
-        let ltx = line_tx.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(out).lines().map_while(Result::ok) {
-                if ltx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-    if let Some(err) = child.stderr.take() {
-        let ltx = line_tx.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(err).lines().map_while(Result::ok) {
-                if ltx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-    drop(line_tx);
-
-    let mut last_destination: Option<PathBuf> = None;
-    // The display state the UI last received for this job; the
-    // pump created the UI's copy from this same initial job, so
-    // it starts out in sync and `None` forces a first send only
-    // if a line changes something before any send happened.
+    let mut authoritative_final = false;
     let mut last_sent: Option<DisplayState> = None;
-    loop {
-        if cancel.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let mut job = shared.lock().unwrap();
-            job.state = JobState::Cancelled;
-            let done = job.clone();
-            drop(job);
-            let _ = tx.send(DownloadEvent::Finished(done));
-            return;
-        }
-        if pause.load(Ordering::SeqCst) {
-            // Kill the child; the `.part` file stays, so a
-            // resume continues instead of restarting.
-            let _ = child.kill();
-            let _ = child.wait();
-            let mut job = shared.lock().unwrap();
-            job.state = JobState::Paused;
-            let done = job.clone();
-            drop(job);
-            let _ = tx.send(DownloadEvent::Finished(done));
-            return;
-        }
-        match line_rx.recv_timeout(std::time::Duration::from_millis(120)) {
-            Ok(line) => {
-                let mut job = shared.lock().unwrap();
-                match parse_progress_line(&line) {
-                    ProgressEvent::Destination(p) => {
-                        last_destination = Some(p.clone());
-                        job.final_file = Some(p);
-                        if job.title.is_empty() || job.title == job.url {
-                            if let Some(name) = last_destination
-                                .as_ref()
-                                .and_then(|p| p.file_stem())
-                                .map(|s| s.to_string_lossy().to_string())
-                            {
-                                job.title = name;
-                            }
-                        }
+    let mut buffers = [Vec::<u8>::new(), Vec::<u8>::new()];
+    let result = OwnedProcess::spawn(&ProcessSpec::new(&bin).args(&args)).and_then(|process| {
+        process.stream(
+            ProcessLimits {
+                timeout: Duration::MAX,
+                ..Default::default()
+            },
+            &stop,
+            |stream, bytes| {
+                let buffer = &mut buffers[if stream == OutputStream::Stdout { 0 } else { 1 }];
+                buffer.extend_from_slice(bytes);
+                while let Some(end) = buffer.iter().position(|b| *b == b'\n' || *b == b'\r') {
+                    let line = String::from_utf8_lossy(&buffer[..end])
+                        .trim_end_matches('\r')
+                        .to_string();
+                    buffer.drain(..=end);
+                    let mut job = shared.lock().unwrap();
+                    apply_output_line(&mut job, line, &mut authoritative_final);
+                    if last_sent
+                        .as_ref()
+                        .is_none_or(|prev| prev.differs_from(&job))
+                    {
+                        last_sent = Some(DisplayState::of(&job));
+                        let _ = tx.send(DownloadEvent::Updated(job.clone()));
                     }
-                    ProgressEvent::Progress {
-                        percent,
-                        total,
-                        speed,
-                        eta,
-                    } => {
-                        job.state = JobState::Running;
-                        job.percent = percent;
-                        if total.is_some() {
-                            job.size_text = total;
-                        }
-                        job.speed_text = speed;
-                        job.eta_text = eta;
-                    }
-                    ProgressEvent::AlreadyDownloaded => {
-                        job.percent = 100.0;
-                        job.already_downloaded = true;
-                    }
-                    ProgressEvent::PostProcessing(desc) => {
-                        job.state = JobState::PostProcessing;
-                        // "[Merger] Merging formats into "X"" carries
-                        // the final path; extract it when present.
-                        if let Some(p) = desc
-                            .split('"')
-                            .nth(1)
-                            .filter(|s| s.contains('.') && s.len() > 4)
-                        {
-                            job.final_file = Some(PathBuf::from(p));
-                        }
-                    }
-                    ProgressEvent::Other => {}
                 }
-                if line.contains("ERROR") {
-                    job.error = Some(line.trim().trim_start_matches("ERROR:").trim().to_string());
-                }
-                job.tail_lines.push(line);
-                if job.tail_lines.len() > 30 {
-                    job.tail_lines.remove(0);
-                }
-                // Send an Updated event only when a displayed
-                // field moved (see DisplayState); all other
-                // lines are absorbed into the shared job, whose
-                // complete state ships with the Finished event.
-                if last_sent
-                    .as_ref()
-                    .map_or(true, |prev| prev.differs_from(&job))
-                {
-                    last_sent = Some(DisplayState::of(&job));
-                    let snap = job.clone();
-                    drop(job);
-                    let _ = tx.send(DownloadEvent::Updated(snap));
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        if let Ok(Some(_)) = child.try_wait() {
-            // Give the reader threads a moment to flush final lines.
-            std::thread::sleep(std::time::Duration::from_millis(60));
-            break;
+            },
+        )
+    });
+    // stream returns only after tree termination and reader completion.
+    for buffer in buffers {
+        if !buffer.is_empty() {
+            apply_output_line(
+                &mut shared.lock().unwrap(),
+                String::from_utf8_lossy(&buffer).into_owned(),
+                &mut authoritative_final,
+            );
         }
     }
-
-    // Drain any lines that arrived during the flush window.
-    while let Ok(line) = line_rx.try_recv() {
-        let mut job = shared.lock().unwrap();
-        if let ProgressEvent::Destination(p) = parse_progress_line(&line) {
-            job.final_file = Some(p);
-        }
-        job.tail_lines.push(line);
-    }
-
-    let status = child.wait();
     let mut job = shared.lock().unwrap();
     let cancelled = cancel.load(Ordering::SeqCst);
     let paused = pause.load(Ordering::SeqCst);
-    match status {
-        Ok(s) if s.success() && !cancelled && !paused => {
+    match result {
+        Ok(s) if s.status.success() && !cancelled && !paused => {
             job.state = JobState::Done;
             job.percent = 100.0;
-            if job.final_file.is_none() {
-                job.final_file = last_destination;
-            }
         }
-        Ok(_) if cancelled => {
+        Ok(_) | Err(ProcessError::Cancelled) if cancelled => {
             job.state = JobState::Cancelled;
         }
-        Ok(_) if paused => {
+        Ok(_) | Err(ProcessError::Cancelled) if paused => {
             job.state = JobState::Paused;
         }
         Ok(s) => {
             job.state = JobState::Failed;
             if job.error.is_none() {
-                job.error = Some(format!("yt-dlp exited with status {s}"));
+                job.error = Some(format!("yt-dlp exited with status {}", s.status));
             }
         }
         Err(e) => {
             job.state = JobState::Failed;
+            crate::diag_log(&format!("download process cleanup/failure: {e}"));
             job.error = Some(format!("waiting on yt-dlp failed: {e}"));
         }
     }
@@ -737,9 +785,202 @@ fn run_job(
     let _ = tx.send(DownloadEvent::Finished(done));
 }
 
+impl Drop for DownloadManager {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_output_survives_late_intermediates_and_tail_is_bounded() {
+        let mut manager = DownloadManager::new();
+        manager.enqueue("url".into(), String::new(), Preset::Best, false);
+        let mut job = manager.queue.pop_front().unwrap();
+        let mut authoritative = false;
+        for line in [
+            "[download] Destination: video.f137.mp4",
+            "[download] Destination: video.f140.m4a",
+            "[Merger] Merging formats into \"video.mp4\"",
+        ] {
+            apply_output_line(&mut job, line.into(), &mut authoritative);
+        }
+        assert_eq!(job.final_file, Some(PathBuf::from("video.mp4")));
+        apply_output_line(
+            &mut job,
+            "[ExtractAudio] Destination: audio.mp3".into(),
+            &mut authoritative,
+        );
+        assert_eq!(job.final_file, Some(PathBuf::from("audio.mp3")));
+        apply_output_line(
+            &mut job,
+            "yttraydl:final:final.mp3".into(),
+            &mut authoritative,
+        );
+        apply_output_line(
+            &mut job,
+            "[download] Destination: intermediate.m4a".into(),
+            &mut authoritative,
+        );
+        assert_eq!(job.final_file, Some(PathBuf::from("final.mp3")));
+        for _ in 0..100 {
+            apply_output_line(&mut job, "chatter".into(), &mut authoritative);
+        }
+        assert_eq!(job.tail_lines.len(), 30);
+    }
+
+    #[test]
+    fn disk_admission_checks_overrides_and_recovers_on_injected_clock() {
+        let mut manager = DownloadManager::new();
+        let settings = Settings {
+            download_folder: "blocked".into(),
+            low_disk_threshold_mb: 1,
+            max_concurrent_downloads: 2,
+            ..Settings::default()
+        };
+        let blocked = manager.enqueue("blocked-url".into(), String::new(), Preset::Best, false);
+        let healthy = manager.enqueue_job(
+            "healthy-url".into(),
+            String::new(),
+            Preset::Best,
+            false,
+            0,
+            None,
+            Some("healthy".into()),
+        );
+        let now = Instant::now();
+        let nonexistent_bin = std::path::Path::new("fixture-does-not-exist");
+        let mut queried = Vec::new();
+        manager.pump_with_disk(&settings, Some(nonexistent_bin), now, |path| {
+            queried.push(path.to_path_buf());
+            Some(if path == std::path::Path::new("healthy") {
+                u64::MAX
+            } else {
+                0
+            })
+        });
+        assert_eq!(manager.running[0].job.id, healthy);
+        assert_eq!(manager.queue[0].id, blocked);
+        assert_eq!(
+            queried,
+            [PathBuf::from("blocked"), PathBuf::from("healthy")]
+        );
+        assert_eq!(
+            manager.disk_recheck_after(now),
+            Some(Duration::from_secs(2))
+        );
+        manager.pump_with_disk(
+            &settings,
+            Some(nonexistent_bin),
+            now + Duration::from_secs(1),
+            |_| panic!("checked disk too early"),
+        );
+        manager.pump_with_disk(
+            &settings,
+            Some(nonexistent_bin),
+            now + Duration::from_secs(2),
+            |_| Some(u64::MAX),
+        );
+        assert!(manager.queue.is_empty());
+        assert_eq!(manager.disk_recheck_after(now), None);
+    }
+
+    #[test]
+    fn missing_binary_defers_expired_disk_rechecks_and_recovers() {
+        let mut manager = DownloadManager::new();
+        let settings = Settings {
+            low_disk_threshold_mb: 1,
+            ..Settings::default()
+        };
+        let id = manager.enqueue("blocked".into(), String::new(), Preset::Best, false);
+        let bin = std::path::Path::new("fixture-does-not-exist");
+        let now = Instant::now();
+        manager.pump_with_disk(&settings, Some(bin), now, |_| Some(0));
+        assert_eq!(manager.queue[0].id, id);
+        for seconds in [1, 2, 3, 4] {
+            let check_at = now + Duration::from_secs(seconds);
+            manager.pump_with_disk(&settings, None, check_at, |_| {
+                panic!("disk queried without binary")
+            });
+            assert_eq!(
+                manager.disk_recheck_after(check_at),
+                Some(Duration::from_secs(if seconds % 2 == 0 { 2 } else { 1 }))
+            );
+            assert_eq!(manager.queue[0].id, id);
+            assert!(manager.running.is_empty());
+        }
+        manager.pump_with_disk(&settings, Some(bin), now + Duration::from_secs(5), |_| {
+            panic!("disk queried before deferred deadline")
+        });
+        manager.pump_with_disk(&settings, Some(bin), now + Duration::from_secs(6), |_| {
+            Some(u64::MAX)
+        });
+        assert!(manager.queue.is_empty());
+        assert_eq!(manager.running[0].job.id, id);
+        assert_eq!(
+            manager.disk_recheck_after(now + Duration::from_secs(6)),
+            None
+        );
+    }
+
+    #[test]
+    fn disk_admission_disabled_or_unknown_allows_work() {
+        for threshold in [0, 1] {
+            let mut manager = DownloadManager::new();
+            let settings = Settings {
+                low_disk_threshold_mb: threshold,
+                ..Settings::default()
+            };
+            manager.enqueue("url".into(), String::new(), Preset::Best, false);
+            manager.pump_with_disk(
+                &settings,
+                Some(std::path::Path::new("fixture-does-not-exist")),
+                Instant::now(),
+                |_| {
+                    assert_ne!(threshold, 0);
+                    None
+                },
+            );
+            assert!(manager.queue.is_empty());
+            assert!(manager.disk_recheck_after(Instant::now()).is_none());
+        }
+    }
+
+    #[test]
+    fn occupied_slots_do_not_busy_loop_disk_rechecks() {
+        let mut manager = DownloadManager::new();
+        let settings = Settings {
+            low_disk_threshold_mb: 1,
+            max_concurrent_downloads: 1,
+            ..Settings::default()
+        };
+        manager.enqueue("blocked".into(), String::new(), Preset::Best, false);
+        manager.enqueue("healthy".into(), String::new(), Preset::Best, false);
+        let now = Instant::now();
+        let mut checks = 0;
+        manager.pump_with_disk(
+            &settings,
+            Some(std::path::Path::new("fixture-does-not-exist")),
+            now,
+            |_| {
+                checks += 1;
+                Some(if checks == 1 { 0 } else { u64::MAX })
+            },
+        );
+        manager.pump_with_disk(
+            &settings,
+            Some(std::path::Path::new("fixture-does-not-exist")),
+            now + Duration::from_secs(2),
+            |_| panic!("no vacant slot"),
+        );
+        assert_eq!(
+            manager.disk_recheck_after(now + Duration::from_secs(2)),
+            Some(Duration::from_secs(2))
+        );
+    }
 
     #[test]
     fn enqueue_dedupes_identical_jobs() {

@@ -461,6 +461,39 @@ shipped). The system:
 
 ## Verification matrix
 
+### 0.7.0 validation
+
+These rows distinguish native Windows fixture evidence from manual application
+behavior. Historical field reports below remain scoped to their original versions.
+See the [migration and validation contract](RELEASE-0.7.0.md).
+
+The final disk-correction run passed all five repository gates: `cargo fmt --all`,
+host clippy, Windows-target clippy, `cargo test --locked` and the Windows-target
+all-target check (each exited 0). The native suite passed 98 tests: 83 library,
+1 hook integration, 4 manager/background and 10 process lifecycle tests. These
+fixtures use controlled local executables; they do not download real media.
+
+| Area | State | Evidence and remaining scope |
+| --- | --- | --- |
+| Clipboard allocation bounds | Verified (native controlled memory); application acquisition partially verified | `clipboard_allocation_must_hold_whole_units`, `bounded_clipboard_requires_terminator` and `native_owned_allocation_is_bounded` pass. Malformed data through the real Windows clipboard listener has not been exercised. |
+| Executable/argv completion hooks | Verified (native fixture) | `completion_hook_passes_exact_argv_to_native_fixture`, single-pass expansion and rejected-template tests pass. A configured hook after a real media download remains unverified. |
+| Final download path | Verified (logic and native fixture) | Final-marker/postprocessing parsing, late-intermediate handling and `final_paths_are_applied_before_immediate_exit_acknowledgement` pass. Real media merge/extraction remains unverified. |
+| Destination-specific disk admission | Verified (injected provider) | Override/default destination, unknown-space and eligible-queue tests pass. Actual multi-volume low-space behavior remains unverified. |
+| Automatic disk recovery | Verified (injected clock) | Blocked-to-ready recovery, occupied-slot cadence and `missing_binary_defers_expired_disk_rechecks_and_recovers` pass. Manual low-space recovery remains unverified. |
+| Bounded background processes | Verified (native fixtures) | Hang, flood, line/output caps, cancellation, watcher isolation, background shutdown and failed-install preservation tests pass. Real network probe/install behavior remains unverified. |
+| Process-tree lifecycle | Verified (native Windows fixtures); Unix runtime unverified | Ten process tests plus manager pause/cancel/shutdown tests pass, including descendant-write cessation, inherited pipes, owner drop, callback failure and repeated cleanup. `termination_failure_with_inherited_pipe_returns_promptly` covers cleanup failure. These results do not verify GUI interactions or Unix execution. |
+| Rust 1.89 minimum | Partially verified | Local native Windows `cargo +1.89.0 check --locked --all-targets` exited 0. Linux and Windows minimum-toolchain CI results remain pending until push. |
+
+The locked graph declares Rust 1.89 for `uuid` 1.28.0 and Rust 1.88 for the
+GUI/image dependencies. CI checks the supported Linux library and native Windows
+application graphs using an explicit minimal 1.89.0 toolchain, alongside stable
+verification and packaging jobs. Linux minimum-toolchain and Unix runtime results
+are not established by the local Windows checks. Final independent review,
+refreshed release artifacts and packed-crate consumption are tracked by the
+[release contract](RELEASE-0.7.0.md#release-checklist).
+
+### Historical evidence (through 0.6.1)
+
 | Area | State | Evidence |
 | --- | --- | --- |
 | URL extraction / normalization | Verified | Unit tests in `url_detect.rs` |

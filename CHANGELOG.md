@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 — Unreleased
+
+- Reject malformed or unterminated clipboard text within the allocation's actual bounds.
+- Run completion hooks as an executable plus arguments. Shell commands and scripts now fail visibly; see the [migration guide](docs/RELEASE-0.7.0.md#completion-hook-migration).
+- Track the final merged or extracted output path before reporting a download complete.
+- Check free space on each download's selected destination, allowing eligible downloads on other destinations to proceed.
+- Recheck disk-blocked downloads periodically so the queue can resume when space becomes available.
+- Bound background probes, update/install operations and captured output so stalled or noisy processes cannot hold work indefinitely.
+- Own child process trees and wait for cleanup during pause, cancellation and shutdown.
+- Raise the minimum Rust version to 1.89 and add locked, all-target minimum-toolchain checks on Linux and Windows.
+- **Security:** Update locked Tokio from 1.54.0 to 1.54.1 to address RUSTSEC-2026-0384.
+
+These changes are being prepared; regression, native runtime and release-artifact
+verification remain pending. The black/red layout is unchanged.
+
 ## 0.6.1 — 2026-10-27
 
 - **Performance improvements — no behaviour changes.**

@@ -3,18 +3,44 @@
 //! DownloadManager must spawn it, parse its progress, and land the
 //! job in the right final state.
 //!
-//! Gated to Unix because the fake is a shell script. On Windows the
-//! same code path runs against real yt-dlp; the argument building
-//! and line parsing it relies on are covered by unit tests.
+//! Unix scripts exercise the pipeline; the native fixture verifies
+//! completion hook argv on supported hosts without real downloads.
 
-#![cfg(unix)]
+use yttraydl::hooks;
 
+#[test]
+fn completion_hook_passes_exact_argv_to_native_fixture() {
+    let executable = env!("CARGO_BIN_EXE_process_fixture");
+    let template = format!("\"{executable}\" argv \"{{file}}\" \"\" \"{{title}}\" \"{{url}}\"");
+    let file = "space here & | %PATH% \"quoted\" 雪 {title}";
+    let title = "{url}";
+    let url = "https://example.test/a|b%20";
+    let hook = hooks::HookSpec::parse(&template)
+        .unwrap()
+        .expand(file, "", url, title);
+    let output = std::process::Command::new(hook.executable)
+        .args(hook.args)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&output.stdout).unwrap(),
+        [file, "", title, url]
+    );
+}
+
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
+#[cfg(unix)]
 use yttraydl::download::{DownloadEvent, DownloadManager, JobState};
+#[cfg(unix)]
 use yttraydl::settings::{Preset, Settings};
 
+#[cfg(unix)]
 fn write_fake_ytdlp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     // Write to a temp name, sync, then rename into place: executing
     // a file that was just written in place can race the writer and
@@ -35,6 +61,7 @@ fn write_fake_ytdlp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     path
 }
 
+#[cfg(unix)]
 fn run_until_finished(
     manager: &mut DownloadManager,
     settings: &Settings,
@@ -54,6 +81,7 @@ fn run_until_finished(
     }
 }
 
+#[cfg(unix)]
 fn run_success_scenario(tag: &str) -> (yttraydl::download::Job, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("yttraydl-e2e-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -92,6 +120,7 @@ fn run_success_scenario(tag: &str) -> (yttraydl::download::Job, std::path::PathB
     (job, dir)
 }
 
+#[cfg(unix)]
 #[test]
 fn successful_download_flows_through_the_manager() {
     // Retry ONLY the ETXTBSY harness artifact (see above); any
@@ -125,6 +154,7 @@ fn successful_download_flows_through_the_manager() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn failing_download_reports_its_error() {
     let dir = std::env::temp_dir().join(format!("yttraydl-e2e-fail-{}", std::process::id()));

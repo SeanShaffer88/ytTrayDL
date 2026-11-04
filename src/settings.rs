@@ -363,7 +363,7 @@ pub struct Settings {
     pub low_disk_threshold_mb: u64,
     /// A command line run after each successful download, with
     /// `{file}`, `{dir}`, `{url}` and `{title}` substituted.
-    /// Empty = no command. Runs through the system shell.
+    /// Empty = no command. Parsed before substitution; no shell or scripts.
     pub post_download_command: String,
     /// Channel watcher poll interval in minutes. 0 = watcher off.
     pub watch_interval_mins: u32,

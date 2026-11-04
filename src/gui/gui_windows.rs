@@ -2247,7 +2247,7 @@ fn settings_downloads(ui: &mut egui::Ui, s: &mut Settings, out: &mut SettingsOut
         ui.label("After each download, run:");
         if ui
             .add(egui::TextEdit::singleline(&mut s.post_download_command).desired_width(300.0).font(egui::TextStyle::Monospace))
-            .on_hover_text("A command line run through the shell when a download succeeds. Placeholders: {file} {dir} {url} {title}. Leave empty for none. Example: explorer.exe \"{dir}\"")
+            .on_hover_text("An executable with arguments run when a download succeeds. Double quotes group arguments; shell syntax and scripts are unsupported. Placeholders: {file} {dir} {url} {title}. Leave empty for none. Example: explorer.exe \"{dir}\"")
             .changed()
         {
             out.changed = true;

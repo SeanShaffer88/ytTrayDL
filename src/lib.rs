@@ -14,6 +14,78 @@
 //! - [`platform`] — Win32 clipboard listener, single-instance,
 //!   autostart, shell helpers (with non-Windows fallbacks).
 
+pub mod process;
+
+/// App-owned workers share cancellation and are joined during shutdown.
+#[derive(Default)]
+pub struct BackgroundTasks {
+    token: process::CancellationToken,
+    workers: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+impl BackgroundTasks {
+    pub fn spawn(&self, work: impl FnOnce(process::CancellationToken) + Send + 'static) {
+        let token = self.token.clone();
+        let mut workers = self.workers.lock().unwrap();
+        if self.token.is_cancelled() {
+            return;
+        }
+        let mut pending = Vec::new();
+        for worker in workers.drain(..) {
+            if worker.is_finished() {
+                if worker.join().is_err() {
+                    diag_log("background worker panicked");
+                }
+            } else {
+                pending.push(worker);
+            }
+        }
+        pending.push(std::thread::spawn(move || work(token)));
+        *workers = pending;
+    }
+    pub fn shutdown(&self) {
+        self.token.cancel();
+        for worker in self.workers.lock().unwrap().drain(..) {
+            if worker.join().is_err() {
+                diag_log("background shutdown: worker panicked");
+            }
+        }
+    }
+}
+impl Drop for BackgroundTasks {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn capture(
+    spec: &process::ProcessSpec,
+    seconds: u64,
+    bytes: usize,
+    token: &process::CancellationToken,
+) -> Result<process::ProcessOutput, process::ProcessError> {
+    process::run_capture(
+        spec,
+        process::ProcessLimits {
+            timeout: std::time::Duration::from_secs(seconds),
+            stdout_bytes: bytes,
+            line_bytes: bytes,
+            ..Default::default()
+        },
+        token,
+    )
+}
+
+pub fn fetch_version(bin: &std::path::Path, token: &process::CancellationToken) -> Option<String> {
+    let output = capture(
+        &process::ProcessSpec::new(bin).arg("--version"),
+        10,
+        65536,
+        token,
+    )
+    .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Append one line to the local diagnostic log
 /// (`<config dir>/yttraydl.log`). A tray app has no console, so
 /// startup milestones, panics and fatal errors land here — local
@@ -36,6 +108,7 @@ pub fn diag_log(message: &str) {
 pub mod dedupe;
 pub mod download;
 pub mod history;
+pub mod hooks;
 pub mod platform;
 pub mod rules;
 pub mod saved;
@@ -51,8 +124,23 @@ pub fn fetch_info(
     settings: &settings::Settings,
     url: &str,
 ) -> Option<ytdlp::VideoInfo> {
+    fetch_info_with_cancel(bin, settings, url, &process::CancellationToken::default())
+}
+
+pub fn fetch_info_with_cancel(
+    bin: &std::path::Path,
+    settings: &settings::Settings,
+    url: &str,
+    token: &process::CancellationToken,
+) -> Option<ytdlp::VideoInfo> {
     let args = ytdlp::build_info_args(settings, url);
-    let output = std::process::Command::new(bin).args(&args).output().ok()?;
+    let output = capture(
+        &process::ProcessSpec::new(bin).args(&args),
+        30,
+        8 * 1024 * 1024,
+        token,
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -83,10 +171,39 @@ fn bundled_tool(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+struct TemporaryFiles(Vec<std::path::PathBuf>);
+impl Drop for TemporaryFiles {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(path);
+            } else {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+fn install_downloaded(
+    target: &std::path::Path,
+    temporary: &std::path::Path,
+    download: impl FnOnce(&std::path::Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let _cleanup = TemporaryFiles(vec![temporary.to_path_buf()]);
+    download(temporary)?;
+    std::fs::rename(temporary, target).map_err(|e| e.to_string())
+}
+
 /// Download the official standalone yt-dlp.exe into the managed bin
 /// folder using Windows' bundled curl.exe. Blocking; call on a
 /// worker thread. Only supported on Windows builds.
 pub fn download_managed_ytdlp() -> Result<std::path::PathBuf, String> {
+    download_managed_ytdlp_with_cancel(&process::CancellationToken::default())
+}
+
+pub fn download_managed_ytdlp_with_cancel(
+    token: &process::CancellationToken,
+) -> Result<std::path::PathBuf, String> {
     let dir = settings::Settings::managed_bin_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = dir.join(if cfg!(windows) {
@@ -96,21 +213,22 @@ pub fn download_managed_ytdlp() -> Result<std::path::PathBuf, String> {
     });
     let tmp = dir.join("yt-dlp.download");
     let curl = bundled_tool("curl");
-    let status = std::process::Command::new(&curl)
-        .args([
-            "-L",
-            "--fail",
-            "-o",
-            &tmp.to_string_lossy(),
-            ytdlp::YTDLP_WINDOWS_URL,
-        ])
-        .status()
-        .map_err(|e| format!("could not run curl: {e}"))?;
-    if !status.success() {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("download failed (curl exit {status})"));
-    }
-    std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+    install_downloaded(&target, &tmp, |temporary| {
+        capture(
+            &process::ProcessSpec::new(&curl).args([
+                "-L",
+                "--fail",
+                "-o",
+                &temporary.to_string_lossy(),
+                ytdlp::YTDLP_WINDOWS_URL,
+            ]),
+            600,
+            1048576,
+            token,
+        )
+        .map(|_| ())
+        .map_err(|e| format!("download failed: {e}"))
+    })?;
     Ok(target)
 }
 
@@ -119,17 +237,26 @@ pub fn download_managed_ytdlp() -> Result<std::path::PathBuf, String> {
 /// a worker thread. Used by the "Check for yt-dlp updates"
 /// button — ytTrayDL itself never phones home unasked.
 pub fn fetch_latest_ytdlp_tag() -> Result<String, String> {
+    fetch_latest_ytdlp_tag_with_cancel(&process::CancellationToken::default())
+}
+
+pub fn fetch_latest_ytdlp_tag_with_cancel(
+    token: &process::CancellationToken,
+) -> Result<String, String> {
     let curl = bundled_tool("curl");
-    let output = std::process::Command::new(&curl)
-        .args([
+    let output = capture(
+        &process::ProcessSpec::new(&curl).args([
             "-L",
             "--fail",
             "-H",
             "User-Agent: ytTrayDL",
             "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
-        ])
-        .output()
-        .map_err(|e| format!("could not run curl: {e}"))?;
+        ]),
+        30,
+        1048576,
+        token,
+    )
+    .map_err(|e| format!("could not run curl: {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "GitHub request failed (curl exit {})",
@@ -150,12 +277,19 @@ pub fn fetch_latest_ytdlp_tag() -> Result<String, String> {
 /// popup thumbnails). Refuses responses over ~3 MB. Blocking;
 /// call on a worker thread. Only http(s) URLs are fetched.
 pub fn fetch_url_bytes(url: &str) -> Option<Vec<u8>> {
+    fetch_url_bytes_with_cancel(url, &process::CancellationToken::default())
+}
+
+pub fn fetch_url_bytes_with_cancel(
+    url: &str,
+    token: &process::CancellationToken,
+) -> Option<Vec<u8>> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return None;
     }
     let curl = bundled_tool("curl");
-    let output = std::process::Command::new(&curl)
-        .args([
+    let output = capture(
+        &process::ProcessSpec::new(&curl).args([
             "-L",
             "--fail",
             "--max-filesize",
@@ -167,9 +301,12 @@ pub fn fetch_url_bytes(url: &str) -> Option<Vec<u8>> {
             "-o",
             "-",
             url,
-        ])
-        .output()
-        .ok()?;
+        ]),
+        10,
+        3000000,
+        token,
+    )
+    .ok()?;
     if !output.status.success() || output.stdout.is_empty() {
         return None;
     }
@@ -187,8 +324,45 @@ pub fn fetch_playlist_entries(
     url: &str,
     limit: u32,
 ) -> Vec<ytdlp::PlaylistEntry> {
+    fetch_playlist_entries_with_cancel(
+        bin,
+        settings,
+        url,
+        limit,
+        &process::CancellationToken::default(),
+    )
+}
+
+pub fn fetch_playlist_entries_with_cancel(
+    bin: &std::path::Path,
+    settings: &settings::Settings,
+    url: &str,
+    limit: u32,
+    token: &process::CancellationToken,
+) -> Vec<ytdlp::PlaylistEntry> {
+    fetch_playlist_entries_with_limits(
+        bin,
+        settings,
+        url,
+        limit,
+        token,
+        process::ProcessLimits::default(),
+    )
+}
+
+/// Probe with caller-supplied resource limits (including shorter test deadlines).
+pub fn fetch_playlist_entries_with_limits(
+    bin: &std::path::Path,
+    settings: &settings::Settings,
+    url: &str,
+    limit: u32,
+    token: &process::CancellationToken,
+    limits: process::ProcessLimits,
+) -> Vec<ytdlp::PlaylistEntry> {
     let args = ytdlp::build_playlist_probe_args(settings, url, limit);
-    let Ok(output) = std::process::Command::new(bin).args(&args).output() else {
+    let Ok(output) =
+        process::run_capture(&process::ProcessSpec::new(bin).args(&args), limits, token)
+    else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -204,6 +378,12 @@ pub fn fetch_playlist_entries(
 /// into place. Blocking; call on a worker thread. Windows only.
 /// Returns the installed ffmpeg.exe path.
 pub fn download_managed_ffmpeg() -> Result<std::path::PathBuf, String> {
+    download_managed_ffmpeg_with_cancel(&process::CancellationToken::default())
+}
+
+pub fn download_managed_ffmpeg_with_cancel(
+    token: &process::CancellationToken,
+) -> Result<std::path::PathBuf, String> {
     if !cfg!(windows) {
         return Err("the in-app ffmpeg install is only supported on Windows".into());
     }
@@ -211,20 +391,25 @@ pub fn download_managed_ffmpeg() -> Result<std::path::PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let zip_path = dir.join("ffmpeg.download.zip");
     let extract_dir = dir.join("ffmpeg-extract");
+    let _cleanup = TemporaryFiles(vec![zip_path.clone(), extract_dir.clone()]);
     let _ = std::fs::remove_file(&zip_path);
     let _ = std::fs::remove_dir_all(&extract_dir);
 
     let curl = bundled_tool("curl");
-    let status = std::process::Command::new(&curl)
-        .args([
+    let status = capture(
+        &process::ProcessSpec::new(&curl).args([
             "-L",
             "--fail",
             "-o",
             &zip_path.to_string_lossy(),
             ytdlp::FFMPEG_WINDOWS_URL,
-        ])
-        .status()
-        .map_err(|e| format!("could not run curl: {e}"))?;
+        ]),
+        600,
+        1048576,
+        token,
+    )
+    .map(|output| output.status)
+    .map_err(|e| format!("could not run curl: {e}"))?;
     if !status.success() {
         let _ = std::fs::remove_file(&zip_path);
         return Err(format!("ffmpeg download failed (curl exit {status})"));
@@ -232,15 +417,19 @@ pub fn download_managed_ffmpeg() -> Result<std::path::PathBuf, String> {
 
     std::fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
     let tar = bundled_tool("tar");
-    let status = std::process::Command::new(&tar)
-        .args([
+    let status = capture(
+        &process::ProcessSpec::new(&tar).args([
             "-xf",
             &zip_path.to_string_lossy(),
             "-C",
             &extract_dir.to_string_lossy(),
-        ])
-        .status()
-        .map_err(|e| format!("could not run tar: {e}"))?;
+        ]),
+        120,
+        1048576,
+        token,
+    )
+    .map(|output| output.status)
+    .map_err(|e| format!("could not run tar: {e}"))?;
     if !status.success() {
         let _ = std::fs::remove_file(&zip_path);
         let _ = std::fs::remove_dir_all(&extract_dir);
@@ -266,4 +455,25 @@ pub fn download_managed_ffmpeg() -> Result<std::path::PathBuf, String> {
     let _ = std::fs::remove_file(&zip_path);
     let _ = std::fs::remove_dir_all(&extract_dir);
     Ok(target)
+}
+
+#[cfg(test)]
+mod operation_tests {
+    use super::*;
+    #[test]
+    fn failed_install_preserves_existing_and_removes_partial() {
+        let dir = std::env::temp_dir().join(format!("yttraydl-install-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("installed");
+        let temporary = dir.join("partial");
+        std::fs::write(&target, b"existing").unwrap();
+        let result = install_downloaded(&target, &temporary, |path| {
+            std::fs::write(path, b"incomplete").unwrap();
+            Err("injected process failure".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"existing");
+        assert!(!temporary.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

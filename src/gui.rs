@@ -1253,30 +1253,6 @@ fn handle_tray_menu_direct(event: &tray_icon::menu::MenuEvent) -> bool {
         None => return false,
     };
     match name {
-        "exit" => {
-            yttraydl::diag_log("exit requested via tray menu (handler)");
-            // Route the exit through the app's graceful
-            // shutdown AND arm a forced fallback (0.2.8). Do
-            // NOT drop the tray handles here: this handler runs
-            // inside muda's menu dispatch, which holds a
-            // RefCell borrow on its menu state — dropping muda
-            // objects there panicked with "RefCell already
-            // borrowed" in the field (0.2.7 log) and aborted
-            // the process mid-exit. If the app's loop is
-            // healthy it exits gracefully (cancelling
-            // downloads, saving state) long before the
-            // fallback fires; if it is wedged, the fallback
-            // still guarantees the click works.
-            forward_tray_event(TrayUiEvent::Menu(tray_icon::menu::MenuEvent {
-                id: event.id.clone(),
-            }));
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_millis(750));
-                yttraydl::diag_log("exiting (tray menu, forced fallback)");
-                std::process::exit(0);
-            });
-            true
-        }
         "monitoring toggle" => {
             let mut s = Settings::load();
             s.monitoring_enabled = !s.monitoring_enabled;
@@ -1429,6 +1405,7 @@ pub struct App {
     platform: PlatformSetup,
     seen: SeenCache,
     pub downloads: DownloadManager,
+    background: yttraydl::BackgroundTasks,
     pub history: History,
     bin: Option<YtDlpBinary>,
     pub ffmpeg_ok: bool,
@@ -1582,6 +1559,7 @@ impl App {
             platform: platform_setup,
             seen,
             downloads: DownloadManager::new(),
+            background: yttraydl::BackgroundTasks::default(),
             history: History::load(),
             bin,
             ffmpeg_ok,
@@ -1770,43 +1748,17 @@ impl App {
     }
 
     fn pump_downloads(&mut self) {
-        // Low-disk guard: while the download drive is under the
-        // user's threshold, don't START queued jobs (running
-        // ones finish). One toast per low spell.
-        if self.settings.low_disk_threshold_mb > 0 && self.downloads.active_count() > 0 {
-            let threshold = self
-                .settings
-                .low_disk_threshold_mb
-                .saturating_mul(1024 * 1024);
-            // The folder may not exist yet; query the nearest
-            // existing ancestor.
-            let mut probe = self.settings.download_folder.clone();
-            while !probe.exists() {
-                if !probe.pop() {
-                    break;
-                }
-            }
-            if let Some(free) = yttraydl::platform::free_disk_bytes(&probe) {
-                if free < threshold {
-                    if !self.disk_warned {
-                        self.disk_warned = true;
-                        self.toast(
-                            format!(
-                                "Low disk space ({} free) — new downloads are paused until space frees up.",
-                                yttraydl::ytdlp::format_bytes(free)
-                            ),
-                            ToastKind::Error,
-                        );
-                    }
-                    return;
-                }
-            }
-        }
-        self.disk_warned = false;
         let bin = self.bin_path();
         self.downloads.pump(&self.settings, bin.as_deref());
+        let blocked = self.downloads.disk_recheck_after(Instant::now()).is_some();
+        if blocked && !self.disk_warned {
+            self.toast(
+                "Low disk space — affected downloads will resume when space frees up.",
+                ToastKind::Error,
+            );
+        }
+        self.disk_warned = blocked;
     }
-
     /// Pause everything pausable, or — when nothing is active
     /// but jobs are paused — resume everything. Used by the
     /// tray item (Windows); the Downloads window has its own
@@ -1888,8 +1840,8 @@ impl App {
             let tx = self.info_tx.clone();
             let settings = self.settings.clone();
             let url_owned = url.to_string();
-            std::thread::spawn(move || {
-                let info = yttraydl::fetch_info(&bin, &settings, &url_owned);
+            self.background.spawn(move |token| {
+                let info = yttraydl::fetch_info_with_cancel(&bin, &settings, &url_owned, &token);
                 let already = match &info {
                     Some(i) => {
                         let archive =
@@ -1911,8 +1863,8 @@ impl App {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.ytdlp_fetch_rx = Some(rx);
-        std::thread::spawn(move || {
-            let _ = tx.send(yttraydl::download_managed_ytdlp());
+        self.background.spawn(move |token| {
+            let _ = tx.send(yttraydl::download_managed_ytdlp_with_cancel(&token));
         });
         self.toast("Downloading yt-dlp from GitHub…", ToastKind::Info);
     }
@@ -1923,8 +1875,8 @@ impl App {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.ffmpeg_fetch_rx = Some(rx);
-        std::thread::spawn(move || {
-            let _ = tx.send(yttraydl::download_managed_ffmpeg());
+        self.background.spawn(move |token| {
+            let _ = tx.send(yttraydl::download_managed_ffmpeg_with_cancel(&token));
         });
         self.toast("Downloading ffmpeg (about 110 MB)…", ToastKind::Info);
     }
@@ -1938,8 +1890,8 @@ impl App {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.ytdlp_check_rx = Some(rx);
-        std::thread::spawn(move || {
-            let _ = tx.send(yttraydl::fetch_latest_ytdlp_tag());
+        self.background.spawn(move |token| {
+            let _ = tx.send(yttraydl::fetch_latest_ytdlp_tag_with_cancel(&token));
         });
     }
 
@@ -2120,8 +2072,8 @@ impl App {
     fn spawn_thumb_fetch(&mut self, url: String) {
         let (tx, rx) = std::sync::mpsc::channel();
         self.thumb_rx = Some(rx);
-        std::thread::spawn(move || {
-            let decoded = yttraydl::fetch_url_bytes(&url).and_then(|bytes| {
+        self.background.spawn(move |token| {
+            let decoded = yttraydl::fetch_url_bytes_with_cancel(&url, &token).and_then(|bytes| {
                 let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
                 let (w, h) = img.dimensions();
                 Some((w, h, img.into_raw()))
@@ -2184,13 +2136,15 @@ impl App {
         let subs = settings.subscriptions.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.watch_rx = Some(rx);
-        std::thread::spawn(move || {
+        self.background.spawn(move |token| {
             let results: Vec<(String, Vec<yttraydl::ytdlp::PlaylistEntry>)> = subs
                 .iter()
                 .map(|sub| {
                     (
                         sub.url.clone(),
-                        yttraydl::fetch_playlist_entries(&bin, &settings, &sub.url, 10),
+                        yttraydl::fetch_playlist_entries_with_cancel(
+                            &bin, &settings, &sub.url, 10, &token,
+                        ),
                     )
                 })
                 .collect();
@@ -2218,7 +2172,13 @@ impl App {
             }
         }
         if let Some(rx) = &self.watch_rx {
-            if let Ok(results) = rx.try_recv() {
+            let received = rx.try_recv();
+            if matches!(received, Err(std::sync::mpsc::TryRecvError::Disconnected)) {
+                self.watch_rx = None;
+                self.watch_data.last_check_unix = yttraydl::history::now_unix().max(0) as u64;
+                yttraydl::diag_log("channel watcher worker disconnected; batch released");
+            }
+            if let Ok(results) = received {
                 self.watch_rx = None;
                 self.watch_data.last_check_unix = yttraydl::history::now_unix().max(0) as u64;
                 let mut new_count = 0usize;
@@ -2407,12 +2367,27 @@ impl App {
                                     .parent()
                                     .map(|p| p.to_string_lossy().to_string())
                                     .unwrap_or_default();
-                                let line = cmd
-                                    .replace("{file}", &file.to_string_lossy())
-                                    .replace("{dir}", &dir)
-                                    .replace("{url}", &job.url)
-                                    .replace("{title}", &job.title);
-                                yttraydl::platform::run_shell_command(&line);
+                                match yttraydl::hooks::HookSpec::parse(cmd) {
+                                    Ok(hook) => {
+                                        let hook = hook.expand(
+                                            &file.to_string_lossy(),
+                                            &dir,
+                                            &job.url,
+                                            &job.title,
+                                        );
+                                        if let Err(error) =
+                                            std::process::Command::new(&hook.executable)
+                                                .args(&hook.args)
+                                                .spawn()
+                                        {
+                                            self.toast(
+                                                format!("Completion hook failed: {error}"),
+                                                ToastKind::Error,
+                                            );
+                                        }
+                                    }
+                                    Err(error) => self.toast(error, ToastKind::Error),
+                                }
                             }
                         }
                     }
@@ -2525,9 +2500,9 @@ impl App {
                 self.version_requested_for = Some(bin.clone());
                 self.ytdlp_version = None;
                 let (tx, rx) = std::sync::mpsc::channel::<String>();
-                std::thread::spawn(move || {
-                    if let Ok(out) = std::process::Command::new(&bin).arg("--version").output() {
-                        let _ = tx.send(String::from_utf8_lossy(&out.stdout).trim().to_string());
+                self.background.spawn(move |token| {
+                    if let Some(version) = yttraydl::fetch_version(&bin, &token) {
+                        let _ = tx.send(version);
                     }
                 });
                 // Drain lazily via a leaked receiver pattern: store
@@ -2894,10 +2869,7 @@ impl App {
             } else if ev.id == id_pause_all {
                 self.toggle_pause_all();
             } else if ev.id == id_exit {
-                // Graceful half of the handler's exit route
-                // (0.2.8): the full shutdown below cancels
-                // downloads and saves state; the handler's
-                // forced fallback only fires if this never runs.
+                // The app loop joins owned workers before exiting.
                 yttraydl::diag_log("exit requested via tray menu");
                 self.exit_requested = true;
             }
@@ -2980,6 +2952,14 @@ impl eframe::App for App {
         self.process_platform_events();
         self.process_info_results();
         self.process_download_events();
+        if let Some(delay) = self.downloads.disk_recheck_after(Instant::now()) {
+            if delay.is_zero() {
+                self.pump_downloads();
+            }
+            if let Some(delay) = self.downloads.disk_recheck_after(Instant::now()) {
+                ctx.request_repaint_after(delay);
+            }
+        }
         self.process_ytdlp_fetch();
         self.process_ffmpeg_fetch();
         self.process_ytdlp_check();
@@ -3090,18 +3070,10 @@ impl eframe::App for App {
         }
 
         if self.exit_requested {
-            // Deterministic exit. The graceful path (sending
-            // ViewportCommand::Close and waiting for the window
-            // stack to unwind) failed in the field — the tray
-            // Exit click appeared to do nothing. So: cancel any
-            // running downloads (workers kill their yt-dlp child
-            // within ~120 ms; give them a beat), persist state,
-            // log, and end the process. No handshake left to stall.
+            // Exit only after owned workers acknowledge process-tree cleanup.
             let active = self.downloads.active_count();
-            self.downloads.cancel_all();
-            if active > 0 {
-                std::thread::sleep(Duration::from_millis(300));
-            }
+            self.downloads.shutdown();
+            self.background.shutdown();
             let _ = self.settings.save();
             let _ = self.history.save();
             yttraydl::diag_log(&format!("exiting (active downloads cancelled: {active})"));

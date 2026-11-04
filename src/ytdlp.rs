@@ -12,6 +12,16 @@ use crate::settings::{Preset, Settings};
 use serde::Deserialize;
 use std::path::PathBuf;
 
+pub const FINAL_PATH_MARKER: &str = "yttraydl:final:";
+
+/// Shared by command construction and disk admission.
+pub fn effective_destination<'a>(
+    settings: &'a Settings,
+    output_dir: Option<&'a std::path::Path>,
+) -> &'a std::path::Path {
+    output_dir.unwrap_or(&settings.download_folder)
+}
+
 /// Where a yt-dlp binary was found, in search order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum YtDlpSource {
@@ -258,8 +268,7 @@ pub fn build_download_args_full(
     }
 
     // Output location + name (per-download folder wins).
-    let template = output_dir
-        .unwrap_or(&settings.download_folder)
+    let template = effective_destination(settings, output_dir)
         .join(&settings.filename_template)
         .to_string_lossy()
         .to_string();
@@ -345,6 +354,9 @@ pub fn build_download_args_full(
 
     args.extend(split_extra_args(&settings.extra_args));
 
+    args.push("--print".into());
+    args.push(format!("after_move:{FINAL_PATH_MARKER}%(filepath)s"));
+
     args.push("--".into());
     args.push(url.to_string());
     args
@@ -429,6 +441,10 @@ pub fn split_extra_args(input: &str) -> Vec<String> {
 pub enum ProgressEvent {
     /// `[download] Destination: <path>`
     Destination(PathBuf),
+    /// Authoritative after-move path, never overwritten by intermediate output.
+    FinalPath(PathBuf),
+    /// Merger / extracted-audio path before the authoritative marker.
+    ProcessedPath(PathBuf),
     /// Percent complete 0.0–100.0 with optional total size text,
     /// speed text and ETA text as yt-dlp printed them.
     Progress {
@@ -442,10 +458,7 @@ pub enum ProgressEvent {
     /// `[Merger] Merging formats into "<path>"` or an
     /// `[ExtractAudio]` destination — post-processing started.
     PostProcessing(String),
-    /// Final media file path from `[download] <path> has already…`
-    /// style lines is covered by AlreadyDownloaded; the manager
-    /// learns the real final path from the process exit + the
-    /// last Destination / Merger line.
+    /// Output with no recognized progress or path event.
     Other,
 }
 
@@ -454,6 +467,9 @@ pub enum ProgressEvent {
 /// feeds both streams through here.
 pub fn parse_progress_line(line: &str) -> ProgressEvent {
     let line = line.trim();
+    if let Some(path) = line.strip_prefix(FINAL_PATH_MARKER) {
+        return ProgressEvent::FinalPath(PathBuf::from(path));
+    }
     if let Some(rest) = line.strip_prefix("[download] Destination: ") {
         return ProgressEvent::Destination(PathBuf::from(rest.trim()));
     }
@@ -461,7 +477,10 @@ pub fn parse_progress_line(line: &str) -> ProgressEvent {
         return ProgressEvent::AlreadyDownloaded;
     }
     if let Some(rest) = line.strip_prefix("[Merger] Merging formats into ") {
-        return ProgressEvent::PostProcessing(rest.trim().trim_matches('"').to_string());
+        return ProgressEvent::ProcessedPath(PathBuf::from(rest.trim().trim_matches('"')));
+    }
+    if let Some(path) = line.strip_prefix("[ExtractAudio] Destination: ") {
+        return ProgressEvent::ProcessedPath(PathBuf::from(path));
     }
     if line.starts_with("[ExtractAudio]") || line.starts_with("[ffmpeg]") {
         return ProgressEvent::PostProcessing(line.to_string());
@@ -701,6 +720,32 @@ pub fn archive_contains(archive_text: &str, extractor: &str, id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_path_marker_and_postprocessing_paths_are_distinct() {
+        for (line, expected) in [
+            (
+                "yttraydl:final:C:\\Videos\\雪.mp4",
+                ProgressEvent::FinalPath(PathBuf::from("C:\\Videos\\雪.mp4")),
+            ),
+            (
+                "[Merger] Merging formats into \"video.mp4\"",
+                ProgressEvent::ProcessedPath(PathBuf::from("video.mp4")),
+            ),
+            (
+                "[ExtractAudio] Destination: audio.mp3",
+                ProgressEvent::ProcessedPath(PathBuf::from("audio.mp3")),
+            ),
+        ] {
+            assert_eq!(parse_progress_line(line), expected);
+        }
+        let args =
+            build_download_args_full(&Settings::default(), Preset::Best, "url", false, None, None);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--print", "after_move:yttraydl:final:%(filepath)s"]));
+        assert_eq!(&args[args.len() - 2..], ["--", "url"]);
+    }
 
     fn settings() -> Settings {
         Settings::default()

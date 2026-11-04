@@ -13,7 +13,7 @@ downloads quietly in the background with your defaults while you keep working.
 ytTrayDL watches your clipboard for video links and downloads them
 with yt-dlp: it asks first (a popup with a quality choice) or
 downloads silently with your defaults — your rules per site, no
-duplicates, nothing leaves your PC. It's for anyone who downloads
+duplicates, no telemetry. It's for anyone who downloads
 videos regularly and wants it to feel built into Windows rather
 than like a chore in a terminal. Free and open source (MIT),
 for Windows 10/11, in a 64-bit build, as an installer
@@ -96,9 +96,10 @@ click once to show it, click again to hide it.
   running in the background; **Ctrl+Alt+G**, relaunching, or `--show`
   brings it back). Tick "Remember my choice" to stop being asked, and
   change it any time in Settings → General.
-- **Private by design** — no accounts, no telemetry, nothing leaves your
-  PC except the requests yt-dlp itself makes. Settings live in
-  `%APPDATA%\ytTrayDL`.
+- **Private by design** — no accounts or telemetry. Network traffic includes
+  yt-dlp requests, thumbnail fetches, and explicit update checks or component
+  install/update requests. Settings and history stay on your PC in
+  `%APPDATA%\ytTrayDL` (or the portable data folder).
 
 ## Screenshots
 
@@ -221,14 +222,15 @@ all of it into a `ytTrayDL-data` folder beside the exe when a
 
 ## Building
 
-Rust 1.80+ (stable). The library (settings, URL detection, rules,
+Rust 1.89+ (stable). On Windows, install the MSVC C++ build tools and Windows
+SDK for the `x86_64-pc-windows-msvc` target. The library (settings, URL detection, rules,
 yt-dlp command building, download manager) is platform-independent and
 fully unit-tested; the tray/Win32 parts compile for Windows.
 
 ```powershell
-cargo build --release          # produces target\release\yttraydl.exe
-cargo test                     # full test suite (unit + end-to-end)
-cargo clippy --all-targets     # lint gate (CI also lints/checks the x86_64 Windows target)
+cargo build --release --locked # produces target\release\yttraydl.exe on Windows
+cargo test --locked            # full test suite
+cargo clippy --all-targets --locked -- -D warnings
 ```
 
 Windows 10 and 11 are the target platforms. A release is a single
@@ -237,7 +239,12 @@ app, or have it on PATH.
 
 ## Status & verification
 
-v0.5.0. The core library is covered by unit tests and the whole crate
+For v0.7.0, the native Windows 98-test suite and all five repository gates pass.
+The minimum Rust toolchain is 1.89; the local native Windows locked all-target
+check passes on 1.89.0. Linux runtime and minimum-toolchain CI results remain
+pending until CI runs. See the [0.7.0 migration and validation contract](docs/RELEASE-0.7.0.md)
+for publication checks and remaining manual runtime limits.
+The core library is covered by unit tests and the whole crate
 (including the Win32 clipboard listener and tray code) is compile-checked
 and linted for `x86_64-pc-windows-msvc`
 in CI. Runtime behaviour on a real Windows machine is tracked in

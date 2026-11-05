@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [clean, upgrade]
+        scenario: [clean, upgrade, upgrade061-off, upgrade070-off]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -130,7 +130,7 @@ jobs:
       - name: Build actual library state consumer
         shell: pwsh
         run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/state-probe"
-      - name: Actual install, optional 0.6.1 upgrade, and uninstall
+      - name: Actual install, selected published-baseline upgrade, and uninstall
         shell: pwsh
         run: |
           $candidate = @(Get-ChildItem candidate-setup -Filter '*.exe' -File)

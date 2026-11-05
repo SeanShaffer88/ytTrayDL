@@ -1,26 +1,42 @@
-# 0.7.1 validation patch — release candidate
+# 0.7.1 Windows field qualification
 
-This candidate adds real-tool field validation and disposable Windows installer
-lifecycle jobs. Release publication is pending the complete gate, actual field
-evidence, independent review, and a passing merged commit. The layout is unchanged.
+This patch adds saved window geometry, repairs real-media completion paths and
+hidden-window recovery, and makes installer data preservation a required gate.
+Release publication requires a passing PR, independent review, and verification
+of artifacts from the passing merged commit. CI results remain authoritative for
+the exact commit being shipped.
 
 ## Verification matrix
 
-| Gate | Candidate status | Evidence required |
-|---|---|---|
-| Real video, merge, audio, playlist, subtitles | Not run in CI | `real-media-field-evidence`, all assertions pass |
-| Application retry, final path, completion hook | Not run in CI | Real-tool harness evidence; transport retry alone is insufficient |
-| Pause/resume, cancel and shutdown during ffmpeg | Not run in CI | Observed owned ffmpeg child, bounded intervention and cleanup |
-| Actual GUI hide/relaunch and startup behavior | Not run by installer jobs | Owned interactive fixture application evidence |
-| Clean install / uninstall | Not run | `installer-clean-evidence` from a fresh hosted Windows VM |
-| Actual 0.6.1 upgrade / uninstall | Not run | `installer-upgrade-evidence`, baseline checksum verified |
-| Linux/Windows stable and MSRV 1.89 | Pending | All CI jobs green for candidate commit |
-| Final release payload | Pending | Merged commit, version 0.7.1, checksums, no test executables |
+| Area | Observed qualification / required gate |
+|---|---|
+| Native full suite | 108 tests passed; format, both Clippy targets, Windows check and release build passed |
+| Real media | All nine loopback scenarios passed locally against both tool sets and in hosted CI: video, merge, audio, subtitles, playlist, retry, pause, cancel, shutdown |
+| Final output | Actual file existence/content, UTF-8 paths, subtitle final paths, completion-hook paths and persisted history asserted |
+| Actual GUI ffmpeg exit | GUI-confirmed download, observed real ffmpeg, actual main Exit, normal exit0, five descendants gone, no completed history or later writes |
+| Window geometry | Native work-area clamp observed; Main/Settings/Downloads normal rectangle and saved JSON assertions passed. Full interactive harness results are recorded separately |
+| Installer | Both clean and actual 0.6.1-upgrade tests reproduced foreign-media deletion. Broad deletion removed; all four corrected hosted lifecycle jobs must pass before merge |
+| Linux/Windows and MSRV | Required stable gates and Rust 1.89 locked checks, including the optional field harness |
+| Release payload | Verify merged commit, x64/version 0.7.1, strict portable inventory, ZIP roundtrip, checksums and published-asset readback before completion |
 
-Update statuses only from observed execution. Generating scripts, compiling a
-binary, or verifying a startup registry string does not establish runtime coverage.
-Loopback fixtures cover downloads and postprocessing, not external extractor discovery.
+Window geometry uses bounded, versioned `window-state.json` alongside settings.
+Main, Settings and Downloads retain normal size and position; About retains
+position. Hidden/minimized/maximized state is not restored. Transient prompts
+remain anchored and are translated inside the nearest monitor work area. Pure
+tests cover negative monitor origins, changed DPI, oversized/scaled bounds,
+corrupt or unknown state, backward defaults and consecutive saves. Actual native
+geometry runs used one monitor at 96 DPI; no physical monitor/DPI change is claimed.
 
+GUI tests use private profiles and exact process/window ownership. Native tray
+menu command delivery is distinguished from a physical notification-area click.
+A CUA-confirmed actual Download click and actual UIA Exit were observed separately.
+The scripts preserve blocked/failed attempts rather than treating unavailable
+controls as passing. They do not certify accessibility.
+
+Loopback fixtures qualify downloads and postprocessing, not external public
+extractor discovery. Startup argv, registry and shortcut checks plus a private
+`--background` launch do not claim an actual OS sign-in/reboot. Installer execution
+runs only on disposable hosted Windows VMs, never the user's host.
 ## Running the field harness
 
 Build with `cargo build --locked --features field-validation --bin field_validation`.
@@ -48,9 +64,9 @@ includes bounded HTML fragment handling and a five-millisecond clipboard-open
 retry sleep. The [executor changelog](https://github.com/smol-rs/async-executor/blob/master/CHANGELOG.md)
 describes a use-after-free regression fix during executor destruction.
 
-`cargo audit --no-fetch --json` reported zero known vulnerabilities against local
+`cargo audit --json` refreshed advisory data and reported zero known vulnerabilities against
 database commit `965bf9ad083b58e6340d65829d85217b18be9290` (2026-11-03).
-This is a cached database scan, not a newly fetched advisory scan. Six notices
+The scan completed on 2026-11-05 UTC with 446 dependencies and 1,403 advisories. Six notices
 remain visible and unsuppressed:
 
 | Package / advisory | Actual target reachability and disposition |
@@ -75,3 +91,24 @@ Verify installer and portable versions/hashes from the merged commit before publ
 or startup regressions are observed, hold publication or remove the affected asset
 and restore the previous known release; preserve settings/history/archive and collect
 bounded evidence before further migration. No automatic downgrade is claimed.
+
+## Legacy uninstall-log migration
+
+Fresh installs preserve foreign media after removal of recursive deletion.
+Upgrades also need to replace the historical uninstall log: the old destructive
+record otherwise survives Inno's default append behavior. This is a documented
+exception to the usual recommendation against [log replacement](https://jrsoftware.org/ishelp/topic_setup_uninstalllogmode.htm).
+
+The replacement covers the verified in-place 0.6.1 and 0.7.0 inventories: all
+three application files, Start Menu shortcut, and exact legacy desktop shortcut
+and startup value. Cleanup of optional resources is recorded even when candidate
+tasks are deselected. Deselection does not immediately remove inherited resources;
+uninstall does. No old uninstaller is executed and no private log format is patched.
+
+Four disposable-VM cases are required: clean, 0.6.1 with tasks on, 0.6.1 on-to-off,
+and 0.7.0 on-to-off. They preserve media seeded before upgrade, four data hashes,
+and unrelated sibling shortcut/Run sentinels, while removing every known owned
+file, shortcut, startup value and registration. Actual 0.6.1 legacy-log RED is
+retained; new variants must pass against the corrected head. Relocated/mismatched
+installation modes or unknown historical inventories are not qualified. Future
+removed or renamed resources need exact legacy cleanup and migration regressions.

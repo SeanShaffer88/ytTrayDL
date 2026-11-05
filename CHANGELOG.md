@@ -1,13 +1,13 @@
 # Changelog
 
-## 0.7.1 — Unreleased
+## 0.7.1 — 2026-11-04
 
 - Remember normal Main, Settings and Downloads window size/position; retain About position and keep transient prompts within the monitor work area.
 - Preserve UTF-8 final paths, report subtitle-only output paths, enforce single-item playlist selection, and restore hidden windows reliably.
 - Add real-tool media/process field validation and separate disposable Windows VM clean-install and 0.6.1-upgrade checks.
 - Verify installed executable identity, shortcuts, startup command, uninstall registration, and synthetic user-data preservation using the actual library loaders.
 - Update locked clipboard-win to 5.4.3 and async-executor to 1.14.1 while preserving Tokio 1.54.1 and Rust 1.89.
-- Keep installer, GUI, media and release qualification pending until actual execution passes; see [candidate verification](docs/RELEASE-0.7.1.md).
+- Replace unsafe legacy uninstall records and retain exact optional-resource cleanup when upgrading from verified 0.6.1/0.7.0 inventories. See the [qualification contract](docs/RELEASE-0.7.1.md) for required gates and limits.
 
 ## 0.7.0 — 2026-11-04
 

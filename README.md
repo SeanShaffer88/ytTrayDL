@@ -261,37 +261,24 @@ app, or have it on PATH.
 
 ## Status & verification
 
-For v0.7.0, the native Windows 98-test suite and all five repository gates pass.
-The minimum Rust toolchain is 1.89; the local native Windows locked all-target
-check passes on 1.89.0. Linux runtime and minimum-toolchain CI results remain
-pending until CI runs. See the [0.7.0 migration and validation contract](docs/RELEASE-0.7.0.md)
-for publication checks and remaining manual runtime limits.
-The core library is covered by unit tests and the whole crate
-(including the Win32 clipboard listener and tray code) is compile-checked
-and linted for `x86_64-pc-windows-msvc`
-in CI. Runtime behaviour on a real Windows machine is tracked in
-[docs/DESIGN.md](docs/DESIGN.md#verification-matrix) with Verified /
-Partially verified / Unverified labels — nothing is claimed as
-runtime-verified until it has run on a real PC. Current state: the
-tray menu and its actions are verified on a real PC (v0.2.7 field
-test, October 2026), and the v0.2.8 left-click toggle builds on the
-same verified mechanism; the v0.2.9 queue controls and popup
-positions and the v0.3.0 additions (quality pins, popup playlist
-choice, taskbar progress, drag-and-drop, import/export, update
-check) are logic-tested but not yet field-verified, as are the
-behaviours of the v0.4.0 additions (channel watcher,
-subtitles-only, audio formats, popup thumbnail/size/folder,
-saved list, failure banner, queue-empty actions, disk guard,
-post-download command, portable mode) — their Settings
-screens are photographed rendering on a real PC from a
-v0.4.0 run. The blank window that run found when restoring from
-the tray with Settings open was fixed in v0.4.1 and confirmed
-working on a real PC the same day, and a real end-to-end
-download is partially verified (one completed on SEAN's machine
-and shows in Recent — no log was examined). The installer, the
-in-app ffmpeg install and the close-choice dialog still await a
-full on-machine pass.
+See the [0.7.1 field qualification contract](docs/RELEASE-0.7.1.md) and
+[CI results](https://github.com/SeanShaffer88/ytTrayDL/actions/workflows/ci.yml)
+for the exact commit. The native suite has 108 passing tests. Required gates cover
+formatting, Clippy on the host and Windows target, the complete locked suite,
+Windows compilation, and Rust 1.89 on Windows and Linux.
 
+Original loopback media exercises real yt-dlp/ffmpeg downloads, merging, audio,
+subtitles, playlists, retries and child-process cleanup. Interactive Windows
+checks cover close/hide/relaunch, saved normal window bounds and exit during real
+ffmpeg processing. Installer clean/0.6.1-upgrade/uninstall checks run on disposable
+hosted VMs and require preservation of settings, history, archive, saved window
+bounds and user-owned media. Releases require those checks to pass.
+
+The interactive field environment is Windows 11, one monitor at 96 DPI. Changed
+DPI and monitor topology are covered by geometry unit tests; actual OS sign-in,
+external public extractor discovery, accessibility, in-app tool installation,
+and unrelated features such as channel watching remain outside this qualification.
+Historical field reports and remaining feature limits are in [DESIGN.md](docs/DESIGN.md).
 ## Contributing
 
 Issues and pull requests are welcome. If you're changing code,

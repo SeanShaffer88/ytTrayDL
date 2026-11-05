@@ -15,6 +15,7 @@
 //!   autostart, shell helpers (with non-Windows fallbacks).
 
 pub mod process;
+pub mod window_geometry;
 
 /// App-owned workers share cancellation and are joined during shutdown.
 #[derive(Default)]

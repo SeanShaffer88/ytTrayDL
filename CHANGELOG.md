@@ -2,12 +2,14 @@
 
 ## 0.7.1 — Unreleased
 
+- Remember normal Main, Settings and Downloads window size/position; retain About position and keep transient prompts within the monitor work area.
+- Preserve UTF-8 final paths, report subtitle-only output paths, enforce single-item playlist selection, and restore hidden windows reliably.
 - Add real-tool media/process field validation and separate disposable Windows VM clean-install and 0.6.1-upgrade checks.
 - Verify installed executable identity, shortcuts, startup command, uninstall registration, and synthetic user-data preservation using the actual library loaders.
 - Update locked clipboard-win to 5.4.3 and async-executor to 1.14.1 while preserving Tokio 1.54.1 and Rust 1.89.
 - Keep installer, GUI, media and release qualification pending until actual execution passes; see [candidate verification](docs/RELEASE-0.7.1.md).
 
-## 0.7.0 — Unreleased
+## 0.7.0 — 2026-11-04
 
 - Reject malformed or unterminated clipboard text within the allocation's actual bounds.
 - Run completion hooks as an executable plus arguments. Shell commands and scripts now fail visibly; see the [migration guide](docs/RELEASE-0.7.0.md#completion-hook-migration).
@@ -19,8 +21,8 @@
 - Raise the minimum Rust version to 1.89 and add locked, all-target minimum-toolchain checks on Linux and Windows.
 - **Security:** Update locked Tokio from 1.54.0 to 1.54.1 to address RUSTSEC-2026-0384.
 
-These changes are being prepared; regression, native runtime and release-artifact
-verification remain pending. The black/red layout is unchanged.
+Published as [v0.7.0](https://github.com/SeanShaffer88/ytTrayDL/releases/tag/v0.7.0).
+Additional Windows field qualification is tracked in the 0.7.1 verification matrix.
 
 ## 0.6.1 — 2026-10-27
 

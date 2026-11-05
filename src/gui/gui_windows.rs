@@ -11,6 +11,7 @@ use yttraydl::platform;
 use yttraydl::settings::{
     Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
+use yttraydl::window_geometry::TransientWindow;
 use yttraydl::ytdlp::YtDlpSource;
 
 fn status_color(status: HistoryStatus) -> egui::Color32 {
@@ -41,6 +42,12 @@ fn bottom_right(ctx: &egui::Context, size: egui::Vec2, lift: f32) -> egui::Pos2 
         (mon.x - size.x - 12.0).max(0.0),
         (mon.y - size.y - 12.0 - lift).max(0.0),
     )
+}
+
+fn confirmation_position(ctx: &egui::Context, size: egui::Vec2) -> egui::Pos2 {
+    ctx.input(|input| input.viewport().outer_rect)
+        .map(|parent| parent.center() - size / 2.0)
+        .unwrap_or_else(|| bottom_right(ctx, size, 0.0))
 }
 
 impl App {
@@ -1297,6 +1304,8 @@ impl App {
                 });
             },
         );
+
+        platform::constrain_transient_window(TransientWindow::DownloadPrompt);
 
         if interacted {
             // Hovering/interacting counts as "I'm deciding": the
@@ -3322,6 +3331,7 @@ impl App {
             egui::ViewportId::from_hash_of("yttraydl-hide-confirm"),
             egui::ViewportBuilder::default()
                 .with_title("Hide the tray icon?")
+                .with_position(confirmation_position(ctx,egui::vec2(460.0,270.0)))
                 .with_inner_size([460.0, 270.0])
                 .with_min_inner_size([460.0, 270.0])
                 .with_max_inner_size([460.0, 270.0])
@@ -3353,6 +3363,7 @@ impl App {
                 });
             },
         );
+        platform::constrain_transient_window(TransientWindow::HideIconConfirmation);
         if hide {
             self.settings.tray_icon_visible = false;
             self.tray_visible = false;
@@ -3385,6 +3396,7 @@ impl App {
             egui::ViewportId::from_hash_of("yttraydl-close-choice"),
             egui::ViewportBuilder::default()
                 .with_title("Close ytTrayDL?")
+                .with_position(confirmation_position(ctx,egui::vec2(470.0,330.0)))
                 .with_inner_size([470.0, 330.0])
                 .with_min_inner_size([470.0, 330.0])
                 .with_max_inner_size([470.0, 330.0])
@@ -3467,6 +3479,7 @@ impl App {
                 });
             },
         );
+        platform::constrain_transient_window(TransientWindow::CloseConfirmation);
         self.close_remember = remember;
         if cancel || !open {
             self.confirm_close = false;

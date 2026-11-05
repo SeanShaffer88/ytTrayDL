@@ -73,6 +73,50 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
     }
 }
 
+/// Read a visible, normal owned window. Minimized/maximized/hidden geometry
+/// never replaces the user's last normal bounds.
+pub fn window_geometry(
+    kind: crate::window_geometry::WindowKind,
+) -> Option<crate::window_geometry::WindowGeometry> {
+    #[cfg(windows)]
+    {
+        windows_impl::window_geometry(kind)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = kind;
+        None
+    }
+}
+
+/// Restore normal bounds without showing, activating, or raising the window.
+pub fn restore_window_geometry(
+    kind: crate::window_geometry::WindowKind,
+    geometry: crate::window_geometry::WindowGeometry,
+) -> bool {
+    #[cfg(windows)]
+    {
+        windows_impl::restore_window_geometry(kind, geometry)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (kind, geometry);
+        false
+    }
+}
+
+/// Translate an exact owned transient window into its monitor work area.
+pub fn constrain_transient_window(window: crate::window_geometry::TransientWindow) {
+    #[cfg(windows)]
+    {
+        windows_impl::constrain_transient_window(window);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+    }
+}
+
 impl Platform {
     /// Enable/disable Start-with-Windows (HKCU Run key on Windows).
     pub fn set_autostart(enabled: bool) -> Result<(), String> {

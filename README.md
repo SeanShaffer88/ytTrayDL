@@ -224,6 +224,24 @@ and `bin\` (the managed yt-dlp/ffmpeg copies). Portable mode moves
 all of it into a `ytTrayDL-data` folder beside the exe when a
 `portable.txt` file sits next to it.
 
+## Window geometry module
+
+On Windows, the application keeps normal window bounds in `window-state.json` in its own
+configuration directory, alongside settings. Main, Settings and Downloads retain
+size and position; About retains position. Hidden, minimized and maximized states
+are not restored. Transient prompts stay anchored and are kept inside the current
+monitor work area. Missing or invalid saved geometry uses the normal defaults.
+
+The MIT-licensed `window_geometry` library module provides serializable bounds,
+DPI scaling and work-area translation without starting background work. Native
+window queries and changes stay in the platform adapter. Consumers can inspect
+saved bounds explicitly:
+
+```rust,no_run
+use yttraydl::window_geometry::{WindowGeometries, WindowKind};
+let saved = WindowGeometries::load();
+let main_bounds = saved.get(WindowKind::Main);
+```
 ## Building
 
 Rust 1.89+ (stable). On Windows, install the MSVC C++ build tools and Windows
@@ -232,7 +250,7 @@ yt-dlp command building, download manager) is platform-independent and
 fully unit-tested; the tray/Win32 parts compile for Windows.
 
 ```powershell
-cargo build --release --locked # produces target\release\yttraydl.exe on Windows
+cargo build --release --locked --bin yttraydl # produces target\release\yttraydl.exe on Windows
 cargo test --locked            # full test suite
 cargo clippy --all-targets --locked -- -D warnings
 ```

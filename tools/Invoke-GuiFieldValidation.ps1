@@ -10,7 +10,7 @@ No registry, clipboard, installed profile or global keyboard access. WM_CLOSE is
  [Parameter(Mandatory)][string]$AppPath,
  [Parameter(Mandatory)][string]$Destination,
  [Parameter(Mandatory)][string]$ProcessRunner,
- [switch]$AllowActions,[switch]$AllowTrustedExecution,[switch]$InspectMainControl,[switch]$EdgeConfirmations,[switch]$AllowFocusHandoff,
+ [switch]$AllowActions,[switch]$AllowTrustedExecution,[switch]$InspectMainControl,[switch]$EdgeConfirmations,[switch]$AllowFocusHandoff,[switch]$ExternalAskExit,
  [ValidateNotNullOrEmpty()][ValidateCount(1,9)][ValidateSet('exit','tray','taskbar','hide','ask','background','controls','tray-controls','persistence')][string[]]$Scenario=@('exit','tray','taskbar','hide','ask','background','controls','tray-controls','persistence'),
  [string]$YtDlpPath, [string]$FfmpegPath,
  [ValidateSet('Physical','ObservedCommand')][string]$TrayTransport='ObservedCommand',
@@ -22,6 +22,9 @@ $ErrorActionPreference='Stop'
 $result=[ordered]@{schemaVersion=1;status='Unknown';observedUtc=[DateTime]::UtcNow.ToString('o');focusAssistance=@();selectedScenarios=@($Scenario);cases=@();processes=@();uiaExecution=@();resourceCleanup=@();limitations=@('No accessibility certification.','WM_CLOSE validates native close delivery; it does not validate clicking a close button.');error=$null}
 $owned=$null;$code=125
 function Record($Name,$Status,$Evidence){$result.cases+=@{name=$Name;status=$Status;evidence=$Evidence}}
+function Test-ExternalAskExitDeadline([DateTime]$ExitUtc,[DateTime]$RequestedUtc,[DateTime]$DeadlineUtc){
+ $actual=$ExitUtc.ToUniversalTime();return $actual-ge$RequestedUtc.ToUniversalTime()-and$actual-le$DeadlineUtc.ToUniversalTime()
+}
 function VisibleWindows($Process){
  $Process.Refresh();if($Process.HasExited){return @()}
  @([FieldGuiNative]::Windows($Process.Id)|Where-Object{[FieldGuiNative]::IsWindowVisible([IntPtr]$_) -and [FieldGuiNative]::Title($_) -match 'ytTrayDL'})
@@ -56,6 +59,7 @@ function Invoke-TrayItem($Process,$Label,$Root){
  if($TrayTransport -eq 'Physical'){[FieldGuiNative]::SelectMenu($menu,$Process.Id,$Label)}else{$id=[FieldGuiNative]::DispatchObservedMenu($menu,$Process.Id,$Label);@{method='Observed native HMENU unique enabled item GetMenuItemID then owned WM_CANCELMODE and standard WM_COMMAND; OS delivery equivalence, no physical menu click claimed';label=$Label;commandId=$id;ownerPid=$Process.Id;menuHwnd=$menu}|ConvertTo-Json|Set-Content (Join-Path $Root ('menu-command-'+[Guid]::NewGuid().ToString('N')+'.json'))}
 }
 try {
+ if($ExternalAskExit-and'ask'-notin$Scenario){throw 'ExternalAskExit requires the ask scenario; no application launched.'}
  if(-not $AllowActions -or -not $AllowTrustedExecution){throw 'Both -AllowActions and -AllowTrustedExecution are required.'}
  if(-not $IsWindows){throw 'Windows required.'}
  $app=(Resolve-Path -LiteralPath $AppPath).Path
@@ -187,7 +191,18 @@ try {
    }elseif($mode -eq 'ask'){
     $dialog=0;$found=Wait-State {$script:dialog=@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_) -eq 'Close ytTrayDL?'});$script:dialog.Count -eq 1}
     if($found -and $EdgeConfirmations){$fits=Wait-State {$script:edgeMetrics=[FieldGuiNative]::Metrics($script:dialog[0],$owned.Id);$a=$script:edgeMetrics;$a[8]-ge$a[12]-and$a[9]-ge$a[13]-and($a[8]+$a[10])-le$a[14]-and($a[9]+$a[11])-le$a[15]};Record 'actual-edge-Close-confirmation-within-workarea' $(if($fits){'Pass'}else{'Fail'}) @{method='Owned edge main WM_CLOSE opens real Ask dialog';metrics=$script:edgeMetrics};if(-not$fits){throw 'Close confirmation outside actual monitor workarea'}}
-    if($found){$actionExit=Invoke-OwnedUi $owned $script:dialog[0] 'Invoke' 'Exit ytTrayDL' (Join-Path $root 'dialog-action.json');if($actionExit-ne0){@{method='CUA observed Ask Exit DWM-visible-frame center159,86; exact472x362 frame96DPI/title and foreground/PID guards';metrics=[FieldGuiNative]::Metrics($script:dialog[0],$owned.Id)}|ConvertTo-Json|Set-Content (Join-Path $root 'dialog-pixel-contract.json');$result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $script:dialog[0] -Stage 'ask-exit' -RequestPath (Join-Path $root 'focus-needed-ask-exit.json') -AllowAssistance:$AllowFocusHandoff -RequireOperatorAcknowledgement);$actionExit=Invoke-OwnedUi $owned $script:dialog[0] 'Invoke' 'Exit ytTrayDL' (Join-Path $root 'activated-dialog-action.json');if($actionExit-ne0){$result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $script:dialog[0] -Stage 'ask-exit-input' -RequestPath (Join-Path $root 'focus-needed-ask-exit-input.json') -AllowAssistance:$AllowFocusHandoff);[FieldGuiNative]::ClickObserved($script:dialog[0],$owned.Id,'Close ytTrayDL?',472,362,96,159,86);$actionExit=0}};$exited=$owned.WaitForExit(8000);Record 'close-ask-dialog-Exit' $(if($actionExit-eq0 -and $exited -and $owned.ExitCode-eq0){'Pass'}else{'Fail'}) @{pid=$owned.Id;actionExit=$actionExit;exited=$exited}}
+    if($found-and$ExternalAskExit){
+     $requested=[DateTime]::UtcNow;$deadline=$requested.AddSeconds(180);$readyPath=Join-Path $root 'ask-exit-ready.json';$evidencePath=Join-Path $root 'ask-exit-action-evidence.json';$start=$owned.StartTime.ToUniversalTime()
+     $identity=@{pid=$owned.Id;path=$owned.Path;startUtc=$start.ToString('o');hwnd=$script:dialog[0];title='Close ytTrayDL?'}
+     @{schemaVersion=1;scenario='ask';requestedUtc=$requested.ToString('o');deadlineUtc=$deadline.ToString('o');identity=$identity;metrics=[FieldGuiNative]::Metrics($script:dialog[0],$owned.Id);actionEvidencePath=$evidencePath;requiredEvidence=@{status='Performed';method='CUA';action='Exit ytTrayDL';freshScreenshot=$true;identity=$identity;completedUtc='Actual UTC action completion within request/deadline'}}|ConvertTo-Json -Depth 7|Set-Content $readyPath
+     do{$owned.Refresh();if($owned.HasExited-and(Test-Path -LiteralPath $evidencePath)){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow-lt$deadline)
+     $exited=$owned.HasExited;$evidenceValid=$false;$evidenceError=$null
+     if(Test-Path -LiteralPath $evidencePath){try{$actual=Get-Content -LiteralPath $evidencePath -Raw|ConvertFrom-Json;$when=([DateTime]$actual.completedUtc).ToUniversalTime();$actualIdentity=$actual.identity;$evidenceValid=$actual.status-eq'Performed'-and$actual.method-eq'CUA'-and$actual.action-eq'Exit ytTrayDL'-and$actual.freshScreenshot-eq$true-and$actualIdentity.pid-eq$identity.pid-and$actualIdentity.path-eq$identity.path-and([DateTime]$actualIdentity.startUtc).ToUniversalTime().Ticks-eq$start.Ticks-and$actualIdentity.hwnd-eq$identity.hwnd-and$actualIdentity.title-eq$identity.title-and$when-ge$requested-and$when-le$deadline}catch{$evidenceError=$_.Exception.Message}}
+     $exitUtc=$null;$exitWithinDeadline=$false;if($exited){$exitUtc=$owned.ExitTime.ToUniversalTime();$exitWithinDeadline=Test-ExternalAskExitDeadline $exitUtc $requested $deadline}
+     $pass=$exited-and$owned.ExitCode-eq0-and$evidenceValid-and$exitWithinDeadline
+     Record 'close-ask-dialog-Exit' $(if($pass){'Pass'}else{'Fail'}) @{method='External actual CUA Ask Exit; assisted, not unattended automation';pid=$owned.Id;exited=$exited;exitCode=$(if($exited){$owned.ExitCode});exitUtc=$(if($exitUtc){$exitUtc.ToString('o')});exitWithinDeadline=$exitWithinDeadline;actualActionEvidenceValid=$evidenceValid;evidenceError=$evidenceError;readyPath=$readyPath;actionEvidencePath=$evidencePath;deadlineUtc=$deadline.ToString('o')}
+     $result.limitations+=@('Ask Exit used explicit actual CUA business action; no unattended Ask input qualification.')
+    }elseif($found){$actionExit=Invoke-OwnedUi $owned $script:dialog[0] 'Invoke' 'Exit ytTrayDL' (Join-Path $root 'dialog-action.json');if($actionExit-ne0){@{method='CUA observed Ask Exit DWM-visible-frame center159,86; exact472x362 frame96DPI/title and foreground/PID guards';metrics=[FieldGuiNative]::Metrics($script:dialog[0],$owned.Id)}|ConvertTo-Json|Set-Content (Join-Path $root 'dialog-pixel-contract.json');$result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $script:dialog[0] -Stage 'ask-exit' -RequestPath (Join-Path $root 'focus-needed-ask-exit.json') -AllowAssistance:$AllowFocusHandoff -RequireOperatorAcknowledgement);$actionExit=Invoke-OwnedUi $owned $script:dialog[0] 'Invoke' 'Exit ytTrayDL' (Join-Path $root 'activated-dialog-action.json');if($actionExit-ne0){$result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $script:dialog[0] -Stage 'ask-exit-input' -RequestPath (Join-Path $root 'focus-needed-ask-exit-input.json') -AllowAssistance:$AllowFocusHandoff);[FieldGuiNative]::ClickObserved($script:dialog[0],$owned.Id,'Close ytTrayDL?',472,362,96,159,86);$actionExit=0}};$exited=$owned.WaitForExit(8000);Record 'close-ask-dialog-Exit' $(if($actionExit-eq0 -and $exited -and $owned.ExitCode-eq0){'Pass'}else{'Fail'}) @{pid=$owned.Id;actionExit=$actionExit;exited=$exited}}
     else{Record 'close-ask-dialog' 'Fail' @{pid=$owned.Id;reason='Expected native dialog not observed'}}
    }elseif($mode -eq 'taskbar'){
     $minimized=Wait-State { @([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::IsIconic([IntPtr]$_)}).Count -gt 0 }

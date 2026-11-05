@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   msrv:
@@ -19,6 +23,8 @@ jobs:
         run: rustup toolchain install 1.89.0 --profile minimal --no-self-update
       - name: Check full locked graph on minimum Rust
         run: cargo +1.89.0 check --all-targets --locked
+      - name: Check field harness on minimum Rust
+        run: cargo +1.89.0 check --all-targets --features field-validation --locked
 
   linux-gate:
     runs-on: ubuntu-latest
@@ -38,6 +44,10 @@ jobs:
         run: cargo test --locked
       - name: Windows check
         run: cargo check --target x86_64-pc-windows-msvc --all-targets --locked
+      - name: Field harness clippy (host)
+        run: cargo clippy --all-targets --features field-validation --locked -- -D warnings
+      - name: Field harness clippy (Windows)
+        run: cargo clippy --target x86_64-pc-windows-msvc --all-targets --features field-validation --locked -- -D warnings
 
   windows-build:
     runs-on: windows-latest
@@ -62,8 +72,73 @@ jobs:
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches.Groups[1].Value
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$version installer\yttraydl.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: yttraydl-setup
           path: dist/ytTrayDL-Setup-*.exe
+
+  windows-media-field:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build owned process runner
+        shell: pwsh
+        run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/process-runner"
+      - name: Resolve hash-pinned real tools
+        shell: pwsh
+        run: ./tools/Get-FieldTools.ps1 -Destination "$env:RUNNER_TEMP/field-tools" -ProcessRunner "$env:RUNNER_TEMP/process-runner/InstallerStateProbe.exe"
+      - name: Build real media harness
+        run: cargo build --locked --features field-validation --bin field_validation
+      - name: Exercise real media and process lifecycle
+        shell: pwsh
+        run: |
+          $harness = (Resolve-Path './target/debug/field_validation.exe').Path
+          ./tools/Invoke-MediaFieldValidation.ps1 -Harness $harness -YtDlp $env:FIELD_YTDLP -FFmpeg $env:FIELD_FFMPEG -FFprobe $env:FIELD_FFPROBE -Root "$env:RUNNER_TEMP/media-evidence" -Scenario all -TimeoutSeconds 120
+          if ($LASTEXITCODE -ne 0) { throw "Media field assertions failed: $LASTEXITCODE" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-media-field-evidence
+          path: |
+            ${{ runner.temp }}/media-evidence
+            ${{ runner.temp }}/field-tools/provenance.json
+          if-no-files-found: error
+
+  windows-installer-field:
+    needs: windows-build
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [clean, upgrade, upgrade061-off, upgrade070-off]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: yttraydl-setup
+          path: candidate-setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: yttraydl-windows
+          path: candidate-exe
+      - name: Build actual library state consumer
+        shell: pwsh
+        run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/state-probe"
+      - name: Actual install, selected published-baseline upgrade, and uninstall
+        shell: pwsh
+        run: |
+          $candidate = @(Get-ChildItem candidate-setup -Filter '*.exe' -File)
+          if ($candidate.Count -ne 1) { throw 'Expected exactly one candidate installer' }
+          ./tools/Invoke-InstallerLifecycle.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-evidence" -TrustIsolatedRunner
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-${{ matrix.scenario }}-evidence
+          path: ${{ runner.temp }}/installer-evidence
+          if-no-files-found: error

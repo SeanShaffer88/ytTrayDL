@@ -11,6 +11,7 @@ use yttraydl::platform;
 use yttraydl::settings::{
     Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
+use yttraydl::window_geometry::TransientWindow;
 use yttraydl::ytdlp::YtDlpSource;
 
 fn status_color(status: HistoryStatus) -> egui::Color32 {
@@ -41,6 +42,438 @@ fn bottom_right(ctx: &egui::Context, size: egui::Vec2, lift: f32) -> egui::Pos2 
         (mon.x - size.x - 12.0).max(0.0),
         (mon.y - size.y - 12.0 - lift).max(0.0),
     )
+}
+
+fn confirmation_position(ctx: &egui::Context, size: egui::Vec2) -> egui::Pos2 {
+    ctx.input(|input| input.viewport().outer_rect)
+        .map(|parent| parent.center() - size / 2.0)
+        .unwrap_or_else(|| bottom_right(ctx, size, 0.0))
+}
+
+fn panel_regions(full: egui::Rect, header_bottom: f32) -> (egui::Rect, egui::Rect) {
+    let footer_top = (full.bottom() - 46.0).max(full.top());
+    let footer = egui::Rect::from_min_max(egui::pos2(full.left(), footer_top), full.max);
+    let body_top = (header_bottom + 10.0).min(footer_top);
+    let body_bottom = (footer_top - 8.0).max(body_top);
+    let body = egui::Rect::from_min_max(
+        egui::pos2(full.left() + 12.0, body_top),
+        egui::pos2(full.right() - 12.0, body_bottom),
+    );
+    (body, footer)
+}
+
+fn flexible_title_row<R>(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    title: &str,
+    tooltip: &str,
+    action_labels: &[&str],
+    leading: impl FnOnce(&mut egui::Ui),
+    actions: impl FnOnce(&mut egui::Ui) -> R,
+) -> (egui::Response, R) {
+    ui.push_id(id, |ui| {
+        ui.horizontal(|ui| {
+            leading(ui);
+            // Button::small uses TextStyle::Button and the normal horizontal
+            // frame padding; only vertical padding differs (egui 0.33.3).
+            // Reserve measured controls, then create them in their original order
+            // so keyboard traversal and visual action ordering remain unchanged.
+            let padding = if ui.visuals().button_frame {
+                2.0 * ui.spacing().button_padding.x
+            } else {
+                0.0
+            };
+            let controls: f32 = action_labels
+                .iter()
+                .map(|label| {
+                    egui::WidgetText::from(*label)
+                        .into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::TextStyle::Button,
+                        )
+                        .size()
+                        .x
+                        .ceil()
+                        + padding
+                })
+                .sum();
+            let reserved = controls + action_labels.len() as f32 * ui.spacing().item_spacing.x;
+            let title_width = (ui.available_width() - reserved).max(0.0);
+            let title = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(title_width, ui.text_style_height(&egui::TextStyle::Body)),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        // add_sized centers short labels within their reserved
+                        // cell. Keep the full cell but left-align actual text.
+                        ui.set_min_width(title_width);
+                        ui.add(egui::Label::new(title).truncate().halign(egui::Align::Min));
+                    },
+                )
+                .response
+                .on_hover_text(tooltip);
+            (title, actions(ui))
+        })
+        .inner
+    })
+    .inner
+}
+
+fn grid_action(response: egui::Response, rectangles: &mut Vec<egui::Rect>) -> egui::Response {
+    rectangles.push(response.rect);
+    response
+}
+
+fn paint_grid_columns(ui: &egui::Ui, title: egui::Rect, actions: &[egui::Rect]) {
+    let mut cells = vec![title];
+    cells.extend_from_slice(actions);
+    cells.sort_by(|a, b| a.left().total_cmp(&b.left()));
+    let row = cells
+        .iter()
+        .copied()
+        .fold(egui::Rect::NOTHING, |row, cell| row.union(cell));
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(row));
+    for pair in cells.windows(2) {
+        if pair[1].left() > pair[0].right() {
+            let x = (pair[0].right() + pair[1].left()) / 2.0;
+            painter.line_segment(
+                [egui::pos2(x, row.top()), egui::pos2(x, row.bottom())],
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x46, 0x46, 0x4e)),
+            );
+        }
+    }
+}
+
+fn paint_entry_boundary(ui: &egui::Ui, previous_bottom: Option<f32>) {
+    if let Some(bottom) = previous_bottom {
+        let top = ui.cursor().top();
+        if top > bottom {
+            let y = (bottom + top) / 2.0;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(ui.max_rect().left(), y),
+                    egui::pos2(ui.max_rect().right(), y),
+                ],
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x46, 0x46, 0x4e)),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{flexible_title_row, panel_regions};
+    #[test]
+    fn panel_regions_keep_overflow_separate_from_reachable_footer() {
+        for size in [
+            egui::vec2(340.0, 420.0),
+            egui::vec2(400.0, 420.0),
+            egui::vec2(560.0, 650.0),
+        ] {
+            let full = egui::Rect::from_min_size(egui::pos2(40.0, 80.0), size);
+            let (body, footer) = panel_regions(full, full.top() + 96.0);
+            assert!(full.contains_rect(body));
+            assert!(full.contains_rect(footer));
+            assert!(body.bottom() < footer.top());
+            assert!(body.height() > 0.0 && footer.height() >= 30.0);
+            assert_eq!(footer.bottom(), full.bottom());
+            assert!(body.width() < full.width());
+            // An arbitrarily long body belongs to a bounded scroll viewport,
+            // never the footer's hit region.
+            assert!(body.height() < 2000.0);
+            assert!(!body.intersects(footer));
+        }
+    }
+
+    #[test]
+    fn title_cells_expand_without_overlapping_real_buttons_and_tab_order() {
+        let ctx = egui::Context::default();
+        super::super::apply_theme(&ctx);
+        let render = |width: f32, events: Vec<egui::Event>, focus_first: bool| {
+            let mut bounds = None;
+            let _=ctx.run(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,200.0))),events,..Default::default()},|ctx|{
+                egui::CentralPanel::default().show(ctx,|ui|{
+                    let row=ui.max_rect();
+                    let (title,buttons)=flexible_title_row(ui,"test-row","Long café 雪 video title / https://example.invalid/verylongunbrokenoriginaltitle", "full name and URL", &["📂","↻ Retry","✕"], |_|{}, |ui|{
+                        let first=ui.small_button("📂");
+                        if focus_first {first.request_focus();}
+                        [first,ui.small_button("↻ Retry"),ui.small_button("✕")]
+                    });
+                    bounds=Some((row,title,buttons));
+                });
+            });
+            bounds.unwrap()
+        };
+        let (small_area, small, buttons) = render(340.0, vec![], true);
+        for button in &buttons {
+            assert!(small_area.contains_rect(button.rect));
+            assert!(!small.rect.intersects(button.rect));
+        }
+        let tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (_, _, next) = render(340.0, vec![tab], false);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(next[1].id));
+        let point = next[1].rect.center();
+        let (_, _, clicked) = render(
+            340.0,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            false,
+        );
+        assert!(clicked[1].clicked() && !clicked[0].clicked() && !clicked[2].clicked());
+        let (_, wide, _) = render(800.0, vec![], false);
+        assert!(wide.rect.width() > small.rect.width() + 300.0);
+    }
+
+    #[test]
+    fn right_anchored_actions_keep_creation_order_and_fit_minimum_width() {
+        let ctx = egui::Context::default();
+        super::super::apply_theme(&ctx);
+        let render = |events: Vec<egui::Event>, focus: bool| {
+            let mut result = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(460.0, 200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let area = ui.max_rect();
+                        let (title, buttons) = flexible_title_row(
+                            ui,
+                            "queued-row",
+                            "雪 café https://example.invalid/unbrokenvideoidentifierverylong",
+                            "full tooltip",
+                            &["✕ Cancel", "⏸ Pause", "↓", "↑"],
+                            |_| {},
+                            |ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let first = ui.small_button("✕ Cancel");
+                                        if focus {
+                                            first.request_focus();
+                                        }
+                                        [
+                                            first,
+                                            ui.small_button("⏸ Pause"),
+                                            ui.add_enabled(false, egui::Button::new("↓").small()),
+                                            ui.add_enabled(false, egui::Button::new("↑").small()),
+                                        ]
+                                    },
+                                )
+                                .inner
+                            },
+                        );
+                        result = Some((area, title, buttons));
+                    });
+                },
+            );
+            result.unwrap()
+        };
+        let (area, title, buttons) = render(vec![], true);
+        for button in &buttons {
+            assert!(area.contains_rect(button.rect));
+            assert!(!title.rect.intersects(button.rect));
+        }
+        assert!(buttons[0].rect.left() > buttons[1].rect.left());
+        let (_, _, next) = render(
+            vec![egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            false,
+        );
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(next[1].id));
+        assert!(!next[2].enabled() && !next[3].enabled());
+    }
+
+    #[test]
+    fn short_and_long_titles_paint_at_the_same_left_edge() {
+        let ctx = egui::Context::default();
+        super::super::apply_theme(&ctx);
+        let short = "Part 04 — café";
+        let long="Part 04 — café 雪 original video title with a very long unbroken https://example.invalid/videoidentifierandmorecharacters";
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for (index, text) in [short, long].iter().enumerate() {
+                        let _ = flexible_title_row(
+                            ui,
+                            index,
+                            text,
+                            text,
+                            &["✕", "⬇ Download"],
+                            |_| {},
+                            |ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let _ = ui.small_button("✕");
+                                        let _ = ui.small_button("⬇ Download");
+                                    },
+                                );
+                            },
+                        );
+                    }
+                });
+            },
+        );
+        fn find(shape: &egui::epaint::Shape, text: &str) -> Option<f32> {
+            match shape {
+                egui::epaint::Shape::Text(shape) if shape.galley.job.text == text => {
+                    Some(shape.pos.x + shape.galley.rows.first()?.pos.x)
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| find(shape, text))
+                }
+                _ => None,
+            }
+        }
+        let x = |text| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| find(&shape.shape, text))
+                .expect("painted title galley")
+        };
+        assert!(
+            (x(short) - x(long)).abs() <= 0.5,
+            "short text x{} differs from long text x{}",
+            x(short),
+            x(long)
+        );
+    }
+
+    #[test]
+    fn grid_paint_uses_real_gaps_and_complete_metadata_without_moving_layout() {
+        let ctx = egui::Context::default();
+        super::super::apply_theme(&ctx);
+        let mut primary = Vec::new();
+        let mut cells = Vec::new();
+        let mut metadata_bottoms = Vec::new();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.set_clip_rect(egui::Rect::from_min_max(
+                        ui.max_rect().min,
+                        egui::pos2(ui.max_rect().right(), 120.0),
+                    ));
+                    let mut previous = None;
+                    for index in 0..2 {
+                        let cursor = ui.cursor();
+                        super::paint_entry_boundary(ui, previous);
+                        assert_eq!(ui.cursor(), cursor);
+                        let mut actions = Vec::new();
+                        let (title, ()) = flexible_title_row(
+                            ui,
+                            index,
+                            "Part 01 café original long title",
+                            "tooltip",
+                            &["📂", "↻ Retry"],
+                            |_| {},
+                            |ui| {
+                                let layout = if index == 0 {
+                                    egui::Layout::left_to_right(egui::Align::Center)
+                                } else {
+                                    egui::Layout::right_to_left(egui::Align::Center)
+                                };
+                                ui.with_layout(layout, |ui| {
+                                    let _ = super::grid_action(ui.small_button("📂"), &mut actions);
+                                    let _ = super::grid_action(
+                                        ui.small_button("↻ Retry"),
+                                        &mut actions,
+                                    );
+                                });
+                            },
+                        );
+                        let cursor = ui.cursor();
+                        super::paint_grid_columns(ui, title.rect, &actions);
+                        assert_eq!(ui.cursor(), cursor);
+                        primary.push(title.rect.union(actions[0]).union(actions[1]));
+                        cells.push(title.rect);
+                        cells.extend_from_slice(&actions);
+                        let metadata =
+                            ui.label("Time and quality metadata span the complete entry");
+                        previous = Some(metadata.rect.bottom());
+                        metadata_bottoms.push(metadata.rect.bottom());
+                    }
+                });
+            },
+        );
+        let lines = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::from_rgb(0x46, 0x46, 0x4e) =>
+                {
+                    Some((points, shape.clip_rect))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 5);
+        let horizontal = lines
+            .iter()
+            .filter(|(points, _)| points[0].y == points[1].y)
+            .collect::<Vec<_>>();
+        assert_eq!(horizontal.len(), 1);
+        assert!(
+            horizontal[0].0[0].y > metadata_bottoms[0] && horizontal[0].0[0].y < primary[1].top()
+        );
+        for (points, clip) in lines {
+            assert!(clip.bottom() <= 120.0);
+            if points[0].x == points[1].x {
+                let center = egui::pos2(points[0].x, (points[0].y + points[1].y) / 2.0);
+                assert!(
+                    !cells.iter().any(|cell| cell.contains(center)),
+                    "divider crosses an actual title/action cell"
+                );
+            }
+        }
+    }
 }
 
 impl App {
@@ -141,23 +574,29 @@ impl App {
         });
         ui.allocate_rect(band_rect, egui::Sense::hover());
 
-        // Content below the band, inset 12px on both sides —
-        // the margins the old window_margin style used to give
-        // every row (the 0.5.1 width budgets are computed from
-        // `available_width` exactly as before).
-        let content_rect = egui::Rect::from_min_max(
-            egui::pos2(full.min.x + 12.0, band_rect.max.y + 10.0),
-            egui::pos2(full.max.x - 12.0, full.max.y),
-        );
+        // The footer has its own hit region. Long or populated body content
+        // scrolls within the remaining height instead of pushing it offscreen.
+        let (content_rect, footer_rect) = panel_regions(full, band_rect.bottom());
         let mut content = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(content_rect)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        self.panel_body(&mut content, full);
+        content.set_clip_rect(content_rect.intersect(ui.clip_rect()));
+        egui::ScrollArea::vertical()
+            .id_salt("control-panel-body")
+            .auto_shrink([false, false])
+            .max_height(content_rect.height())
+            .show(&mut content, |ui| self.panel_body(ui));
+        let mut footer = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(footer_rect.shrink2(egui::vec2(12.0, 8.0)))
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        self.panel_footer(&mut footer, footer_rect);
     }
 
-    fn panel_body(&mut self, ui: &mut egui::Ui, full: egui::Rect) {
+    fn panel_body(&mut self, ui: &mut egui::Ui) {
         // Failure banner (0.4.0): the latest final failure, with
         // one-click retry — failures used to be easy to miss.
         if let Some(notice) = self.failure_notice.clone() {
@@ -288,7 +727,7 @@ impl App {
                     .strong(),
                 );
                 ui.label("One click installs the official standalone yt-dlp.exe from GitHub into ytTrayDL's own folder. Nothing else on your PC is changed.");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                         let busy = self.ytdlp_fetch_rx.is_some();
                         if ui
                             .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install yt-dlp" }))
@@ -433,7 +872,7 @@ impl App {
         });
 
         // Active downloads (compact).
-        let active: Vec<(u64, String, f32, Option<String>, JobState)> = self
+        let active: Vec<(u64, String, String, f32, Option<String>, JobState)> = self
             .downloads
             .running_jobs()
             .chain(self.downloads.queued_jobs())
@@ -441,6 +880,7 @@ impl App {
                 (
                     j.id,
                     j.title.clone(),
+                    j.url.clone(),
                     j.percent,
                     j.eta_text.clone(),
                     j.state,
@@ -451,28 +891,45 @@ impl App {
             ui.add_space(8.0);
             ui.label(section_heading("Downloading"));
             let mut cancel: Option<u64> = None;
-            for (id, title, pct, eta, state) in &active {
+            let mut previous_bottom = None;
+            for (id, title, url, pct, eta, state) in &active {
+                paint_entry_boundary(ui, previous_bottom);
+                let mut action_rects = Vec::new();
+                let (title_cell, ()) = flexible_title_row(
+                    ui,
+                    ("main-job", id),
+                    if title.is_empty() { url } else { title },
+                    &format!("{title}\n{url}"),
+                    &["✕"],
+                    |_| {},
+                    |ui| {
+                        if grid_action(ui.small_button("✕"), &mut action_rects)
+                            .on_hover_text(
+                                "Cancel this download (the partial file is kept for resume)",
+                            )
+                            .clicked()
+                        {
+                            cancel = Some(*id);
+                        }
+                    },
+                );
+                paint_grid_columns(ui, title_cell.rect, &action_rects);
                 ui.horizontal(|ui| {
-                    ui.label(truncate(title, 26)).on_hover_text(title.clone());
                     if *state == JobState::Queued {
                         ui.label(egui::RichText::new("queued").color(TEXT_FAINT));
                     } else {
                         ui.add(egui::ProgressBar::new(pct / 100.0).desired_width(90.0));
-                        ui.label(format!(
+                        let metadata = format!(
                             "{pct:.0}%{}",
                             eta.as_ref()
                                 .map(|e| format!(" · ETA {e}"))
                                 .unwrap_or_default()
-                        ));
-                    }
-                    if ui
-                        .small_button("✕")
-                        .on_hover_text("Cancel this download (the partial file is kept for resume)")
-                        .clicked()
-                    {
-                        cancel = Some(*id);
+                        );
+                        ui.add(egui::Label::new(&metadata).truncate())
+                            .on_hover_text(metadata);
                     }
                 });
+                previous_bottom = Some(ui.min_rect().bottom());
             }
             if let Some(id) = cancel {
                 self.downloads.cancel(id);
@@ -619,34 +1076,43 @@ impl App {
             ui.add_space(8.0);
             ui.label(section_heading("Saved for later"));
             let mut act: Option<(usize, bool)> = None; // (index, download?)
+            let mut previous_bottom = None;
             for (i, link) in self.saved_links.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    let label = if link.title.is_empty() || link.title == link.url {
-                        truncate(&link.url, 40)
-                    } else {
-                        truncate(&link.title, 40)
-                    };
-                    ui.label(egui::RichText::new(label).color(TEXT))
-                        .on_hover_text(link.url.clone());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("✕")
-                            .on_hover_text("Remove from the saved list")
-                            .clicked()
-                        {
-                            act = Some((i, false));
-                        }
-                        if ui
-                            .small_button("⬇ Download")
-                            .on_hover_text(
-                                "Download now with your default quality (or its domain pin)",
-                            )
-                            .clicked()
-                        {
-                            act = Some((i, true));
-                        }
-                    });
-                });
+                let label = if link.title.is_empty() || link.title == link.url {
+                    &link.url
+                } else {
+                    &link.title
+                };
+                paint_entry_boundary(ui, previous_bottom);
+                let mut action_rects = Vec::new();
+                let (title_cell, ()) = flexible_title_row(
+                    ui,
+                    ("saved", &link.url),
+                    label,
+                    &format!("{label}\n{}", link.url),
+                    &["✕", "⬇ Download"],
+                    |_| {},
+                    |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if grid_action(ui.small_button("✕"), &mut action_rects)
+                                .on_hover_text("Remove from the saved list")
+                                .clicked()
+                            {
+                                act = Some((i, false));
+                            }
+                            if grid_action(ui.small_button("⬇ Download"), &mut action_rects)
+                                .on_hover_text(
+                                    "Download now with your default quality (or its domain pin)",
+                                )
+                                .clicked()
+                            {
+                                act = Some((i, true));
+                            }
+                        });
+                    },
+                );
+                paint_grid_columns(ui, title_cell.rect, &action_rects);
+                previous_bottom = Some(ui.min_rect().bottom());
             }
             if let Some((i, download)) = act {
                 if download {
@@ -671,23 +1137,10 @@ impl App {
                 .on_hover_text(url.clone());
             }
         }
+    }
 
-        // Footer (0.5.0), a recessed bar since 0.6.0: pinned
-        // to the bottom of the window, painted full-bleed to
-        // the window edges (WELL fill, dark top line) so a
-        // short panel no longer reads as content floating over
-        // an empty black void. When the content is taller than
-        // the window the spare height is negative and the
-        // footer just follows it. The buttons keep their
-        // 0.5.1 fixed sizes inside the bar.
-        let spare = ui.available_height() - 46.0;
-        if spare > 8.0 {
-            ui.add_space(spare);
-        } else {
-            ui.add_space(8.0);
-        }
-        let bar_rect =
-            egui::Rect::from_min_max(egui::pos2(full.min.x, ui.cursor().top()), full.max);
+    fn panel_footer(&mut self, ui: &mut egui::Ui, bar_rect: egui::Rect) {
+        // The existing full-bleed recessed bar and button sizes are retained.
         // painter_at: the content child's own clip is inset,
         // and the bar must reach the window edges.
         let bar_painter = ui.painter_at(bar_rect);
@@ -1297,6 +1750,8 @@ impl App {
                 });
             },
         );
+
+        platform::constrain_transient_window(TransientWindow::DownloadPrompt);
 
         if interacted {
             // Hovering/interacting counts as "I'm deciding": the
@@ -2865,6 +3320,7 @@ type PausedRow = (u64, String, String, f32);
 impl App {
     pub fn downloads_ui(&mut self, ctx: &egui::Context) {
         if !self.show_downloads {
+            self.downloads_initial_size = None;
             return;
         }
         let mut open = true;
@@ -2926,6 +3382,16 @@ impl App {
             .collect();
         let any_active = !running.is_empty() || !queued.is_empty();
         let history_entries: Vec<HistoryEntry> = self.history.entries.clone();
+        let empty = running.is_empty()
+            && queued.is_empty()
+            && paused.is_empty()
+            && finished.is_empty()
+            && history_entries.is_empty();
+        let initial_size = *self.downloads_initial_size.get_or_insert(if empty {
+            [800.0, 360.0]
+        } else {
+            [800.0, 560.0]
+        });
         let bin_missing = self.bin.is_none();
         let fetching = self.ytdlp_fetch_rx.is_some();
 
@@ -2948,7 +3414,7 @@ impl App {
             egui::ViewportId::from_hash_of("yttraydl-downloads"),
             egui::ViewportBuilder::default()
                 .with_title("ytTrayDL — Downloads")
-                .with_inner_size([580.0, 560.0])
+                .with_inner_size(initial_size)
                 .with_min_inner_size([460.0, 360.0]),
             |ctx, _class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
@@ -2981,18 +3447,21 @@ impl App {
                         if !any_active && paused.is_empty() {
                             ui.label(egui::RichText::new("Nothing downloading. Copy a supported link, or paste one in the panel.").color(TEXT_DIM));
                         }
+                        let mut previous_active_bottom=None;
                         for (id, title, url, pct, speed, eta, state, _err) in &running {
-                            ui.horizontal(|ui| {
-                                ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
+                            paint_entry_boundary(ui,previous_active_bottom);
+                            let mut action_rects=Vec::new();
+                            let (title_cell,())=flexible_title_row(ui,("running",id),title,&format!("{title}\n{url}"),&["✕ Cancel","⏸ Pause"],|_|{},|ui|{
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("✕ Cancel").on_hover_text("Cancel (partial file kept for resume)").clicked() {
+                                    if grid_action(ui.small_button("✕ Cancel"),&mut action_rects).on_hover_text("Cancel (partial file kept for resume)").clicked() {
                                         cancel = Some(*id);
                                     }
-                                    if ui.small_button("⏸ Pause").on_hover_text("Pause (partial file kept; resume continues it)").clicked() {
+                                    if grid_action(ui.small_button("⏸ Pause"),&mut action_rects).on_hover_text("Pause (partial file kept; resume continues it)").clicked() {
                                         pause_job = Some(*id);
                                     }
                                 });
                             });
+                            paint_grid_columns(ui,title_cell.rect,&action_rects);
                             match state {
                                 JobState::PostProcessing => {
                                     ui.label(egui::RichText::new("Processing — merging / converting…").color(TEXT_DIM).small());
@@ -3007,50 +3476,58 @@ impl App {
                                     if let Some(e) = eta {
                                         bits.push(format!("ETA {e}"));
                                     }
-                                    ui.label(egui::RichText::new(bits.join(" · ")).small().color(TEXT_DIM));
+                                    let metadata=bits.join(" · ");
+                                    ui.add(egui::Label::new(egui::RichText::new(&metadata).small().color(TEXT_DIM)).truncate()).on_hover_text(metadata);
                                 }
                             }
                             ui.add_space(4.0);
+                            previous_active_bottom=Some(ui.min_rect().bottom());
                         }
                         let queued_len = queued.len();
                         for (qi, (id, title, url, _pct, _speed, _eta, _state, _err)) in queued.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
+                            paint_entry_boundary(ui,previous_active_bottom);
+                            let mut action_rects=Vec::new();
+                            let (title_cell,())=flexible_title_row(ui,("queued",id),title,&format!("{title}\n{url}"),&["✕ Cancel","⏸ Pause","↓","↑"],|_|{},|ui|{
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("✕ Cancel").on_hover_text("Cancel this queued download").clicked() {
+                                    if grid_action(ui.small_button("✕ Cancel"),&mut action_rects).on_hover_text("Cancel this queued download").clicked() {
                                         cancel = Some(*id);
                                     }
-                                    if ui.small_button("⏸ Pause").on_hover_text("Pause (stays out of the queue until resumed)").clicked() {
+                                    if grid_action(ui.small_button("⏸ Pause"),&mut action_rects).on_hover_text("Pause (stays out of the queue until resumed)").clicked() {
                                         pause_job = Some(*id);
                                     }
-                                    if ui.add_enabled(qi + 1 < queued_len, egui::Button::new("↓").small()).on_hover_text("Move down in the queue").clicked() {
+                                    if grid_action(ui.add_enabled(qi + 1 < queued_len, egui::Button::new("↓").small()),&mut action_rects).on_hover_text("Move down in the queue").clicked() {
                                         move_job = Some((*id, false));
                                     }
-                                    if ui.add_enabled(qi > 0, egui::Button::new("↑").small()).on_hover_text("Move up in the queue").clicked() {
+                                    if grid_action(ui.add_enabled(qi > 0, egui::Button::new("↑").small()),&mut action_rects).on_hover_text("Move up in the queue").clicked() {
                                         move_job = Some((*id, true));
                                     }
                                 });
                             });
+                            paint_grid_columns(ui,title_cell.rect,&action_rects);
                             ui.label(egui::RichText::new(format!("Queued — #{} in queue", qi + 1)).color(TEXT_FAINT).small());
                             ui.add_space(4.0);
+                            previous_active_bottom=Some(ui.min_rect().bottom());
                         }
                         });
 
                         if !paused.is_empty() {
                             premium_card(ui, |ui| {
                             ui.label(section_heading("Paused"));
+                            let mut previous_bottom=None;
                             for (id, title, url, pct) in &paused {
-                                ui.horizontal(|ui| {
-                                    ui.label(truncate(title, 40)).on_hover_text(format!("{title}\n{url}"));
+                                paint_entry_boundary(ui,previous_bottom);
+                                let mut action_rects=Vec::new();
+                                let (title_cell,())=flexible_title_row(ui,("paused",id),title,&format!("{title}\n{url}"),&["✕ Cancel","▶ Resume"],|_|{},|ui|{
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.small_button("✕ Cancel").on_hover_text("Cancel for good (partial file kept on disk)").clicked() {
+                                        if grid_action(ui.small_button("✕ Cancel"),&mut action_rects).on_hover_text("Cancel for good (partial file kept on disk)").clicked() {
                                             cancel = Some(*id);
                                         }
-                                        if ui.small_button("▶ Resume").on_hover_text("Resume (continues the partial file)").clicked() {
+                                        if grid_action(ui.small_button("▶ Resume"),&mut action_rects).on_hover_text("Resume (continues the partial file)").clicked() {
                                             resume_job = Some(*id);
                                         }
                                     });
                                 });
+                                paint_grid_columns(ui,title_cell.rect,&action_rects);
                                 let txt = if *pct > 0.0 {
                                     format!("Paused at {pct:.0}%")
                                 } else {
@@ -3058,6 +3535,7 @@ impl App {
                                 };
                                 ui.label(egui::RichText::new(txt).color(TEXT_FAINT).small());
                                 ui.add_space(4.0);
+                                previous_bottom=Some(ui.min_rect().bottom());
                             }
                             });
                         }
@@ -3072,9 +3550,12 @@ impl App {
                                     }
                                 });
                             });
+                            let mut previous_bottom=None;
                             for row in &finished {
+                                paint_entry_boundary(ui,previous_bottom);
                                 job_row(ui, row, &mut open_target, &mut retry_finished, &mut remove_finished);
                                 ui.add_space(2.0);
+                                previous_bottom=Some(ui.min_rect().bottom());
                             }
                             });
                         }
@@ -3091,22 +3572,29 @@ impl App {
                         if history_entries.is_empty() {
                             ui.label(egui::RichText::new("No downloads yet.").color(TEXT_DIM));
                         }
+                        let mut previous_bottom=None;
                         for e in history_entries.iter().take(40) {
-                            ui.horizontal(|ui| {
-                                status_dot(ui, status_color(e.status));
-                                ui.label(truncate(&e.title, 44)).on_hover_text(format!("{}\n{}\n{}", e.title, e.url, e.error.clone().unwrap_or_default()));
-                                ui.label(egui::RichText::new(format!("{} · {}", local_time_hhmm(e.finished_at_unix), e.preset_label)).color(TEXT_FAINT).small());
+                            paint_entry_boundary(ui,previous_bottom);
+                            let mut action_rects=Vec::new();
+                            let mut labels=Vec::new();
+                            if e.file.is_some(){labels.push("📂");}
+                            if e.status==HistoryStatus::Failed{labels.push("↻ Retry");}
+                            let (title_cell,())=flexible_title_row(ui,("history",e.finished_at_unix,&e.url),&e.title,&format!("{}\n{}\n{}", e.title, e.url, e.error.clone().unwrap_or_default()),&labels,|ui|status_dot(ui,status_color(e.status)),|ui|{
                                 if let Some(f) = &e.file {
-                                    if ui.small_button("📂").on_hover_text("Show in Explorer").clicked() {
+                                    if grid_action(ui.small_button("📂"),&mut action_rects).on_hover_text("Show in Explorer").clicked() {
                                         open_target = f.parent().map(|p| p.to_path_buf());
                                     }
                                 }
                                 if e.status == HistoryStatus::Failed
-                                    && ui.small_button("↻ Retry").on_hover_text("Download this link again with your current defaults").clicked()
+                                    && grid_action(ui.small_button("↻ Retry"),&mut action_rects).on_hover_text("Download this link again with your current defaults").clicked()
                                 {
                                     retry = Some((e.url.clone(), Preset::Best));
                                 }
                             });
+                            paint_grid_columns(ui,title_cell.rect,&action_rects);
+                            let metadata=format!("{} · {}",local_time_hhmm(e.finished_at_unix),e.preset_label);
+                            ui.add(egui::Label::new(egui::RichText::new(&metadata).color(TEXT_FAINT).small()).truncate()).on_hover_text(metadata);
+                            previous_bottom=Some(ui.min_rect().bottom());
                         }
                         });
                     });
@@ -3115,6 +3603,9 @@ impl App {
         );
 
         self.show_downloads = open;
+        if !open {
+            self.downloads_initial_size = None;
+        }
         if install {
             self.start_ytdlp_download();
         }
@@ -3322,6 +3813,7 @@ impl App {
             egui::ViewportId::from_hash_of("yttraydl-hide-confirm"),
             egui::ViewportBuilder::default()
                 .with_title("Hide the tray icon?")
+                .with_position(confirmation_position(ctx,egui::vec2(460.0,270.0)))
                 .with_inner_size([460.0, 270.0])
                 .with_min_inner_size([460.0, 270.0])
                 .with_max_inner_size([460.0, 270.0])
@@ -3353,6 +3845,7 @@ impl App {
                 });
             },
         );
+        platform::constrain_transient_window(TransientWindow::HideIconConfirmation);
         if hide {
             self.settings.tray_icon_visible = false;
             self.tray_visible = false;
@@ -3385,6 +3878,7 @@ impl App {
             egui::ViewportId::from_hash_of("yttraydl-close-choice"),
             egui::ViewportBuilder::default()
                 .with_title("Close ytTrayDL?")
+                .with_position(confirmation_position(ctx,egui::vec2(470.0,330.0)))
                 .with_inner_size([470.0, 330.0])
                 .with_min_inner_size([470.0, 330.0])
                 .with_max_inner_size([470.0, 330.0])
@@ -3467,6 +3961,7 @@ impl App {
                 });
             },
         );
+        platform::constrain_transient_window(TransientWindow::CloseConfirmation);
         self.close_remember = remember;
         if cancel || !open {
             self.confirm_close = false;
@@ -3500,41 +3995,57 @@ fn job_row(
 ) {
     let (id, title, url, state, file, err, _preset) = row;
     let state = *state;
-    ui.horizontal(|ui| {
-        let (ch, color) = match state {
-            JobState::Done => ("✓", OK_GREEN),
-            JobState::Failed => ("✗", ACCENT),
-            JobState::Cancelled => ("—", TEXT_FAINT),
-            _ => ("…", TEXT_DIM),
-        };
-        ui.label(egui::RichText::new(ch).color(color));
-        ui.label(truncate(title, 40)).on_hover_text(format!(
-            "{title}\n{url}{}",
-            err.as_ref().map(|e| format!("\n{e}")).unwrap_or_default()
-        ));
-        if let Some(f) = file {
-            if ui
-                .small_button("📂")
-                .on_hover_text("Show in Explorer")
+    let (ch, color) = match state {
+        JobState::Done => ("✓", OK_GREEN),
+        JobState::Failed => ("✗", ACCENT),
+        JobState::Cancelled => ("—", TEXT_FAINT),
+        _ => ("…", TEXT_DIM),
+    };
+    let mut labels = Vec::new();
+    if file.is_some() {
+        labels.push("📂");
+    }
+    if matches!(state, JobState::Failed | JobState::Cancelled) {
+        labels.push("↻ Retry");
+    }
+    labels.push("✕");
+    let tooltip = format!(
+        "{title}\n{url}{}",
+        err.as_ref().map(|e| format!("\n{e}")).unwrap_or_default()
+    );
+    let mut action_rects = Vec::new();
+    let (title_cell, ()) = flexible_title_row(
+        ui,
+        ("finished", id),
+        title,
+        &tooltip,
+        &labels,
+        |ui| {
+            ui.label(egui::RichText::new(ch).color(color));
+        },
+        |ui| {
+            if let Some(f) = file {
+                if grid_action(ui.small_button("📂"), &mut action_rects)
+                    .on_hover_text("Show in Explorer")
+                    .clicked()
+                {
+                    *open_target = f.parent().map(|p| p.to_path_buf());
+                }
+            }
+            if matches!(state, JobState::Failed | JobState::Cancelled)
+                && grid_action(ui.small_button("↻ Retry"), &mut action_rects)
+                    .on_hover_text("Download again with the same quality as the original attempt")
+                    .clicked()
+            {
+                *retry_finished = Some(*id);
+            }
+            if grid_action(ui.small_button("✕"), &mut action_rects)
+                .on_hover_text("Remove from this list (the file stays)")
                 .clicked()
             {
-                *open_target = f.parent().map(|p| p.to_path_buf());
+                *remove_finished = Some(*id);
             }
-        }
-        if matches!(state, JobState::Failed | JobState::Cancelled)
-            && ui
-                .small_button("↻ Retry")
-                .on_hover_text("Download again with the same quality as the original attempt")
-                .clicked()
-        {
-            *retry_finished = Some(*id);
-        }
-        if ui
-            .small_button("✕")
-            .on_hover_text("Remove from this list (the file stays)")
-            .clicked()
-        {
-            *remove_finished = Some(*id);
-        }
-    });
+        },
+    );
+    paint_grid_columns(ui, title_cell.rect, &action_rects);
 }

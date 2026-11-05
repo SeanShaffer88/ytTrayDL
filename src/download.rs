@@ -70,6 +70,12 @@ pub struct Job {
 }
 
 impl Job {
+    /// Next automatic retry number, only for a failed job within the budget.
+    /// Pauses and cancellation are user intent and never consume retry budget.
+    pub fn automatic_retry_attempt(&self, maximum: u32) -> Option<u32> {
+        (self.state == JobState::Failed && self.attempts < maximum).then(|| self.attempts + 1)
+    }
+
     pub fn is_active(&self) -> bool {
         matches!(
             self.state,
@@ -794,6 +800,33 @@ impl Drop for DownloadManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_retry_only_requeues_failed_jobs_with_budget() {
+        let mut manager = DownloadManager::new();
+        manager.enqueue("url".into(), String::new(), Preset::Best, false);
+        let mut job = manager.queue.pop_front().unwrap();
+        for state in [
+            JobState::Queued,
+            JobState::Running,
+            JobState::PostProcessing,
+            JobState::Paused,
+            JobState::Done,
+            JobState::Cancelled,
+        ] {
+            job.state = state;
+            assert_eq!(job.automatic_retry_attempt(2), None);
+        }
+        job.state = JobState::Failed;
+        assert_eq!(job.automatic_retry_attempt(0), None);
+        assert_eq!(job.automatic_retry_attempt(2), Some(1));
+        job.attempts = 1;
+        assert_eq!(job.automatic_retry_attempt(2), Some(2));
+        job.attempts = 2;
+        assert_eq!(job.automatic_retry_attempt(2), None);
+        job.attempts = u32::MAX;
+        assert_eq!(job.automatic_retry_attempt(u32::MAX), None);
+    }
 
     #[test]
     fn final_output_survives_late_intermediates_and_tail_is_bounded() {

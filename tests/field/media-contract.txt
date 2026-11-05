@@ -1,0 +1,17 @@
+Media field validation interface (v1)
+field_validation --yt-dlp ABS --ffmpeg ABS --ffprobe ABS --root NEW_ABS
+                 --scenario all|video|merge|audio|subtitles|playlist|retry|pause|cancel|shutdown
+                 [--timeout-seconds 120]
+Root must be new; no existing application profile/settings/tools are modified.
+Writes root/evidence.json, root/fixtures/* and root/<scenario>/*.
+Exit 0 = all requested assertions passed; 1 = assertion/runtime failure;
+2 = unavailable prerequisite/invalid invocation. Missing scenarios never pass.
+Fixture media is original synthetic ffmpeg output. HTTP binds 127.0.0.1 only.
+Fixture bundle and server implementation live in tests/field; no persistent service.
+Each evidence record reports coverage scope, args, tool identity/version,
+owned process IDs, process exits, assertions and artifacts. Loopback + load-info-json
+covers download/postprocessing, not external extractor discovery.
+GUI worker may reuse generated fixtures and relaunch the server helper, but must
+observe its own actual owned GUI process tree before lifecycle interventions.
+The coordinator must copy this contract to work/field-071/media-contract.txt:
+that destination is outside this worker's writable filesystem scope.

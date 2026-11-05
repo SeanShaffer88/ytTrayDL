@@ -461,6 +461,11 @@ shipped). The system:
 
 ## Verification matrix
 
+The release target is **0.8.0**. Its exact-version field and release gates remain
+pending until recorded; the [release contract](RELEASE-0.8.0.md) preserves actual
+0.7.1 candidate qualification separately as historical baseline evidence. CI
+script generation and static checks do not establish runtime verification.
+
 ### 0.7.0 validation
 
 These rows distinguish native Windows fixture evidence from manual application
@@ -543,3 +548,19 @@ refreshed release artifacts and packed-crate consumption are tracked by the
   publishing + SHA256SUMS done (since v0.2.1); signing intentionally
   not pursued (owner's rule: no signing unless a platform requires
   it).
+
+## Historical 0.7.1 candidate field qualification
+
+| Area | Status | Scope / evidence |
+|---|---|---|
+| Real-media pipeline | Verified | Nine original loopback scenarios against real yt-dlp/ffmpeg/ffprobe, locally and hosted CI; final output/history/hooks and process cleanup asserted |
+| Popup work-area placement | Verified | Actual decorated rectangle translated from [1478,516,446,591] to [1462,437,446,591] inside work area [0,0,1920,1040], unchanged size |
+| Saved normal window size and position | Verified | Main, Settings, Downloads moved/resized, closed/reopened and app restarted; exact rectangles and unchanged window-state JSON hashes verified on Windows 11 at 96 DPI |
+| Exit during real ffmpeg | Verified | Actual GUI Download and named main Exit, observed ffmpeg, exit0 and all five owned descendants gone; no completed history or subsequent writes |
+| DPI / monitor recovery | Partially verified | Pure boundary tests include negative origins, scaled dimensions across saved-state limits and oversized alignment; no physical display/DPI change performed |
+| Installer lifecycle | Verified for the historical candidate | Corrected hosted clean, 0.6.1 optional tasks on, 0.6.1 on-to-off and 0.7.0 on-to-off jobs passed on b25047b (53/63/63/63 assertions). Exact 0.8.0 jobs remain pending; interactive installer wizard and actual sign-in are not covered |
+| Other feature runtime coverage | Unverified by this pass | This does not extend qualification to channel watching, external extractor changes, actual sign-in/reboot, in-app tool installation or accessibility |
+
+The [release contract](RELEASE-0.8.0.md) describes current automated checks and
+limits. Preserve earlier field reports as historical observations; this table
+supersedes their pending status only for the exact areas listed above.

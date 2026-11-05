@@ -23,6 +23,7 @@ use yttraydl::rules::{decide, Decision};
 use yttraydl::settings::DefaultAction;
 use yttraydl::settings::{CloseAction, Preset, Settings};
 use yttraydl::url_detect::{extract_urls, host_of};
+use yttraydl::window_geometry::{WindowGeometries, WindowKind};
 use yttraydl::ytdlp::{self, VideoInfo, YtDlpBinary};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xE5, 0x48, 0x4D);
@@ -1530,9 +1531,56 @@ pub struct App {
     /// overwriting the handler's newer state on its next save.
     settings_mtime: Option<std::time::SystemTime>,
     last_settings_check: Instant,
+    window_geometries: WindowGeometries,
+    window_geometry_ready: [bool; 4],
+    window_geometry_dirty: bool,
+    last_geometry_save: Instant,
+    /// A creation hint only; queue changes must not resize an open window.
+    downloads_initial_size: Option<[f32; 2]>,
 }
 
 impl App {
+    /// Restore each persistent window once per opening. Capture only visible
+    /// normal bounds, before close/hide intent changes native visibility.
+    fn maintain_window_geometry(&mut self, force: bool) {
+        for kind in [
+            WindowKind::Main,
+            WindowKind::Settings,
+            WindowKind::Downloads,
+            WindowKind::About,
+        ] {
+            let index = kind.index();
+            if !self.window_geometry_ready[index] {
+                let restored = if let Some(saved) = self.window_geometries.get(kind) {
+                    yttraydl::platform::restore_window_geometry(kind, saved)
+                } else {
+                    yttraydl::platform::window_geometry(kind).is_some()
+                };
+                self.window_geometry_ready[index] = restored;
+                continue;
+            }
+            if let Some(current) = yttraydl::platform::window_geometry(kind) {
+                self.window_geometry_dirty |= self.window_geometries.set(kind, current);
+            } else if !matches!(kind, WindowKind::Main) {
+                self.window_geometry_ready[index] = false;
+            }
+        }
+        if self.window_geometry_dirty
+            && (force || self.last_geometry_save.elapsed() >= Duration::from_millis(500))
+        {
+            match self.window_geometries.save() {
+                Ok(()) => {
+                    self.window_geometry_dirty = false;
+                    self.last_geometry_save = Instant::now();
+                }
+                Err(error) => {
+                    yttraydl::diag_log(&format!("saving window geometry failed: {error}"));
+                    self.last_geometry_save = Instant::now();
+                }
+            }
+        }
+    }
+
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         platform_setup: PlatformSetup,
@@ -1619,6 +1667,11 @@ impl App {
             last_heartbeat: Instant::now(),
             settings_mtime: settings_file_mtime(),
             last_settings_check: Instant::now(),
+            window_geometries: WindowGeometries::load(),
+            window_geometry_ready: [false; 4],
+            window_geometry_dirty: false,
+            last_geometry_save: Instant::now(),
+            downloads_initial_size: None,
         };
         yttraydl::diag_log(&format!(
             "ui start: yt-dlp {} (source: {}), ffmpeg {}",
@@ -2283,11 +2336,9 @@ impl App {
                     // The pump below refills the freed slot.
                     continue;
                 }
-                if job.state == JobState::Failed && job.attempts < self.settings.auto_retry_attempts
-                {
+                if let Some(next) = job.automatic_retry_attempt(self.settings.auto_retry_attempts) {
                     // Auto-retry with the original preset; the
                     // failure is not recorded as final yet.
-                    let next = job.attempts + 1;
                     self.downloads.enqueue_job(
                         job.url.clone(),
                         job.title.clone(),
@@ -2948,6 +2999,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.maintain_window_geometry(false);
         self.ensure_tray(ctx);
         self.process_platform_events();
         self.process_info_results();
@@ -3055,6 +3107,7 @@ impl eframe::App for App {
         self.about_ui(ctx);
         self.hide_icon_confirm_ui(ctx);
         self.close_choice_ui(ctx);
+        self.maintain_window_geometry(false);
 
         if self.settings_dirty {
             self.settings_dirty = false;
@@ -3070,6 +3123,7 @@ impl eframe::App for App {
         }
 
         if self.exit_requested {
+            self.maintain_window_geometry(true);
             // Exit only after owned workers acknowledge process-tree cleanup.
             let active = self.downloads.active_count();
             self.downloads.shutdown();

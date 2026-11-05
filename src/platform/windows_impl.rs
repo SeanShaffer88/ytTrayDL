@@ -99,9 +99,13 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
                 if WaitForSingleObject(ev, INFINITE) != 0 {
                     break;
                 }
+                // A hidden viewport may stop scheduling egui frames. Queue the
+                // intent before restoring natively, as the tray handler does,
+                // so the newly visible window can consume it immediately.
                 if tx2.send(PlatformEvent::ShowRequested).is_err() {
                     break;
                 }
+                show_main_window();
             }
         });
     }
@@ -344,9 +348,14 @@ pub fn autostart_enabled() -> bool {
 /// that would process a queued "show" request.
 /// Locate this process's main window (title "ytTrayDL").
 fn find_main_window() -> Option<HWND> {
+    find_owned_window("ytTrayDL")
+}
+
+fn find_owned_window(title: &str) -> Option<HWND> {
     struct Search {
         pid: u32,
         found: HWND,
+        title: String,
     }
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
         unsafe {
@@ -358,7 +367,7 @@ fn find_main_window() -> Option<HWND> {
             }
             let mut buf = [0u16; 64];
             let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-            if len > 0 && String::from_utf16_lossy(&buf[..len as usize]) == "ytTrayDL" {
+            if len > 0 && String::from_utf16_lossy(&buf[..len as usize]) == search.title {
                 search.found = hwnd;
                 return 0; // stop
             }
@@ -369,6 +378,7 @@ fn find_main_window() -> Option<HWND> {
         let mut search = Search {
             pid: GetCurrentProcessId(),
             found: std::ptr::null_mut(),
+            title: title.to_owned(),
         };
         let _ = EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
         if search.found.is_null() {
@@ -382,14 +392,139 @@ fn find_main_window() -> Option<HWND> {
 pub fn show_main_window() -> bool {
     match find_main_window() {
         Some(hwnd) => unsafe {
-            if IsWindowVisible(hwnd) != 0 {
-                return false;
+            let hidden = IsWindowVisible(hwnd) == 0;
+            if hidden {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
             }
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            true
+            // Native menus run a nested message loop; an egui repaint request
+            // may have been deduplicated before returning from that loop.
+            // Invalidating the client area guarantees a new native paint.
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, std::ptr::null(), 0);
+            hidden
         },
         None => false,
+    }
+}
+
+fn native_geometry(hwnd: HWND) -> Option<crate::window_geometry::WindowGeometry> {
+    use windows_sys::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::GetWindowRect};
+    let mut rect = unsafe { std::mem::zeroed() };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return None;
+    }
+    let value = crate::window_geometry::WindowGeometry {
+        x: rect.left,
+        y: rect.top,
+        width: rect.right - rect.left,
+        height: rect.bottom - rect.top,
+        dpi: unsafe { GetDpiForWindow(hwnd) },
+    };
+    value.valid().then_some(value)
+}
+
+fn work_area(hwnd: HWND) -> Option<[i32; 4]> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return None;
+    }
+    Some([
+        info.rcWork.left,
+        info.rcWork.top,
+        info.rcWork.right,
+        info.rcWork.bottom,
+    ])
+}
+
+fn set_normal_geometry(
+    hwnd: HWND,
+    value: crate::window_geometry::WindowGeometry,
+    resize: bool,
+) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+    };
+    let flags =
+        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | if resize { 0 } else { SWP_NOSIZE };
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            value.x,
+            value.y,
+            value.width,
+            value.height,
+            flags,
+        ) != 0
+    }
+}
+
+pub fn window_geometry(
+    kind: crate::window_geometry::WindowKind,
+) -> Option<crate::window_geometry::WindowGeometry> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, IsZoomed};
+    let hwnd = find_owned_window(kind.title())?;
+    if unsafe { IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 } {
+        return None;
+    }
+    native_geometry(hwnd)
+}
+
+pub fn restore_window_geometry(
+    kind: crate::window_geometry::WindowKind,
+    value: crate::window_geometry::WindowGeometry,
+) -> bool {
+    if !value.valid() {
+        return false;
+    }
+    let Some(hwnd) = find_owned_window(kind.title()) else {
+        return false;
+    };
+    let Some(current) = native_geometry(hwnd) else {
+        return false;
+    };
+    // Move first so per-monitor DPI reflects the saved destination; then scale.
+    let at_destination = crate::window_geometry::WindowGeometry {
+        x: value.x,
+        y: value.y,
+        ..current
+    };
+    if !set_normal_geometry(hwnd, at_destination, false) {
+        return false;
+    }
+    let Some(current) = native_geometry(hwnd) else {
+        return false;
+    };
+    let Some(work) = work_area(hwnd) else {
+        return false;
+    };
+    let mut restored = value.at_dpi(current.dpi);
+    if matches!(kind, crate::window_geometry::WindowKind::About) {
+        restored.width = current.width;
+        restored.height = current.height;
+    }
+    let inset = ((12 * restored.dpi + 48) / 96) as i32;
+    set_normal_geometry(hwnd, restored.clamped(work, inset), true)
+}
+
+pub fn constrain_transient_window(window: crate::window_geometry::TransientWindow) {
+    let Some(hwnd) = find_owned_window(window.title()) else {
+        return;
+    };
+    let Some(value) = native_geometry(hwnd) else {
+        return;
+    };
+    let Some(work) = work_area(hwnd) else {
+        return;
+    };
+    let clamped = value.clamped(work, ((12 * value.dpi + 48) / 96) as i32);
+    if clamped != value {
+        set_normal_geometry(hwnd, clamped, false);
     }
 }
 

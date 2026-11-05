@@ -212,6 +212,9 @@ pub fn build_download_args_full(
     let mut args: Vec<String> = vec![
         "--newline".into(),
         "--no-colors".into(),
+        // stdout is decoded as UTF-8 by the process consumer, including paths.
+        "--encoding".into(),
+        "utf-8".into(),
         "--progress".into(),
         "--continue".into(),
         "--no-mtime".into(),
@@ -285,6 +288,10 @@ pub fn build_download_args_full(
         args.push("--yes-playlist".into());
     } else {
         args.push("--no-playlist".into());
+        // A bare playlist (including generic multi-video pages) has no
+        // linked video for --no-playlist to select. Still honor one item.
+        args.push("--playlist-items".into());
+        args.push("1".into());
     }
 
     // Optional bandwidth cap (0 = no limit). yt-dlp accepts a
@@ -356,6 +363,12 @@ pub fn build_download_args_full(
 
     args.push("--print".into());
     args.push(format!("after_move:{FINAL_PATH_MARKER}%(filepath)s"));
+    if preset == Preset::SubtitlesOnly {
+        // skip-download does not run the media after_move print stage.
+        // after_video exposes converted subtitle paths, including SRT output.
+        args.push("--print".into());
+        args.push("after_video:yttraydl:subtitles:%(requested_subtitles)j".into());
+    }
 
     args.push("--".into());
     args.push(url.to_string());
@@ -367,6 +380,8 @@ pub fn build_download_args_full(
 pub fn build_info_args(settings: &Settings, url: &str) -> Vec<String> {
     let mut args = vec![
         "--dump-single-json".to_string(),
+        "--encoding".into(),
+        "utf-8".into(),
         "--no-warnings".to_string(),
         "--no-colors".to_string(),
     ];
@@ -467,6 +482,18 @@ pub enum ProgressEvent {
 /// feeds both streams through here.
 pub fn parse_progress_line(line: &str) -> ProgressEvent {
     let line = line.trim();
+    if let Some(json) = line.strip_prefix("yttraydl:subtitles:") {
+        if let Ok(serde_json::Value::Object(languages)) = serde_json::from_str(json) {
+            for subtitle in languages.values() {
+                if let Some(path) = subtitle.get("filepath").and_then(|p| p.as_str()) {
+                    if !path.is_empty() {
+                        return ProgressEvent::FinalPath(PathBuf::from(path));
+                    }
+                }
+            }
+        }
+        return ProgressEvent::Other;
+    }
     if let Some(path) = line.strip_prefix(FINAL_PATH_MARKER) {
         return ProgressEvent::FinalPath(PathBuf::from(path));
     }
@@ -669,6 +696,8 @@ pub fn parse_playlist_entries(text: &str) -> Vec<PlaylistEntry> {
 pub fn build_playlist_probe_args(settings: &Settings, url: &str, limit: u32) -> Vec<String> {
     let mut args = vec![
         "--flat-playlist".to_string(),
+        "--encoding".into(),
+        "utf-8".into(),
         "--dump-json".to_string(),
         "--no-warnings".to_string(),
         "--no-colors".to_string(),
@@ -745,10 +774,44 @@ mod tests {
             .windows(2)
             .any(|pair| pair == ["--print", "after_move:yttraydl:final:%(filepath)s"]));
         assert_eq!(&args[args.len() - 2..], ["--", "url"]);
+        assert!(args.windows(2).any(|pair| pair == ["--encoding", "utf-8"]));
     }
 
     fn settings() -> Settings {
         Settings::default()
+    }
+
+    #[test]
+    fn subtitle_final_marker_reports_converted_path() {
+        assert_eq!(
+            parse_progress_line(
+                r#"yttraydl:subtitles:{"en":{"ext":"srt","filepath":"C:\\field café\\captions.en.srt"}}"#
+            ),
+            ProgressEvent::FinalPath(PathBuf::from("C:\\field café\\captions.en.srt"))
+        );
+        assert_eq!(
+            parse_progress_line("yttraydl:subtitles:NA"),
+            ProgressEvent::Other
+        );
+        assert_eq!(
+            parse_progress_line("yttraydl:subtitles:{}"),
+            ProgressEvent::Other
+        );
+        let args = build_download_args(&settings(), Preset::SubtitlesOnly, "url", false);
+        assert!(args
+            .iter()
+            .any(|arg| arg == "after_video:yttraydl:subtitles:%(requested_subtitles)j"));
+    }
+
+    #[test]
+    fn metadata_probes_emit_utf8_for_redirected_output() {
+        for args in [
+            build_info_args(&settings(), "url"),
+            build_playlist_probe_args(&settings(), "url", 2),
+        ] {
+            assert!(args.windows(2).any(|pair| pair == ["--encoding", "utf-8"]));
+            assert_eq!(&args[args.len() - 2..], ["--", "url"]);
+        }
     }
 
     #[test]
@@ -943,6 +1006,7 @@ mod tests {
         );
         assert!(args.contains(&"--yes-playlist".to_string()));
         assert!(!args.contains(&"--no-playlist".to_string()));
+        assert!(!args.contains(&"--playlist-items".to_string()));
         // Global on + per-download "just this video".
         let mut s = settings();
         s.allow_playlists = true;
@@ -954,6 +1018,9 @@ mod tests {
             Some(false),
         );
         assert!(args.contains(&"--no-playlist".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--playlist-items", "1"]));
         // No override follows the global setting.
         let args = build_download_args(&s, Preset::Best, "https://youtu.be/x", true);
         assert!(args.contains(&"--yes-playlist".to_string()));

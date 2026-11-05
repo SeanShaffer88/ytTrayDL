@@ -8,7 +8,7 @@
 ; portable build can keep using it.
 
 #ifndef AppVersion
-  #define AppVersion "0.7.0"
+  #define AppVersion "0.8.0"
 #endif
 ; CI builds x64 only and passes /DAppVersion (the define above is the local-build fallback).
 #ifndef ExeSourceDir
@@ -35,6 +35,13 @@ DefaultDirName={localappdata}\Programs\ytTrayDL
 DefaultGroupName=ytTrayDL
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+; Exceptional in-place migration for verified 0.6.1/0.7.0 inventories: append
+; retains their unsafe recursive uninstall action. Replace the log while keeping
+; all three tracked files and explicit legacy optional-resource cleanup below.
+; Future removed/renamed inventory needs exact legacy cleanup + migration tests.
+; https://jrsoftware.org/ishelp/topic_setup_uninstalllogmode.htm
+; https://jrsoftware.org/ishelp/topic_sameappnotes.htm
+UninstallLogMode=overwrite
 OutputDir=..\dist
 OutputBaseFilename=ytTrayDL-Setup-v{#AppVersion}-windows-{#ArchSuffix}
 SetupIconFile=..\assets\icon.ico
@@ -66,9 +73,16 @@ Name: "{autodesktop}\ytTrayDL"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 ; Same value ytTrayDL's own "Start with Windows" writes, with the
 ; --background flag so autostart goes straight to the tray.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ytTrayDL"; ValueData: """{app}\{#AppExe}"" --background"; Tasks: startup; Flags: uninsdeletevalue
+; Record exact legacy value cleanup even if the candidate startup task is OFF.
+; ValueType none does not create/change the value during installation.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "ytTrayDL"; Flags: dontcreatekey uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch ytTrayDL"; Flags: nowait postinstall skipifsilent
 
+; Inno removes only its tracked files. Preserve user downloads and other
+; unowned content under {app}; never recursively delete the application folder.
+
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}"
+; Exact legacy optional shortcut only; never delete a directory or sibling.
+Type: files; Name: "{autodesktop}\ytTrayDL.lnk"

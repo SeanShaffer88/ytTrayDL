@@ -461,6 +461,11 @@ shipped). The system:
 
 ## Verification matrix
 
+The **0.7.1 candidate field gates remain Unverified** until actual evidence is
+recorded. The [0.7.1 matrix](RELEASE-0.7.1.md) separates real-media, interactive
+GUI, clean-install, upgrade and uninstall execution. CI script generation and
+static checks do not change these runtime statuses.
+
 ### 0.7.0 validation
 
 These rows distinguish native Windows fixture evidence from manual application

@@ -99,9 +99,13 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
                 if WaitForSingleObject(ev, INFINITE) != 0 {
                     break;
                 }
+                // A hidden viewport may stop scheduling egui frames. Queue the
+                // intent before restoring natively, as the tray handler does,
+                // so the newly visible window can consume it immediately.
                 if tx2.send(PlatformEvent::ShowRequested).is_err() {
                     break;
                 }
+                show_main_window();
             }
         });
     }
@@ -382,12 +386,16 @@ fn find_main_window() -> Option<HWND> {
 pub fn show_main_window() -> bool {
     match find_main_window() {
         Some(hwnd) => unsafe {
-            if IsWindowVisible(hwnd) != 0 {
-                return false;
+            let hidden = IsWindowVisible(hwnd) == 0;
+            if hidden {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
             }
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            true
+            // Native menus run a nested message loop; an egui repaint request
+            // may have been deduplicated before returning from that loop.
+            // Invalidating the client area guarantees a new native paint.
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, std::ptr::null(), 0);
+            hidden
         },
         None => false,
     }

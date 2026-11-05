@@ -1,6 +1,6 @@
 [package]
 name = "yttraydl"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.89"
 authors = ["Sean Shaffer"]
@@ -13,6 +13,16 @@ categories = ["gui"]
 [lib]
 name = "yttraydl"
 path = "src/lib.rs"
+
+[features]
+field-validation = []
+
+[[bin]]
+name = "field_validation"
+path = "tests/field/field_validation.rs"
+required-features = ["field-validation"]
+test = false
+bench = false
 
 [[bin]]
 name = "yttraydl"

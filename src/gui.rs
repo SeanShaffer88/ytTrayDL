@@ -2283,11 +2283,9 @@ impl App {
                     // The pump below refills the freed slot.
                     continue;
                 }
-                if job.state == JobState::Failed && job.attempts < self.settings.auto_retry_attempts
-                {
+                if let Some(next) = job.automatic_retry_attempt(self.settings.auto_retry_attempts) {
                     // Auto-retry with the original preset; the
                     // failure is not recorded as final yet.
-                    let next = job.attempts + 1;
                     self.downloads.enqueue_job(
                         job.url.clone(),
                         job.title.clone(),

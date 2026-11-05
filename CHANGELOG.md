@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 — Unreleased
+
+- Add real-tool media/process field validation and separate disposable Windows VM clean-install and 0.6.1-upgrade checks.
+- Verify installed executable identity, shortcuts, startup command, uninstall registration, and synthetic user-data preservation using the actual library loaders.
+- Update locked clipboard-win to 5.4.3 and async-executor to 1.14.1 while preserving Tokio 1.54.1 and Rust 1.89.
+- Keep installer, GUI, media and release qualification pending until actual execution passes; see [candidate verification](docs/RELEASE-0.7.1.md).
+
 ## 0.7.0 — Unreleased
 
 - Reject malformed or unterminated clipboard text within the allocation's actual bounds.

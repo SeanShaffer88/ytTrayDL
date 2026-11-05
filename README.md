@@ -8,6 +8,10 @@ downloads quietly in the background with your defaults while you keep working.
 
 ![ytTrayDL icon](assets/icon.png)
 
+The 0.7.1 validation candidate and its execution gates are tracked in the
+[verification notes](docs/RELEASE-0.7.1.md). Installer lifecycle and real-tool
+field coverage remain pending until the corresponding evidence passes.
+
 ## TL;DR
 
 ytTrayDL watches your clipboard for video links and downloads them

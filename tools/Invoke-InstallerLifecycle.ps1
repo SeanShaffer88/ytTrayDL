@@ -38,7 +38,9 @@ function Run-Installer([string]$Path, [string[]]$Arguments, [string]$Phase) {
     Assert ($code -eq 0) "$Phase exit code is zero"
 }
 function Install([string]$Path, [string]$Phase) {
-    Run-Installer $Path @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/TASKS=desktopicon,startup', ('/LOG="' + (Join-Path $EvidenceRoot "$Phase.log") + '"')) $Phase
+    # OwnedProcess accepts argv, not a shell command line; Command supplies the
+    # Windows quoting. Embedded quote characters become part of the log name.
+    Run-Installer $Path @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/TASKS=desktopicon,startup', ('/LOG=' + (Join-Path $EvidenceRoot "$Phase.log"))) $Phase
 }
 function Hash-Data {
     $result = @{}
@@ -112,7 +114,7 @@ try {
     $null = New-Item -ItemType Directory -Path (Split-Path $foreign) -Force
     [IO.File]::WriteAllText($foreign, 'user-owned media sentinel')
     $foreignHash = (Get-FileHash $foreign).Hash
-    Run-Installer (Join-Path $install 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG="' + (Join-Path $EvidenceRoot 'uninstall.log') + '"')) 'uninstall'
+    Run-Installer (Join-Path $install 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + (Join-Path $EvidenceRoot 'uninstall.log'))) 'uninstall'
     Assert (!(Test-Path $exe)) 'uninstall removed application executable'
     Assert (!(Test-Path $key)) 'uninstall removed application registration'
     foreach ($shortcut in $shortcuts) { Assert (!(Test-Path $shortcut)) 'uninstall removed owned shortcut' }

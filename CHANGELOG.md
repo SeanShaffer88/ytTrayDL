@@ -4,6 +4,7 @@
 
 - Use a compact 600×420 main default, a scrolling body with reachable fixed footer, and an 800px-wide Downloads window with a shorter fresh empty default; preserve saved custom bounds.
 - Let video-name columns expand around measured actions instead of fixed character cuts; keep full hover details and wrap narrow missing-engine actions.
+- Paint subtle row/cell gridlines without changing list geometry; keep Monitoring and Auto-download controls exclusive to Main.
 - Remember normal Main, Settings and Downloads window size/position; retain About position and keep transient prompts within the monitor work area.
 - Preserve UTF-8 final paths, report subtitle-only output paths, enforce single-item playlist selection, and restore hidden windows reliably.
 - Add real-tool media/process field validation and separate disposable Windows VM clean-install and 0.6.1-upgrade checks.

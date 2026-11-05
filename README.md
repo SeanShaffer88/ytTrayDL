@@ -263,7 +263,7 @@ app, or have it on PATH.
 
 See the [0.7.1 field qualification contract](docs/RELEASE-0.7.1.md) and
 [CI results](https://github.com/SeanShaffer88/ytTrayDL/actions/workflows/ci.yml)
-for the exact commit. The native suite has 112 passing tests. Required gates cover
+for the exact commit. The native suite has 113 passing tests. Required gates cover
 formatting, Clippy on the host and Windows target, the complete locked suite,
 Windows compilation, and Rust 1.89 on Windows and Linux.
 

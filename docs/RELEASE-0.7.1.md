@@ -10,7 +10,7 @@ the exact commit being shipped.
 
 | Area | Observed qualification / required gate |
 |---|---|
-| Native full suite | 112 tests passed; format, both Clippy targets, Windows check and release build passed |
+| Native full suite | 113 tests passed; format, both Clippy targets, Windows check and release build passed |
 | Real media | All nine loopback scenarios passed locally against both tool sets and in hosted CI: video, merge, audio, subtitles, playlist, retry, pause, cancel, shutdown |
 | Final output | Actual file existence/content, UTF-8 paths, subtitle final paths, completion-hook paths and persisted history asserted |
 | Actual GUI ffmpeg exit | GUI-confirmed download, observed real ffmpeg, actual main Exit, normal exit0, five descendants gone, no completed history or later writes |
@@ -127,3 +127,10 @@ hover details. Metadata uses a bounded secondary line where needed. Existing
 button order, disabled conditions, row identity and action targeting are retained;
 headless egui regressions check growth, containment, traversal and Retry targeting.
 At minimum widths, missing-engine actions wrap rather than clip outside the card.
+Video lists paint subtle row/cell rules in existing gaps. Horizontal rules follow
+complete entries, including metadata; vertical rules use actual primary-row cell
+boundaries. They allocate no space and retain all control geometry and ordering.
+Monitoring status, Monitoring toggle and Auto-download remain on Main only.
+Downloads renders queue/progress/history controls; it does not duplicate that
+operational Monitoring interface. Both ownership and grid clipping were checked
+on the actual native windows.

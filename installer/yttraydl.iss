@@ -70,5 +70,5 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch ytTrayDL"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}"
+; Inno removes only its tracked files. Preserve user downloads and other
+; unowned content under {app}; never recursively delete the application folder.

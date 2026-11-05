@@ -20,7 +20,19 @@ fn main() {
         std::fs::read_to_string(yttraydl::settings::Settings::archive_path()).unwrap(),
         "generic field-071\n"
     );
-    println!("Settings::load, History::load and archive sentinel assertions passed");
+    let windows = yttraydl::window_geometry::WindowGeometries::load();
+    assert_eq!(windows.schema_version, 1);
+    assert_eq!(
+        windows.get(yttraydl::window_geometry::WindowKind::Main),
+        Some(yttraydl::window_geometry::WindowGeometry {
+            x: 120,
+            y: 140,
+            width: 800,
+            height: 600,
+            dpi: 96,
+        })
+    );
+    println!("Settings, history, archive and window geometry sentinel assertions passed");
 }
 
 // Test tooling shares production pre-execution JobObject containment, deadlines,

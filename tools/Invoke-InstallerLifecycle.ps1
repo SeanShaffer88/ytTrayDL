@@ -44,7 +44,7 @@ function Install([string]$Path, [string]$Phase) {
 }
 function Hash-Data {
     $result = @{}
-    foreach ($name in @('settings.json','history.json','download-archive.txt')) {
+    foreach ($name in @('settings.json','history.json','download-archive.txt','window-state.json')) {
         $result[$name] = (Get-FileHash -LiteralPath (Join-Path $data $name) -Algorithm SHA256).Hash
     }
     return $result
@@ -82,6 +82,7 @@ try {
     @{schema_version=1;monitoring_enabled=$false;filename_template='field-071-%(id)s.%(ext)s'} | ConvertTo-Json | Set-Content (Join-Path $data 'settings.json') -Encoding utf8NoBOM
     @{entries=@(@{finished_at_unix=1;url='https://example.invalid/field-071';title='field-071-preserved';status='completed';file=$null;error=$null;preset_label='Best quality'})} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $data 'history.json') -Encoding utf8NoBOM
     [IO.File]::WriteAllText((Join-Path $data 'download-archive.txt'), "generic field-071`n")
+    @{schema_version=1;main=@{x=120;y=140;width=800;height=600;dpi=96}} | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $data 'window-state.json') -Encoding utf8NoBOM
     $hashes = Hash-Data
     Check-Data $hashes
     # Prove actual library assertions reject corrupted synthetic state, then

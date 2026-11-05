@@ -89,11 +89,11 @@ try {
     $main=@(VisibleWindows $owned)[0];$m=[FieldGuiNative]::Metrics($main,$owned.Id);[FieldGuiNative]::MoveResizeOwned($main,$owned.Id,$m[14]-$m[2]-12,$m[15]-$m[3]-12,$m[2],$m[3]);Start-Sleep -Milliseconds 1000
     $result['edgeParent-'+$mode]=[FieldGuiNative]::Metrics($main,$owned.Id)
     if($mode-eq'controls'){
-     $result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $main -Stage 'edge-hide' -RequestPath (Join-Path $root 'focus-needed-edge-hide.json') -AllowAssistance:$AllowFocusHandoff -RequireOperatorAcknowledgement);[FieldGuiNative]::ClickObserved($main,$owned.Id,'ytTrayDL',402,572,96,80,540)
+     $result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $main -Stage 'edge-hide' -RequestPath (Join-Path $root 'focus-needed-edge-hide.json') -AllowAssistance:$AllowFocusHandoff -RequireOperatorAcknowledgement);[FieldGuiNative]::ClickObserved($main,$owned.Id,'ytTrayDL',602,452,96,80,429)
      if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq'Hide the tray icon?'-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq1})){throw 'Actual edge Hide confirmation not observed'}
      $child=@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq'Hide the tray icon?'-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)})[0]
      $fits=Wait-State {$script:edgeMetrics=[FieldGuiNative]::Metrics($child,$owned.Id);$a=$script:edgeMetrics;$a[8]-ge$a[12]-and$a[9]-ge$a[13]-and($a[8]+$a[10])-le$a[14]-and($a[9]+$a[11])-le$a[15]}
-     Record 'actual-edge-Hide-confirmation-within-workarea' $(if($fits){'Pass'}else{'Fail'}) @{method='Actual physical main Hide button; CUA-observed DWM center80,540 in402x572/96DPI with strict input guards';metrics=$script:edgeMetrics}
+     Record 'actual-edge-Hide-confirmation-within-workarea' $(if($fits){'Pass'}else{'Fail'}) @{method='Actual physical main Hide button; CUA-observed DWM center80,429 in602x452/96DPI with strict input guards';metrics=$script:edgeMetrics}
      if(-not$fits){throw 'Hide confirmation outside actual monitor workarea'}
      [FieldGuiNative]::Close($child,$owned.Id);if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq'Hide the tray icon?'-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq0})){throw 'Hide confirmation normal cancel did not settle'}
      Record 'edge-Hide-normal-cancel-recovery' $(if(@(VisibleWindows $owned).Count-eq1-and-not$owned.HasExited){'Pass'}else{'Fail'}) @{method='Owned confirmation WM_CLOSE cancels, actual main remains visible';pid=$owned.Id}
@@ -108,7 +108,7 @@ try {
      Invoke-TrayItem $owned $tool.label $root
      $title=$tool.title;if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq1})){throw "Persistence tool window missing: $title"}
      $h=@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)})[0]
-     $tool.before=[FieldGuiNative]::WindowBounds($h,$owned.Id);$t=$tool.target;[FieldGuiNative]::MoveResizeOwned($h,$owned.Id,$t[0],$t[1],$t[2],$t[3]);Start-Sleep -Milliseconds 1000;$tool.moved=[FieldGuiNative]::WindowBounds($h,$owned.Id);$tool.movedDpi=[FieldGuiNative]::GetDpiForWindow([IntPtr]$h);[FieldGuiNative]::Close($h,$owned.Id);if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq0})){throw "Persistence tool close did not settle: $title"}
+     $tool.before=[FieldGuiNative]::WindowBounds($h,$owned.Id);$tool.initialMetrics=[FieldGuiNative]::Metrics($h,$owned.Id);if($tool.label-eq'Downloads…'){$initial=$tool.initialMetrics;$scale=$initial[16]/96.0;$freshOkay=$initial[6]-eq[int][Math]::Round(800*$scale)-and$initial[7]-eq[int][Math]::Round(360*$scale);Record 'fresh-empty-Downloads-default-client-size' $(if($freshOkay){'Pass'}else{'Fail'}) @{expectedLogicalClient=@(800,360);actualMetrics=$initial;scope='Fresh private profile, empty history and no queued jobs; subsequent custom-size assertions remain required'}};$t=$tool.target;[FieldGuiNative]::MoveResizeOwned($h,$owned.Id,$t[0],$t[1],$t[2],$t[3]);Start-Sleep -Milliseconds 1000;$tool.moved=[FieldGuiNative]::WindowBounds($h,$owned.Id);$tool.movedDpi=[FieldGuiNative]::GetDpiForWindow([IntPtr]$h);[FieldGuiNative]::Close($h,$owned.Id);if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq0})){throw "Persistence tool close did not settle: $title"}
      Invoke-TrayItem $owned $tool.label $root
      if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq1})){throw "Persistence tool reopen missing: $title"}
      $h=@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)})[0];Start-Sleep -Milliseconds 500;$tool.sameProcessReopen=[FieldGuiNative]::WindowBounds($h,$owned.Id);[FieldGuiNative]::Close($h,$owned.Id);if(-not(Wait-State {@([FieldGuiNative]::Windows($owned.Id)|Where-Object{[FieldGuiNative]::Title($_)-eq$title-and[FieldGuiNative]::IsWindowVisible([IntPtr]$_)}).Count-eq0})){throw "Persistence tool close did not settle: $title"}
@@ -170,8 +170,8 @@ try {
      $action=Join-Path $root 'action.json';@{schemaVersion=1;checks=@(@{id='root';selector=@{controlType='Window'}});workflow=@(@{action='Invoke';selector=@{name='Exit ytTrayDL';controlType='Button'}})}|ConvertTo-Json -Depth 8|Set-Content $action
      & $UiHelper -ProcessId $owned.Id -AssertionsPath $action -AllowActions -Json|Set-Content (Join-Path $root 'invoke.json');$invokeExit=$LASTEXITCODE;$delivery=Get-Content (Join-Path $root 'invoke.json') -Raw|ConvertFrom-Json;$exitDelivery=($invokeExit-eq0)-or($invokeExit-eq3-and$delivery.error-like'*Selected process has exited*');$method='Actual named main UIA Exit Invoke'
     }else{
-     $h=@(VisibleWindows $owned)[0];@{method='Parent CUA observed actual Exit button DWM center318,540 in402x572 at96DPI; strict title/frame/foreground/PID/actualcursor/SendInput acceptedcount;1000ms pointer hold';metrics=[FieldGuiNative]::Metrics($h,$owned.Id)}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $root 'control-pixel-contract.json')
-     $result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $h -Stage 'main-exit' -RequestPath (Join-Path $root 'focus-needed-main-exit.json') -AllowAssistance:$AllowFocusHandoff -RequireOperatorAcknowledgement);[FieldGuiNative]::ClickObserved($h,$owned.Id,'ytTrayDL',402,572,96,318,540);$exitDelivery=$true;$method='Actual physical main Exit click from CUA-observed guarded DWM geometry; UIA prerequisite remained unavailable'
+     $h=@(VisibleWindows $owned)[0];@{method='Parent CUA observed actual Exit button DWM center518,429 in602x452 at96DPI; strict title/frame/foreground/PID/actualcursor/SendInput acceptedcount;1000ms pointer hold';metrics=[FieldGuiNative]::Metrics($h,$owned.Id)}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $root 'control-pixel-contract.json')
+     $result.focusAssistance+=@(Confirm-FieldGuiFocus -Process $owned -Window $h -Stage 'main-exit' -RequestPath (Join-Path $root 'focus-needed-main-exit.json') -AllowAssistance:$AllowFocusHandoff -RequireOperatorAcknowledgement);[FieldGuiNative]::ClickObserved($h,$owned.Id,'ytTrayDL',602,452,96,518,429);$exitDelivery=$true;$method='Actual physical main Exit click from CUA-observed guarded DWM geometry; UIA prerequisite remained unavailable'
     }
     $exited=$owned.WaitForExit(8000);Record 'actual-main-Exit-control' $(if($exitDelivery-and$exited-and$owned.ExitCode-eq0){'Pass'}else{'Fail'}) @{pid=$owned.Id;method=$method;helperExitCode=$helperExit;invokeExitCode=$invokeExit;exited=$exited;exitCode=$(if($exited){$owned.ExitCode}else{$null})}
     if(-not$exited){Stop-TrackedOwned $owned};$owned=$null;continue
@@ -212,6 +212,9 @@ finally{
  $result|ConvertTo-Json -Depth 20
 }
 exit $code
+
+
+
 
 
 

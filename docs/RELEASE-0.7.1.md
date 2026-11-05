@@ -10,7 +10,7 @@ the exact commit being shipped.
 
 | Area | Observed qualification / required gate |
 |---|---|
-| Native full suite | 108 tests passed; format, both Clippy targets, Windows check and release build passed |
+| Native full suite | 112 tests passed; format, both Clippy targets, Windows check and release build passed |
 | Real media | All nine loopback scenarios passed locally against both tool sets and in hosted CI: video, merge, audio, subtitles, playlist, retry, pause, cancel, shutdown |
 | Final output | Actual file existence/content, UTF-8 paths, subtitle final paths, completion-hook paths and persisted history asserted |
 | Actual GUI ffmpeg exit | GUI-confirmed download, observed real ffmpeg, actual main Exit, normal exit0, five descendants gone, no completed history or later writes |
@@ -112,3 +112,18 @@ file, shortcut, startup value and registration. Actual 0.6.1 legacy-log RED is
 retained; new variants must pass against the corrected head. Relocated/mismatched
 installation modes or unknown historical inventories are not qualified. Future
 removed or renamed resources need exact legacy cleanup and migration regressions.
+## Compact defaults
+
+The fresh main window is 600×420 logical pixels, with unchanged controls and a
+fixed footer. The body scrolls when notices or populated lists need more space.
+Fresh empty Downloads uses 800×360; populated Downloads uses 800×560. The creation
+hint is selected once per opening, so content changes never resize an open window.
+Saved normal bounds always override these defaults. Settings retains its existing
+content-sized default. Native layout qualification includes the narrow 340×420
+main window, overflow reachability and persistence regression checks.
+Video-list titles now use measured remaining width around their real controls,
+instead of fixed 26/40/44-character cuts. Full title and URL remain available in
+hover details. Metadata uses a bounded secondary line where needed. Existing
+button order, disabled conditions, row identity and action targeting are retained;
+headless egui regressions check growth, containment, traversal and Retry targeting.
+At minimum widths, missing-engine actions wrap rather than clip outside the card.

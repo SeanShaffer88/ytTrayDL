@@ -67,3 +67,8 @@ nonpassing even after verified emergency termination. Explicit acknowledged
 exercise that false-pass guard and a real two-second contained helper timeout.
 They claim no functional GUI/media coverage. A stalled-helper control also
 verifies bounded cleanup of the private owned app and loopback server.
+
+`Invoke-MediaExit.ps1 -VerifyDownloadsSizeDuringQueue` additionally opens the
+actual empty Downloads window through the observed native menu, sets custom
+normal bounds, and compares them during the observed real ffmpeg queue. The
+explicit assertion fails if queue population changes the same window's bounds.

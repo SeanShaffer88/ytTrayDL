@@ -1535,6 +1535,8 @@ pub struct App {
     window_geometry_ready: [bool; 4],
     window_geometry_dirty: bool,
     last_geometry_save: Instant,
+    /// A creation hint only; queue changes must not resize an open window.
+    downloads_initial_size: Option<[f32; 2]>,
 }
 
 impl App {
@@ -1669,6 +1671,7 @@ impl App {
             window_geometry_ready: [false; 4],
             window_geometry_dirty: false,
             last_geometry_save: Instant::now(),
+            downloads_initial_size: None,
         };
         yttraydl::diag_log(&format!(
             "ui start: yt-dlp {} (source: {}), ffmpeg {}",

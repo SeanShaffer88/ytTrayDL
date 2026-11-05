@@ -180,7 +180,7 @@ happens when the download queue empties (nothing / a sound / sleep
 the PC / exit).
 
 **Settings → Downloads** — download folder, file-name template, default
-quality preset (Best, up to 2160p/1440p/1080p/720p/480p/360p, audio
+quality preset (Best, up to 2160p/1440p/1090p/720p/480p/360p, audio
 MP3/M4A/Opus/FLAC/WAV/original, subtitles-only, or a custom yt-dlp
 format string), container (MP4/MKV/original), embed
 thumbnail/metadata/subtitles, playlist behaviour, SponsorBlock
@@ -263,7 +263,7 @@ app, or have it on PATH.
 
 See the [0.7.1 field qualification contract](docs/RELEASE-0.7.1.md) and
 [CI results](https://github.com/SeanShaffer88/ytTrayDL/actions/workflows/ci.yml)
-for the exact commit. The native suite has 108 passing tests. Required gates cover
+for the exact commit. The native suite has 112 passing tests. Required gates cover
 formatting, Clippy on the host and Windows target, the complete locked suite,
 Windows compilation, and Rust 1.89 on Windows and Linux.
 

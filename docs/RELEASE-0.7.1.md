@@ -14,8 +14,8 @@ the exact commit being shipped.
 | Real media | All nine loopback scenarios passed locally against both tool sets and in hosted CI: video, merge, audio, subtitles, playlist, retry, pause, cancel, shutdown |
 | Final output | Actual file existence/content, UTF-8 paths, subtitle final paths, completion-hook paths and persisted history asserted |
 | Actual GUI ffmpeg exit | GUI-confirmed download, observed real ffmpeg, actual main Exit, normal exit0, five descendants gone, no completed history or later writes |
-| Window geometry | Native work-area clamp observed; Main/Settings/Downloads normal rectangle and saved JSON assertions passed. Full interactive harness results are recorded separately |
-| Installer | Both clean and actual 0.6.1-upgrade tests reproduced foreign-media deletion. Broad deletion removed; all four corrected hosted lifecycle jobs must pass before merge |
+| Window geometry | Final 26-case native GUI harness passed, exit 0, on candidate `9C61E806…`; fresh empty Downloads measured 800×360, and Main/Settings/Downloads normal bounds and saved JSON hashes survived restart |
+| Installer | Historical foreign-media deletion failures retained; all four corrected hosted lifecycle jobs passed on `b25047b`. Exact merged-commit verification remains required |
 | Linux/Windows and MSRV | Required stable gates and Rust 1.89 locked checks, including the optional field harness |
 | Release payload | Verify merged commit, x64/version 0.7.1, strict portable inventory, ZIP roundtrip, checksums and published-asset readback before completion |
 
@@ -30,6 +30,10 @@ geometry runs used one monitor at 96 DPI; no physical monitor/DPI change is clai
 GUI tests use private profiles and exact process/window ownership. Native tray
 menu command delivery is distinguished from a physical notification-area click.
 A CUA-confirmed actual Download click and actual UIA Exit were observed separately.
+The final private-profile harness passed all 26 required cases, including tray and
+hidden-window recovery, native controls, fresh Downloads dimensions, and normal
+geometry restoration. Saved `window-state.json` hashes remained unchanged across
+the measured restart. Evidence is retained as `grid-final-26-04/result.json`.
 The scripts preserve blocked/failed attempts rather than treating unavailable
 controls as passing. They do not certify accessibility.
 
@@ -105,11 +109,15 @@ and startup value. Cleanup of optional resources is recorded even when candidate
 tasks are deselected. Deselection does not immediately remove inherited resources;
 uninstall does. No old uninstaller is executed and no private log format is patched.
 
-Four disposable-VM cases are required: clean, 0.6.1 with tasks on, 0.6.1 on-to-off,
-and 0.7.0 on-to-off. They preserve media seeded before upgrade, four data hashes,
+Four disposable-VM cases passed on `b25047b` in
+[CI run 41954493770](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/41954493770):
+clean (53 assertions), 0.6.1 with optional tasks on (63), 0.6.1 optional tasks
+on-to-off (63), and 0.7.0 optional tasks on-to-off (63). They preserve media seeded
+before upgrade, four data hashes,
 and unrelated sibling shortcut/Run sentinels, while removing every known owned
 file, shortcut, startup value and registration. Actual 0.6.1 legacy-log RED is
-retained; new variants must pass against the corrected head. Relocated/mismatched
+retained. The exact merged commit and its release artifacts still need their final
+verification before publication. Relocated/mismatched
 installation modes or unknown historical inventories are not qualified. Future
 removed or renamed resources need exact legacy cleanup and migration regressions.
 ## Compact defaults

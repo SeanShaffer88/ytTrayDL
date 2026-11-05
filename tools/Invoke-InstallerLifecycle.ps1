@@ -122,9 +122,9 @@ try {
     Assert (Test-Path $foreign) 'candidate installation preserved preexisting foreign media'
     Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'candidate installation preserved foreign media hash'
     Assert ((Get-FileHash $exe -Algorithm SHA256).Hash -eq (Get-FileHash $CandidateExe -Algorithm SHA256).Hash) 'installed executable matches candidate artifact'
-    Assert ((Get-Item $exe).VersionInfo.ProductVersion -like '0.7.1*') 'candidate executable product version'
+    Assert ((Get-Item $exe).VersionInfo.ProductVersion.Trim() -eq '0.8.0') 'candidate executable product version'
     $registration = Get-ItemProperty $key
-    Assert ($registration.DisplayVersion -eq '0.7.1') 'same AppId registers candidate version'
+    Assert ($registration.DisplayVersion -eq '0.8.0') 'same AppId registers candidate version'
     Assert ($registration.InstallLocation.TrimEnd('\') -eq $install.TrimEnd('\')) 'registration install path'
     Assert ((Get-ItemProperty $runKey).ytTrayDL -eq ('"' + $exe + '" --background')) 'owned startup command has exact quoted path and background argument'
     $shell = New-Object -ComObject WScript.Shell

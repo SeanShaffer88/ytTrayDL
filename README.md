@@ -8,9 +8,9 @@ downloads quietly in the background with your defaults while you keep working.
 
 ![ytTrayDL icon](assets/icon.png)
 
-The 0.7.1 validation candidate and its execution gates are tracked in the
-[verification notes](docs/RELEASE-0.7.1.md). Installer lifecycle and real-tool
-field coverage remain pending until the corresponding evidence passes.
+The 0.8.0 candidate and its execution gates are tracked in the
+[verification notes](docs/RELEASE-0.8.0.md). Historical 0.7.1 field results are
+retained as baseline evidence; exact 0.8.0 qualification is required before release.
 
 ## TL;DR
 
@@ -261,7 +261,7 @@ app, or have it on PATH.
 
 ## Status & verification
 
-See the [0.7.1 field qualification contract](docs/RELEASE-0.7.1.md) and
+See the [0.8.0 field qualification contract](docs/RELEASE-0.8.0.md) and
 [CI results](https://github.com/SeanShaffer88/ytTrayDL/actions/workflows/ci.yml)
 for the exact commit. The native suite has 113 passing tests. Required gates cover
 formatting, Clippy on the host and Windows target, the complete locked suite,

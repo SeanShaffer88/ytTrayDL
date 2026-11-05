@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.7.1 — 2026-11-04
+## 0.8.0 — 2026-11-04
+
+Promotes the unpublished 0.7.1 validation candidate; its actual field results
+remain historical evidence, with final 0.8.0 qualification required before release.
 
 - Use a compact 600×420 main default, a scrolling body with reachable fixed footer, and an 800px-wide Downloads window with a shorter fresh empty default; preserve saved custom bounds.
 - Let video-name columns expand around measured actions instead of fixed character cuts; keep full hover details and wrap narrow missing-engine actions.
@@ -10,7 +13,7 @@
 - Add real-tool media/process field validation and separate disposable Windows VM clean-install and 0.6.1-upgrade checks.
 - Verify installed executable identity, shortcuts, startup command, uninstall registration, and synthetic user-data preservation using the actual library loaders.
 - Update locked clipboard-win to 5.4.3 and async-executor to 1.14.1 while preserving Tokio 1.54.1 and Rust 1.89.
-- Replace unsafe legacy uninstall records and retain exact optional-resource cleanup when upgrading from verified 0.6.1/0.7.0 inventories. See the [qualification contract](docs/RELEASE-0.7.1.md) for required gates and limits.
+- Replace unsafe legacy uninstall records and retain exact optional-resource cleanup when upgrading from verified 0.6.1/0.7.0 inventories. See the [qualification contract](docs/RELEASE-0.8.0.md) for required gates and limits.
 
 ## 0.7.0 — 2026-11-04
 
@@ -25,7 +28,7 @@
 - **Security:** Update locked Tokio from 1.54.0 to 1.54.1 to address RUSTSEC-2026-0384.
 
 Published as [v0.7.0](https://github.com/SeanShaffer88/ytTrayDL/releases/tag/v0.7.0).
-Additional Windows field qualification is tracked in the 0.7.1 verification matrix.
+Additional Windows field qualification is tracked in the 0.8.0 verification matrix.
 
 ## 0.6.1 — 2026-10-27
 

@@ -1,10 +1,20 @@
-# 0.7.1 Windows field qualification
+# 0.8.0 Windows field qualification
 
 This patch adds saved window geometry, repairs real-media completion paths and
 hidden-window recovery, and makes installer data preservation a required gate.
 Release publication requires a passing PR, independent review, and verification
 of artifacts from the passing merged commit. CI results remain authoritative for
 the exact commit being shipped.
+
+## Version and evidence provenance
+
+The user selected `v0.8.0` as the release target, superseding the unpublished
+0.7.1 candidate. The observed results below were produced against that 0.7.1
+candidate; their actual versions, hashes, commits and evidence paths are retained.
+They are baseline qualification, not a claim that 0.8.0 binaries have already
+passed. Fresh 0.8.0 native/GUI/media, installer, CI, packed-consumer and canonical
+merged-artifact gates remain required before tagging or publication. No v0.7.1
+tag or release is planned.
 
 ## Verification matrix
 
@@ -17,7 +27,7 @@ the exact commit being shipped.
 | Window geometry | Final 26-case native GUI harness passed, exit 0, on candidate `9C61E806…`; fresh empty Downloads measured 800×360, and Main/Settings/Downloads normal bounds and saved JSON hashes survived restart |
 | Installer | Historical foreign-media deletion failures retained; all four corrected hosted lifecycle jobs passed on `b25047b`. Exact merged-commit verification remains required |
 | Linux/Windows and MSRV | Required stable gates and Rust 1.89 locked checks, including the optional field harness |
-| Release payload | Verify merged commit, x64/version 0.7.1, strict portable inventory, ZIP roundtrip, checksums and published-asset readback before completion |
+| Release payload | Pending for 0.8.0: verify merged commit, x64/version 0.8.0, strict portable inventory, ZIP roundtrip, checksums and published-asset readback before completion |
 
 Window geometry uses bounded, versioned `window-state.json` alongside settings.
 Main, Settings and Downloads retain normal size and position; About retains
@@ -91,7 +101,7 @@ Build release artifacts explicitly with
 `cargo build --release --locked --bin yttraydl`. Package only the application,
 README, license, and intended portable marker; exclude field/probe/fixture binaries.
 Verify installer and portable versions/hashes from the merged commit before publishing
-`v0.7.1`. Keep the previous release assets available. If data loss, process cleanup,
+`v0.8.0`. Keep the previous release assets available. If data loss, process cleanup,
 or startup regressions are observed, hold publication or remove the affected asset
 and restore the previous known release; preserve settings/history/archive and collect
 bounded evidence before further migration. No automatic downgrade is claimed.

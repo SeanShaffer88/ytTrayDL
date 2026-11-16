@@ -539,13 +539,17 @@ mod cleanup_tests {
     use super::*;
     #[test]
     fn termination_failure_with_inherited_pipe_returns_promptly() {
+        // Unit tests have no CARGO_BIN_EXE_*; find the fixture in the
+        // nearest ancestor of the test binary. Cargo's layout differs by
+        // version (target/debug/deps/ vs target/debug/build/<pkg>/<hash>/out/).
         let executable = std::env::current_exe().unwrap();
+        let name = format!("process_fixture{}", std::env::consts::EXE_SUFFIX);
         let fixture = executable
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join(format!("process_fixture{}", std::env::consts::EXE_SUFFIX));
+            .ancestors()
+            .skip(1)
+            .map(|dir| dir.join(&name))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{name} not found above {}", executable.display()));
         let path = std::env::temp_dir().join(format!(
             "yttraydl-failed-cleanup-{}.txt",
             std::process::id()

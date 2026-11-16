@@ -11,6 +11,14 @@ $libraries = @($records | Where-Object { $_.reason -eq 'compiler-artifact' -and 
 if ($libraries.Count -ne 1) { throw 'Cannot identify unique actual yttraydl library artifact.' }
 $libraryDirectory = Split-Path $libraries[0]
 $linkArguments = @('-L', "dependency=$libraryDirectory", '-L', "dependency=$(Join-Path $libraryDirectory 'deps')")
+# Newer Cargo build-dir layouts give every crate its own output directory
+# (target/<profile>/build/<pkg>/<hash>/out) instead of one shared deps/.
+# Proc-macro crates (e.g. serde_derive) are dynamic libraries, so take every
+# artifact's directory rather than only .rlib/.rmeta ones.
+$crateDirectories = @($records | Where-Object reason -eq 'compiler-artifact' | ForEach-Object { $_.filenames } | ForEach-Object { Split-Path $_ } | Sort-Object -Unique)
+foreach ($directory in $crateDirectories) {
+    $linkArguments += @('-L', "dependency=$directory")
+}
 foreach ($path in @($records | Where-Object reason -eq 'build-script-executed' | ForEach-Object linked_paths | Sort-Object -Unique)) {
     $linkArguments += @('-L', $path)
 }

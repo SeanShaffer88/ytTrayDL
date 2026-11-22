@@ -109,7 +109,13 @@ impl Host for FakeHost {
         ))
         .unwrap())
     }
-    fn download(&self, asset: &Asset, path: &Path, token: &CancellationToken) -> Result<(), Error> {
+    fn download(
+        &self,
+        asset: &Asset,
+        path: &Path,
+        token: &CancellationToken,
+        progress: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), Error> {
         let family = if asset.name == "yt-dlp.exe" {
             Family::YtDlp
         } else {
@@ -144,6 +150,7 @@ impl Host for FakeHost {
         if self.truncate {
             bytes.pop();
         }
+        progress(bytes.len() as u64, Some(asset.size));
         fs::write(path, bytes).unwrap();
         if self.cancel == Some(family) {
             token.cancel();
@@ -526,6 +533,196 @@ fn cli_rejects_bad_contract_existing_report_and_preserves_manual_launch() {
         Some(2)
     );
     assert_eq!(fs::read(report).unwrap(), b"sentinel");
+}
+
+#[test]
+fn typed_stages_cancel_before_activation_and_complete_only_after_commit() {
+    let root = TestRoot::new();
+    install(&root.0, ProvisionSelection::All, &FakeHost::default()).unwrap();
+    let before = fs::read(root.0.join("current-tools.json")).unwrap();
+    for stage in [
+        ToolStage::Download,
+        ToolStage::Verify,
+        ToolStage::Extract,
+        ToolStage::CheckVersions,
+        ToolStage::Activate,
+    ] {
+        let token = CancellationToken::default();
+        let mut events = Vec::new();
+        let result = provision_at_with_progress(
+            &root.0,
+            ProvisionSelection::All,
+            &token,
+            99,
+            |update| {
+                if update.stage == stage {
+                    token.cancel();
+                }
+                events.push(update);
+            },
+            &FakeHost::default(),
+        );
+        assert!(result.is_err(), "{stage:?}");
+        assert_eq!(fs::read(root.0.join("current-tools.json")).unwrap(), before);
+        assert!(events
+            .iter()
+            .all(|event| event.operation_id == 99 && event.stage != ToolStage::Complete));
+    }
+    let mut completed = Vec::new();
+    provision_at_with_progress(
+        &root.0,
+        ProvisionSelection::All,
+        &CancellationToken::default(),
+        100,
+        |update| {
+            if update.stage == ToolStage::Complete {
+                assert_ne!(fs::read(root.0.join("current-tools.json")).unwrap(), before);
+                assert_eq!(load_manifest(&root.0).unwrap().tools.len(), 3);
+                assert_eq!(Some(update.bytes_done), update.total_bytes);
+                completed.push(update.family);
+            }
+        },
+        &FakeHost::default(),
+    )
+    .unwrap();
+    assert_eq!(completed, vec![ToolFamily::YtDlp, ToolFamily::FFmpeg]);
+}
+
+#[cfg(windows)]
+#[test]
+fn actual_owned_curl_cancel_and_oversize_roll_back_then_independent_retry_succeeds() {
+    use std::net::{TcpListener, TcpStream};
+    struct RawHost {
+        address: std::net::SocketAddr,
+        base: FakeHost,
+        overflow: bool,
+    }
+    impl Host for RawHost {
+        fn metadata(&self, family: Family, token: &CancellationToken) -> Result<Vec<u8>, Error> {
+            self.base.metadata(family, token)
+        }
+        fn version(
+            &self,
+            name: &str,
+            path: &Path,
+            token: &CancellationToken,
+        ) -> Result<String, Error> {
+            self.base.version(name, path, token)
+        }
+        fn download(
+            &self,
+            asset: &Asset,
+            path: &Path,
+            token: &CancellationToken,
+            progress: &mut dyn FnMut(u64, Option<u64>),
+        ) -> Result<(), Error> {
+            let spec = ProcessSpec::new(curl()?).args([
+                "-q",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--noproxy",
+                "*",
+                "--max-time",
+                "5",
+                "--url",
+                &format!("http://{}/fixture", self.address),
+            ]);
+            stream_download(&spec, path, token, asset.size, &mut |done, total| {
+                progress(done, total);
+                if !self.overflow && done >= 64 * 1024 {
+                    token.cancel();
+                }
+            })
+        }
+    }
+    for overflow in [false, true] {
+        let root = TestRoot::new();
+        install(&root.0, ProvisionSelection::All, &FakeHost::default()).unwrap();
+        let before = fs::read(root.0.join("current-tools.json")).unwrap();
+        let count = fs::read_dir(root.0.join("generations")).unwrap().count();
+        let mut bytes = pe();
+        bytes.resize(2 * 1024 * 1024, 0xa5);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server_bytes = bytes.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(7);
+            let mut socket: TcpStream = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5))
+                    }
+                    other => panic!("loopback accept: {other:?}"),
+                }
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 1024];
+            let _ = socket.read(&mut request);
+            write!(
+                socket,
+                "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
+                server_bytes.len()
+            )
+            .unwrap();
+            for chunk in server_bytes.chunks(8192) {
+                if socket.write_all(chunk).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let parent = CancellationToken::default();
+        let child = parent.child();
+        let host = RawHost {
+            address,
+            base: FakeHost {
+                ytdlp: if overflow { pe() } else { bytes },
+                ..Default::default()
+            },
+            overflow,
+        };
+        let result = provision_at_with_progress(
+            &root.0,
+            ProvisionSelection::YtDlp,
+            &child,
+            101,
+            |_| {},
+            &host,
+        );
+        server.join().unwrap();
+        assert!(result
+            .unwrap_err()
+            .contains(if overflow { "exceeded" } else { "cancel" }));
+        assert_eq!(child.is_cancelled(), !overflow);
+        assert!(!parent.is_cancelled());
+        assert_eq!(fs::read(root.0.join("current-tools.json")).unwrap(), before);
+        assert_eq!(
+            fs::read_dir(root.0.join("generations")).unwrap().count(),
+            count
+        );
+        let retry = parent.child();
+        assert!(!retry.is_cancelled());
+        provision_at_with_progress(
+            &root.0,
+            ProvisionSelection::YtDlp,
+            &retry,
+            102,
+            |_| {},
+            &FakeHost::default(),
+        )
+        .unwrap();
+    }
 }
 
 #[cfg(unix)]

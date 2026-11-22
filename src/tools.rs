@@ -20,6 +20,30 @@ const ARCHIVE_CAP: u64 = 256 * 1024 * 1024;
 const EXPANDED_CAP: u64 = 768 * 1024 * 1024;
 const MANIFEST_CAP: u64 = 64 * 1024;
 
+mod progress;
+pub use progress::{ProgressMailbox, ToolProgress, ToolStage};
+
+#[derive(Clone, Debug)]
+pub struct ToolStatusSnapshot {
+    pub ytdlp: Option<crate::ytdlp::YtDlpBinary>,
+    pub ffmpeg_available: bool,
+    pub managed_ffmpeg: PathBuf,
+    pub managed_ffmpeg_available: bool,
+}
+impl ToolStatusSnapshot {
+    /// Resolve on a worker; drawing consumes this immutable snapshot until
+    /// paths, settings, or provisioning state change.
+    pub fn resolve(settings: &crate::settings::Settings, exe_dir: Option<&Path>) -> Self {
+        let managed_ffmpeg = managed_ffmpeg_path();
+        Self {
+            ytdlp: crate::ytdlp::locate_ytdlp(settings, exe_dir),
+            ffmpeg_available: crate::ytdlp::ffmpeg_available(settings, exe_dir),
+            managed_ffmpeg_available: managed_ffmpeg.is_file(),
+            managed_ffmpeg,
+        }
+    }
+}
+
 pub type Error = String;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,11 +113,12 @@ struct Manifest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Family {
+pub enum ToolFamily {
     YtDlp,
     FFmpeg,
 }
-impl Family {
+type Family = ToolFamily;
+impl ToolFamily {
     fn repo(self) -> &'static str {
         match self {
             Self::YtDlp => "yt-dlp/yt-dlp",
@@ -201,6 +226,7 @@ trait Host {
         asset: &Asset,
         target: &Path,
         token: &CancellationToken,
+        progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<(), Error>;
     fn version(
         &self,
@@ -284,16 +310,15 @@ impl Host for OfficialHost {
         asset: &Asset,
         target: &Path,
         token: &CancellationToken,
+        progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<(), Error> {
-        run(
-            &curl_spec(&asset.url, asset.size)?
-                .arg("--output")
-                .arg(target),
+        stream_download(
+            &curl_spec(&asset.url, asset.size)?.args(["--output", "-"]),
+            target,
             token,
-            620,
-            16 * 1024,
+            asset.size,
+            progress,
         )
-        .map(|_| ())
     }
     fn version(
         &self,
@@ -322,6 +347,56 @@ fn printable(message: &str) -> String {
         .filter(|character| !character.is_control())
         .take(1500)
         .collect()
+}
+
+fn stream_download(
+    spec: &ProcessSpec,
+    target: &Path,
+    token: &CancellationToken,
+    size: u64,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(), Error> {
+    check_cancel(token)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .map_err(|error| error.to_string())?;
+    let mut done = 0u64;
+    let process =
+        process::OwnedProcess::spawn(spec).map_err(|error| printable(&error.to_string()))?;
+    process
+        .stream_raw(
+            ProcessLimits {
+                timeout: Duration::from_secs(620),
+                stdout_bytes: 0,
+                stderr_bytes: 16 * 1024,
+                line_bytes: 16 * 1024,
+            },
+            token,
+            |stream, bytes| {
+                if stream == process::OutputStream::Stdout {
+                    let next = done
+                        .checked_add(bytes.len() as u64)
+                        .filter(|next| *next <= size)
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Download exceeded its declared size",
+                            )
+                        })?;
+                    if !bytes.is_empty() {
+                        file.write_all(bytes)?;
+                    }
+                    done = next;
+                    progress(done, Some(size));
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| printable(&error.to_string()))?;
+    check_cancel(token)?;
+    file.sync_all().map_err(|error| error.to_string())
 }
 fn check_cancel(token: &CancellationToken) -> Result<(), Error> {
     if token.is_cancelled() {
@@ -648,30 +723,66 @@ impl Drop for Stage {
     }
 }
 
+fn stage_callback(mut callback: impl FnMut(&str)) -> impl FnMut(ToolProgress) {
+    let mut last = None;
+    move |update| {
+        let stage = (update.family, update.stage);
+        if last != Some(stage) {
+            last = Some(stage);
+            callback(update.stage.label());
+        }
+    }
+}
+
 pub fn provision(
     selection: ProvisionSelection,
     token: &CancellationToken,
     progress: impl FnMut(&str),
 ) -> Result<Report, Error> {
+    static NEXT_OPERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT_OPERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    provision_with_progress(selection, token, id, stage_callback(progress))
+}
+
+pub fn provision_with_progress(
+    selection: ProvisionSelection,
+    token: &CancellationToken,
+    operation_id: u64,
+    progress: impl FnMut(ToolProgress),
+) -> Result<Report, Error> {
     if !cfg!(all(windows, target_arch = "x86_64")) {
         return Err("Media tool provisioning supports Windows x64 only".into());
     }
-    provision_at(
+    provision_at_with_progress(
         &crate::settings::Settings::managed_bin_dir(),
         selection,
         token,
+        operation_id,
         progress,
         &OfficialHost,
     )
 }
 
+#[cfg(test)]
 fn provision_at(
     root: &Path,
     selection: ProvisionSelection,
     token: &CancellationToken,
-    mut progress: impl FnMut(&str),
+    progress: impl FnMut(&str),
     host: &impl Host,
 ) -> Result<Report, Error> {
+    provision_at_with_progress(root, selection, token, 1, stage_callback(progress), host)
+}
+
+fn provision_at_with_progress(
+    root: &Path,
+    selection: ProvisionSelection,
+    token: &CancellationToken,
+    operation_id: u64,
+    mut callback: impl FnMut(ToolProgress),
+    host: &impl Host,
+) -> Result<Report, Error> {
+    let mut progress = progress::Reporter::new(operation_id, &mut callback);
     check_cancel(token)?;
     fs::create_dir_all(root).map_err(|error| error.to_string())?;
     let canonical_root = fs::canonicalize(root).map_err(|error| error.to_string())?;
@@ -705,14 +816,17 @@ fn provision_at(
     // Cleanup is armed only after exclusive creation established ownership.
     let mut stage = Stage::create(stage_path)?;
     let mut installed = Vec::new();
+    let mut completed = Vec::new();
     for family in selection.families() {
         check_cancel(token)?;
-        progress("Checking Latest Official Release");
+        progress.stage(*family, ToolStage::Resolve, None);
         let asset = resolve_asset(&host.metadata(*family, token)?, *family)?;
         let download = stage.path.join(&asset.name);
-        progress("Downloading Media Tools");
-        host.download(&asset, &download, token)?;
-        progress("Verifying Download");
+        progress.stage(*family, ToolStage::Download, Some(asset.size));
+        host.download(&asset, &download, token, &mut |done, total| {
+            progress.bytes(done, total)
+        })?;
+        progress.stage(*family, ToolStage::Verify, Some(asset.size));
         let (size, hash) = hash_file(&download, family.cap(), token)?;
         if size != asset.size || hash != asset.sha256 {
             return Err(
@@ -722,12 +836,12 @@ fn provision_at(
         let tools = if *family == Family::YtDlp {
             vec![("yt-dlp".into(), download.clone())]
         } else {
-            progress("Checking And Extracting Archive");
+            progress.stage(*family, ToolStage::Extract, Some(asset.size));
             extract_ffmpeg(&download, &stage.path, token)?
         };
         for (name, executable) in tools {
             check_cancel(token)?;
-            progress("Checking Tool Versions");
+            progress.stage(*family, ToolStage::CheckVersions, Some(asset.size));
             verify_windows_x64(&executable)?;
             let version = host.version(&name, &executable, token)?;
             let expected = if name == "yt-dlp" {
@@ -755,6 +869,7 @@ fn provision_at(
                 source_url: asset.url.clone(),
             });
         }
+        completed.push((*family, asset.size));
         manifest.tools.retain(|tool| !family.owns(&tool.name));
         let provenance = stage.path.join(if *family == Family::YtDlp {
             "yt-dlp-provenance.json"
@@ -831,11 +946,16 @@ fn provision_at(
         .map_err(|error| error.to_string())?;
     drop(file);
     check_cancel(token)?;
-    progress("Activating Verified Tools");
+    for (family, size) in &completed {
+        progress.stage(*family, ToolStage::Activate, Some(*size));
+    }
     check_cancel(token)?;
     fs::rename(&temporary, root.join("current-tools.json"))
         .map_err(|error| format!("Could not activate verified tools: {error}"))?;
     stage.committed = true;
+    for (family, size) in completed {
+        progress.complete(family, size);
+    }
     for tool in &mut installed {
         tool.path = root.join(&tool.path);
     }

@@ -6,6 +6,11 @@ use std::{
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("binary") => {
+            for _ in 0..128 {
+                io::stdout().write_all(&[0xa5; 8192]).unwrap();
+            }
+        }
         Some("hang") => loop {
             std::thread::sleep(Duration::from_secs(1));
         },

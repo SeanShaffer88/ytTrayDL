@@ -24,6 +24,11 @@ pub struct BackgroundTasks {
     workers: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 impl BackgroundTasks {
+    /// Create a UI-owned operation token which still inherits global shutdown.
+    pub fn child_token(&self) -> process::CancellationToken {
+        self.token.child()
+    }
+
     pub fn spawn(&self, work: impl FnOnce(process::CancellationToken) + Send + 'static) {
         let token = self.token.clone();
         let mut workers = self.workers.lock().unwrap();
@@ -333,5 +338,33 @@ pub fn download_managed_ffmpeg_with_cancel(
     token: &process::CancellationToken,
 ) -> Result<std::path::PathBuf, String> {
     tools::provision(tools::ProvisionSelection::FFmpeg, token, |_| {})?;
+    Ok(tools::managed_ffmpeg_path())
+}
+
+/// Worker-side provisioning with real transfer progress and a caller-owned job id.
+pub fn download_managed_ytdlp_with_progress(
+    token: &process::CancellationToken,
+    operation_id: u64,
+    progress: impl FnMut(tools::ToolProgress),
+) -> Result<std::path::PathBuf, String> {
+    tools::provision_with_progress(
+        tools::ProvisionSelection::YtDlp,
+        token,
+        operation_id,
+        progress,
+    )?;
+    Ok(tools::managed_ytdlp_path())
+}
+pub fn download_managed_ffmpeg_with_progress(
+    token: &process::CancellationToken,
+    operation_id: u64,
+    progress: impl FnMut(tools::ToolProgress),
+) -> Result<std::path::PathBuf, String> {
+    tools::provision_with_progress(
+        tools::ProvisionSelection::FFmpeg,
+        token,
+        operation_id,
+        progress,
+    )?;
     Ok(tools::managed_ffmpeg_path())
 }

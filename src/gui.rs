@@ -7,6 +7,8 @@
 //! accent. Every interactive control carries a tooltip (hover text),
 //! and no essential information is tooltip-only.
 
+#[cfg(feature = "field-validation")]
+mod field_metrics;
 mod gui_windows;
 
 use std::collections::VecDeque;
@@ -1084,6 +1086,52 @@ pub struct PopupRequest {
 
 type InfoResult = (String, Option<VideoInfo>, bool);
 type FetchResult = Result<std::path::PathBuf, String>;
+fn take_tool_terminal(receiver: &mut Option<Receiver<FetchResult>>) -> Option<FetchResult> {
+    let result = match receiver.as_ref()?.try_recv() {
+        Ok(result) => result,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Err("Tool worker stopped unexpectedly. Please retry.".into())
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+    };
+    *receiver = None;
+    Some(result)
+}
+struct ToolOperation {
+    id: u64,
+    mailbox: yttraydl::tools::ProgressMailbox,
+    progress: yttraydl::tools::ToolProgress,
+    cancel: yttraydl::process::CancellationToken,
+    cancelling: bool,
+}
+#[cfg(test)]
+mod tool_terminal_tests {
+    use super::*;
+    #[test]
+    fn disconnected_worker_clears_busy_and_allows_retry() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut busy = Some(receiver);
+        assert!(take_tool_terminal(&mut busy).is_none());
+        assert!(busy.is_some());
+        drop(sender);
+        assert!(take_tool_terminal(&mut busy)
+            .unwrap()
+            .unwrap_err()
+            .contains("retry"));
+        assert!(busy.is_none());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        busy = Some(receiver);
+        sender
+            .send(Ok(std::path::PathBuf::from("verified-tool.exe")))
+            .unwrap();
+        assert_eq!(
+            take_tool_terminal(&mut busy).unwrap().unwrap(),
+            std::path::PathBuf::from("verified-tool.exe")
+        );
+        assert!(busy.is_none());
+    }
+}
+type ToolStatusResult = (u64, yttraydl::tools::ToolStatusSnapshot, bool);
 /// Watcher poll result: (subscription URL, newest entries) per sub.
 type WatchResult = Vec<(String, Vec<yttraydl::ytdlp::PlaylistEntry>)>;
 /// Thumbnail fetch result: (source URL, decoded (w, h, RGBA)).
@@ -1449,14 +1497,6 @@ pub struct App {
     tray_monitoring_checked: Option<bool>,
     #[cfg_attr(not(windows), allow(dead_code))]
     tray_auto_checked: Option<bool>,
-    /// When the autostart registry value was last read by
-    /// `sync_tray` (perf): the registry is the source of truth
-    /// for that checkmark, but re-reading it on every 200 ms
-    /// pass is waste — a 1 s cadence (the same as the settings
-    /// file watch) keeps the checkmark just as current to a
-    /// human eye.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    last_autostart_poll: Instant,
     pub show_downloads: bool,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
@@ -1473,6 +1513,19 @@ pub struct App {
     info_rx: Receiver<InfoResult>,
     ytdlp_fetch_rx: Option<Receiver<FetchResult>>,
     ffmpeg_fetch_rx: Option<Receiver<FetchResult>>,
+    ytdlp_operation: Option<ToolOperation>,
+    ffmpeg_operation: Option<ToolOperation>,
+    next_tool_operation: u64,
+    tool_status_rx: Option<Receiver<ToolStatusResult>>,
+    tool_status_generation: u64,
+    tool_status_ready: bool,
+    ffmpeg_managed: bool,
+    autostart_status: bool,
+    was_settings_open: bool,
+    app_dir: Option<std::path::PathBuf>,
+    repaint: egui::Context,
+    main_window_remembered: bool,
+    scroll_to_tool_progress: bool,
 
     pub toasts: Vec<Toast>,
     pub last_ignored: Vec<(String, String)>,
@@ -1538,9 +1591,22 @@ pub struct App {
     last_geometry_save: Instant,
     /// A creation hint only; queue changes must not resize an open window.
     downloads_initial_size: Option<[f32; 2]>,
+    #[cfg(feature = "field-validation")]
+    field_metrics: field_metrics::Metrics,
 }
 
 impl App {
+    fn restore_new_window_geometry(&mut self, kind: WindowKind) {
+        let index = kind.index();
+        if self.window_geometry_ready[index] {
+            return;
+        }
+        self.window_geometry_ready[index] = if let Some(saved) = self.window_geometries.get(kind) {
+            yttraydl::platform::restore_window_geometry(kind, saved)
+        } else {
+            yttraydl::platform::window_geometry(kind).is_some()
+        };
+    }
     /// Restore each persistent window once per opening. Capture only visible
     /// normal bounds, before close/hide intent changes native visibility.
     fn maintain_window_geometry(&mut self, force: bool) {
@@ -1551,19 +1617,22 @@ impl App {
             WindowKind::About,
         ] {
             let index = kind.index();
+            let open = match kind {
+                WindowKind::Main => self.show_panel,
+                WindowKind::Settings => self.show_settings,
+                WindowKind::Downloads => self.show_downloads,
+                WindowKind::About => self.show_about,
+            };
+            if !open {
+                self.window_geometry_ready[index] = false;
+                continue;
+            }
             if !self.window_geometry_ready[index] {
-                let restored = if let Some(saved) = self.window_geometries.get(kind) {
-                    yttraydl::platform::restore_window_geometry(kind, saved)
-                } else {
-                    yttraydl::platform::window_geometry(kind).is_some()
-                };
-                self.window_geometry_ready[index] = restored;
+                self.restore_new_window_geometry(kind);
                 continue;
             }
             if let Some(current) = yttraydl::platform::window_geometry(kind) {
                 self.window_geometry_dirty |= self.window_geometries.set(kind, current);
-            } else if !matches!(kind, WindowKind::Main) {
-                self.window_geometry_ready[index] = false;
             }
         }
         if self.window_geometry_dirty
@@ -1589,6 +1658,7 @@ impl App {
         manual_url: Option<String>,
     ) -> Self {
         apply_theme(&cc.egui_ctx);
+        let main_window_remembered = yttraydl::platform::remember_main_window();
         // 0.2.6 diagnostics: if this line ever appears twice in
         // one launch, the app object was recreated — the prime
         // suspect for tray events being sent to a dead channel.
@@ -1598,9 +1668,10 @@ impl App {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-        let bin = ytdlp::locate_ytdlp(&settings, exe_dir.as_deref());
-        let ffmpeg_ok = ytdlp::ffmpeg_available(&settings, exe_dir.as_deref());
+        let bin = None;
+        let ffmpeg_ok = false;
         let (info_tx, info_rx) = std::sync::mpsc::channel();
+        let initial_autostart = settings.start_with_windows;
         let mut app = Self {
             tray_visible: settings.tray_icon_visible,
             settings,
@@ -1624,7 +1695,6 @@ impl App {
             tray_tooltip_sent: None,
             tray_monitoring_checked: None,
             tray_auto_checked: None,
-            last_autostart_poll: Instant::now(),
             show_downloads: false,
             show_about: false,
             confirm_hide_icon: false,
@@ -1638,6 +1708,19 @@ impl App {
             info_rx,
             ytdlp_fetch_rx: None,
             ffmpeg_fetch_rx: None,
+            ytdlp_operation: None,
+            ffmpeg_operation: None,
+            next_tool_operation: 0,
+            tool_status_rx: None,
+            tool_status_generation: 0,
+            tool_status_ready: false,
+            ffmpeg_managed: false,
+            autostart_status: initial_autostart,
+            was_settings_open: false,
+            app_dir: exe_dir,
+            repaint: cc.egui_ctx.clone(),
+            main_window_remembered,
+            scroll_to_tool_progress: false,
             toasts: Vec::new(),
             last_ignored: Vec::new(),
             rule_input_ignore: String::new(),
@@ -1674,25 +1757,11 @@ impl App {
             window_geometry_dirty: false,
             last_geometry_save: Instant::now(),
             downloads_initial_size: None,
+            #[cfg(feature = "field-validation")]
+            field_metrics: field_metrics::Metrics::start(),
         };
-        yttraydl::diag_log(&format!(
-            "ui start: yt-dlp {} (source: {}), ffmpeg {}",
-            match &app.bin {
-                Some(b) => b.path.display().to_string(),
-                None => "not found".to_string(),
-            },
-            app.bin
-                .as_ref()
-                .map(|b| format!("{:?}", b.source))
-                .unwrap_or_else(|| "-".to_string()),
-            if app.ffmpeg_ok { "found" } else { "missing" },
-        ));
-        if app.bin.is_none() {
-            // First-run honesty: without yt-dlp nothing can download.
-            // Open the panel so the one-click install is in front of
-            // the user instead of failing silently later.
-            app.open_panel_on_start = true;
-        }
+        yttraydl::diag_log("ui start: checking tool status asynchronously");
+        app.relocalize_binaries();
         if let Some(url) = manual_url {
             app.handle_detected_url(&url, true);
         }
@@ -1713,15 +1782,71 @@ impl App {
     }
 
     fn exe_dir(&self) -> Option<std::path::PathBuf> {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        self.app_dir.clone()
     }
 
     pub fn relocalize_binaries(&mut self) {
-        self.bin = ytdlp::locate_ytdlp(&self.settings, self.exe_dir().as_deref());
-        self.ffmpeg_ok = ytdlp::ffmpeg_available(&self.settings, self.exe_dir().as_deref());
+        self.tool_status_generation = self.tool_status_generation.wrapping_add(1);
+        let generation = self.tool_status_generation;
+        let settings = self.settings.clone();
+        let exe_dir = self.exe_dir();
+        let wake = self.repaint.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.tool_status_rx = Some(rx);
         self.version_requested_for = None;
+        self.background.spawn(move |_| {
+            let snapshot =
+                yttraydl::tools::ToolStatusSnapshot::resolve(&settings, exe_dir.as_deref());
+            #[cfg(windows)]
+            let autostart = platform::Platform::autostart_enabled();
+            #[cfg(not(windows))]
+            let autostart = false;
+            let _ = tx.send((generation, snapshot, autostart));
+            wake.request_repaint_of(egui::ViewportId::ROOT);
+        });
+    }
+
+    fn process_tool_status(&mut self) {
+        let Some(receiver) = &self.tool_status_rx else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok((generation, snapshot, autostart)) => {
+                self.tool_status_rx = None;
+                if generation != self.tool_status_generation {
+                    return;
+                }
+                let first = !self.tool_status_ready;
+                let found_after_unknown = self.bin.is_none() && snapshot.ytdlp.is_some();
+                self.bin = snapshot.ytdlp;
+                self.ffmpeg_ok = snapshot.ffmpeg_available;
+                self.ffmpeg_managed = snapshot.managed_ffmpeg_available;
+                self.autostart_status = autostart;
+                self.tool_status_ready = true;
+                if first && self.bin.is_none() {
+                    self.show_panel = true;
+                }
+                if found_after_unknown {
+                    if let Some(url) = self
+                        .active_popup
+                        .as_ref()
+                        .filter(|popup| popup.info.is_none())
+                        .map(|popup| popup.url.clone())
+                    {
+                        self.spawn_info_fetch(&url);
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.tool_status_rx = None;
+                self.tool_status_ready = true;
+                self.toast(
+                    "Tool status worker stopped. Reopen Settings to retry.",
+                    ToastKind::Error,
+                );
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
     }
 
     pub fn bin_path(&self) -> Option<std::path::PathBuf> {
@@ -1916,27 +2041,177 @@ impl App {
     }
 
     pub fn start_ytdlp_download(&mut self) {
-        if self.ytdlp_fetch_rx.is_some() {
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.ytdlp_fetch_rx = Some(rx);
-        self.background.spawn(move |token| {
-            let _ = tx.send(yttraydl::download_managed_ytdlp_with_cancel(&token));
-        });
-        self.toast("Downloading yt-dlp from GitHub…", ToastKind::Info);
+        self.start_tool_download(yttraydl::tools::ToolFamily::YtDlp);
+    }
+    pub fn start_ffmpeg_download(&mut self) {
+        self.start_tool_download(yttraydl::tools::ToolFamily::FFmpeg);
     }
 
-    pub fn start_ffmpeg_download(&mut self) {
-        if self.ffmpeg_fetch_rx.is_some() {
+    fn start_tool_download(&mut self, family: yttraydl::tools::ToolFamily) {
+        use yttraydl::tools::{ProgressMailbox, ToolFamily, ToolProgress, ToolStage};
+        if match family {
+            ToolFamily::YtDlp => self.ytdlp_fetch_rx.is_some(),
+            ToolFamily::FFmpeg => self.ffmpeg_fetch_rx.is_some(),
+        } {
             return;
         }
+        self.next_tool_operation = self.next_tool_operation.wrapping_add(1);
+        self.scroll_to_tool_progress = true;
+        let id = self.next_tool_operation;
+        let mailbox = ProgressMailbox::default();
+        mailbox.start(id);
+        let cancel = self.background.child_token();
+        let operation = ToolOperation {
+            id,
+            mailbox: mailbox.clone(),
+            progress: ToolProgress {
+                operation_id: id,
+                family,
+                stage: ToolStage::Resolve,
+                bytes_done: 0,
+                total_bytes: None,
+                bytes_per_second: None,
+                eta_seconds: None,
+            },
+            cancel: cancel.clone(),
+            cancelling: false,
+        };
         let (tx, rx) = std::sync::mpsc::channel();
-        self.ffmpeg_fetch_rx = Some(rx);
-        self.background.spawn(move |token| {
-            let _ = tx.send(yttraydl::download_managed_ffmpeg_with_cancel(&token));
+        match family {
+            ToolFamily::YtDlp => {
+                self.ytdlp_fetch_rx = Some(rx);
+                self.ytdlp_operation = Some(operation);
+            }
+            ToolFamily::FFmpeg => {
+                self.ffmpeg_fetch_rx = Some(rx);
+                self.ffmpeg_operation = Some(operation);
+            }
+        }
+        let wake = self.repaint.clone();
+        self.background.spawn(move |_| {
+            let mut progress = |update| {
+                mailbox.publish(update);
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+            };
+            let result = match family {
+                ToolFamily::YtDlp => {
+                    yttraydl::download_managed_ytdlp_with_progress(&cancel, id, &mut progress)
+                }
+                ToolFamily::FFmpeg => {
+                    yttraydl::download_managed_ffmpeg_with_progress(&cancel, id, &mut progress)
+                }
+            };
+            let _ = tx.send(result);
+            wake.request_repaint_of(egui::ViewportId::ROOT);
         });
-        self.toast("Downloading ffmpeg (about 110 MB)…", ToastKind::Info);
+    }
+
+    fn poll_tool_progress(&mut self) {
+        for operation in [&mut self.ytdlp_operation, &mut self.ffmpeg_operation]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(progress) = operation
+                .mailbox
+                .take()
+                .filter(|progress| progress.operation_id == operation.id)
+            {
+                operation.progress = progress;
+            }
+        }
+    }
+
+    fn tool_progress_ui(&mut self, ui: &mut egui::Ui) {
+        for operation in [&mut self.ytdlp_operation, &mut self.ffmpeg_operation]
+            .into_iter()
+            .flatten()
+        {
+            let progress = &operation.progress;
+            let name = match progress.family {
+                yttraydl::tools::ToolFamily::YtDlp => "yt-dlp",
+                yttraydl::tools::ToolFamily::FFmpeg => "ffmpeg",
+            };
+            egui::Frame::NONE
+                .fill(CARD)
+                .stroke(egui::Stroke::new(1.0_f32, ACCENT))
+                .corner_radius(5)
+                .inner_margin(10)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{name}: {}",
+                                if operation.cancelling {
+                                    "Cancelling…"
+                                } else {
+                                    progress.stage.label()
+                                }
+                            ))
+                            .strong(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(!operation.cancelling, egui::Button::new("Cancel"))
+                                .clicked()
+                            {
+                                operation.cancel.cancel();
+                                operation.cancelling = true;
+                            }
+                        });
+                    });
+                    if progress.stage == yttraydl::tools::ToolStage::Download {
+                        if let Some(total) = progress.total_bytes.filter(|total| *total > 0) {
+                            ui.add(
+                                egui::ProgressBar::new(
+                                    (progress.bytes_done as f64 / total as f64).clamp(0.0, 1.0)
+                                        as f32,
+                                )
+                                .desired_width(ui.available_width())
+                                .show_percentage(),
+                            );
+                            ui.label(format!(
+                                "{} / {}",
+                                ytdlp::format_bytes(progress.bytes_done),
+                                ytdlp::format_bytes(total)
+                            ));
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(format!(
+                                    "{} downloaded — total unknown",
+                                    ytdlp::format_bytes(progress.bytes_done)
+                                ));
+                            });
+                        }
+                        let speed = progress
+                            .bytes_per_second
+                            .map(|speed| {
+                                format!("{}/s", ytdlp::format_bytes(speed.max(0.0) as u64))
+                            })
+                            .unwrap_or_else(|| "Measuring speed…".into());
+                        let eta = progress
+                            .eta_seconds
+                            .map(|seconds| format!("About {seconds} s remaining"))
+                            .unwrap_or_else(|| "ETA unknown".into());
+                        ui.label(
+                            egui::RichText::new(format!("{speed}  ·  {eta}"))
+                                .small()
+                                .color(TEXT_DIM),
+                        );
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                "Preparing verified tools; byte progress resumes during downloads.",
+                            );
+                        });
+                    }
+                    if operation.cancelling {
+                        ui.label("Waiting for owned download cleanup before retry.");
+                    }
+                });
+            ui.add_space(6.0);
+        }
     }
 
     /// Ask GitHub for the latest yt-dlp release tag (worker
@@ -1948,17 +2223,27 @@ impl App {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.ytdlp_check_rx = Some(rx);
+        let wake = self.repaint.clone();
         self.background.spawn(move |token| {
             let _ = tx.send(yttraydl::fetch_latest_ytdlp_tag_with_cancel(&token));
+            wake.request_repaint_of(egui::ViewportId::ROOT);
         });
     }
 
     fn process_ytdlp_check(&mut self) {
-        if let Some(rx) = &self.ytdlp_check_rx {
-            if let Ok(result) = rx.try_recv() {
-                self.ytdlp_check_rx = None;
-                self.ytdlp_latest = Some(result);
+        let Some(rx) = &self.ytdlp_check_rx else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Some(Err("Update-check worker stopped. Try again.".into()))
             }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        };
+        if let Some(result) = result {
+            self.ytdlp_check_rx = None;
+            self.ytdlp_latest = Some(result);
         }
     }
 
@@ -2505,46 +2790,56 @@ impl App {
     }
 
     fn process_ytdlp_fetch(&mut self) {
-        if let Some(rx) = &self.ytdlp_fetch_rx {
-            if let Ok(result) = rx.try_recv() {
-                self.ytdlp_fetch_rx = None;
-                match result {
-                    Ok(path) => {
-                        self.relocalize_binaries();
-                        self.toast(
-                            format!("yt-dlp installed at {}", path.display()),
-                            ToastKind::Success,
-                        );
-                        self.pump_downloads();
-                    }
-                    Err(e) => {
-                        self.toast(format!("yt-dlp download failed: {e}"), ToastKind::Error);
-                    }
-                }
-            }
-        }
+        self.process_tool_fetch(yttraydl::tools::ToolFamily::YtDlp);
     }
-
     fn process_ffmpeg_fetch(&mut self) {
-        if let Some(rx) = &self.ffmpeg_fetch_rx {
-            if let Ok(result) = rx.try_recv() {
-                self.ffmpeg_fetch_rx = None;
-                match result {
-                    Ok(path) => {
-                        self.relocalize_binaries();
-                        self.toast(
-                            format!(
-                                "ffmpeg installed at {} — merging and MP3 conversion are available",
-                                path.display()
-                            ),
-                            ToastKind::Success,
-                        );
-                    }
-                    Err(e) => {
-                        self.toast(format!("ffmpeg download failed: {e}"), ToastKind::Error);
-                    }
-                }
+        self.process_tool_fetch(yttraydl::tools::ToolFamily::FFmpeg);
+    }
+    fn process_tool_fetch(&mut self, family: yttraydl::tools::ToolFamily) {
+        use yttraydl::tools::ToolFamily;
+        let receiver = match family {
+            ToolFamily::YtDlp => &mut self.ytdlp_fetch_rx,
+            ToolFamily::FFmpeg => &mut self.ffmpeg_fetch_rx,
+        };
+        let Some(result) = take_tool_terminal(receiver) else {
+            return;
+        };
+        let cancelled = match family {
+            ToolFamily::YtDlp => {
+                self.ytdlp_fetch_rx = None;
+                self.ytdlp_operation
+                    .take()
+                    .is_some_and(|operation| operation.cancelling)
             }
+            ToolFamily::FFmpeg => {
+                self.ffmpeg_fetch_rx = None;
+                self.ffmpeg_operation
+                    .take()
+                    .is_some_and(|operation| operation.cancelling)
+            }
+        };
+        let name = match family {
+            ToolFamily::YtDlp => "yt-dlp",
+            ToolFamily::FFmpeg => "ffmpeg",
+        };
+        // Even an error after activation/reporting may have committed verified
+        // tools. Reconcile actual status independently from the terminal label.
+        self.relocalize_binaries();
+        match result {
+            Ok(_) => {
+                self.toast(format!("{name} is ready."), ToastKind::Success);
+            }
+            Err(error) => self.toast(
+                format!(
+                    "{name} {}: {error}",
+                    if cancelled {
+                        "operation cancelled"
+                    } else {
+                        "download failed"
+                    }
+                ),
+                ToastKind::Error,
+            ),
         }
     }
 
@@ -2554,10 +2849,12 @@ impl App {
                 self.version_requested_for = Some(bin.clone());
                 self.ytdlp_version = None;
                 let (tx, rx) = std::sync::mpsc::channel::<String>();
+                let wake = self.repaint.clone();
                 self.background.spawn(move |token| {
-                    if let Some(version) = yttraydl::fetch_version(&bin, &token) {
-                        let _ = tx.send(version);
-                    }
+                    let version = yttraydl::fetch_version(&bin, &token)
+                        .unwrap_or_else(|| "Version unavailable".into());
+                    let _ = tx.send(version);
+                    wake.request_repaint_of(egui::ViewportId::ROOT);
                 });
                 // Drain lazily via a leaked receiver pattern: store
                 // in a thread-local-ish slot by polling in update
@@ -2568,11 +2865,20 @@ impl App {
             }
         }
         if let Some(rx) = &self.version_rx {
-            if let Ok(v) = rx.try_recv() {
-                if !v.is_empty() {
-                    self.ytdlp_version = Some(v);
+            match rx.try_recv() {
+                Ok(version) => {
+                    self.ytdlp_version = Some(if version.is_empty() {
+                        "Version unavailable".into()
+                    } else {
+                        version
+                    });
+                    self.version_rx = None;
                 }
-                self.version_rx = None;
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.ytdlp_version = Some("Version unavailable".into());
+                    self.version_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
     }
@@ -2711,12 +3017,7 @@ impl App {
         let open_folder = MenuItem::new("Open download folder", true, None);
         let pause_all = MenuItem::new("Pause all downloads", true, None);
         let settings_item = MenuItem::new("Settings\u{2026}", true, None);
-        let autostart = CheckMenuItem::new(
-            "Start with Windows",
-            true,
-            platform::Platform::autostart_enabled(),
-            None,
-        );
+        let autostart = CheckMenuItem::new("Start with Windows", true, self.autostart_status, None);
         let hide_icon = MenuItem::new("Hide tray icon\u{2026}", true, None);
         let about = MenuItem::new("About ytTrayDL", true, None);
         let exit = MenuItem::new("Exit ytTrayDL", true, None);
@@ -2966,26 +3267,11 @@ impl App {
             self.tray_auto_checked = Some(auto);
             with_tray_handles(|t| t.auto_mode.set_checked(auto));
         }
-        // Autostart checkmark (0.5.1): owned here, in app
-        // context, never in the tray handler (see
-        // handle_tray_menu_direct). Read back from the registry
-        // (the source of truth) and pushed only on change, so
-        // a handler-side toggle shows up within a pass or two
-        // once the app adopts the handler's settings save.
-        // The registry read itself is throttled to a 1 s cadence
-        // (perf) — the only writers of that value are this app's
-        // own handler and Settings window, and the app adopts
-        // handler changes via the settings-file watch on the
-        // same 1 s cadence.
-        if self.tray_autostart_checked.is_none()
-            || self.last_autostart_poll.elapsed() >= Duration::from_secs(1)
-        {
-            self.last_autostart_poll = Instant::now();
-            let autostart_now = platform::Platform::autostart_enabled();
-            if self.tray_autostart_checked != Some(autostart_now) {
-                self.tray_autostart_checked = Some(autostart_now);
-                with_tray_handles(|t| t.autostart.set_checked(autostart_now));
-            }
+        // Native registry state is supplied by the worker snapshot.
+        let autostart_now = self.autostart_status;
+        if self.tray_autostart_checked != Some(autostart_now) {
+            self.tray_autostart_checked = Some(autostart_now);
+            with_tray_handles(|t| t.autostart.set_checked(autostart_now));
         }
     }
 }
@@ -3002,7 +3288,24 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.main_window_remembered {
+            self.main_window_remembered = yttraydl::platform::remember_main_window();
+        }
+        #[cfg(feature = "field-validation")]
+        let field_update_start = Instant::now();
+        #[cfg(feature = "field-validation")]
+        let field_geometry_start = Instant::now();
         self.maintain_window_geometry(false);
+        #[cfg(feature = "field-validation")]
+        self.field_metrics
+            .record("geometry-before", field_geometry_start.elapsed());
+        #[cfg(feature = "field-validation")]
+        let field_events_start = Instant::now();
+        self.process_tool_status();
+        if self.show_settings && !self.was_settings_open {
+            self.relocalize_binaries();
+        }
+        self.was_settings_open = self.show_settings;
         self.ensure_tray(ctx);
         self.process_platform_events();
         self.process_info_results();
@@ -3015,6 +3318,7 @@ impl eframe::App for App {
                 ctx.request_repaint_after(delay);
             }
         }
+        self.poll_tool_progress();
         self.process_ytdlp_fetch();
         self.process_ffmpeg_fetch();
         self.process_ytdlp_check();
@@ -3035,6 +3339,7 @@ impl eframe::App for App {
             if disk_mtime.is_some() && disk_mtime != self.settings_mtime {
                 self.settings_mtime = disk_mtime;
                 self.settings = Settings::load();
+                self.relocalize_binaries();
                 self.tray_visible = self.settings.tray_icon_visible;
                 yttraydl::diag_log("settings reloaded (changed outside the UI)");
             }
@@ -3042,6 +3347,11 @@ impl eframe::App for App {
         self.ensure_version();
         self.activate_next_popup();
         self.sync_tray();
+        #[cfg(feature = "field-validation")]
+        self.field_metrics
+            .record("events-and-state", field_events_start.elapsed());
+        #[cfg(feature = "field-validation")]
+        let field_render_start = Instant::now();
 
         if self.first_frame {
             self.first_frame = false;
@@ -3065,6 +3375,7 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     self.panel_ui(ui);
                 });
+            self.restore_new_window_geometry(WindowKind::Main);
             if ctx.input(|i| i.viewport().close_requested()) && !self.exit_requested {
                 // Closing the main window is a choice, not a
                 // reflex: the user's saved CloseAction decides
@@ -3110,7 +3421,18 @@ impl eframe::App for App {
         self.about_ui(ctx);
         self.hide_icon_confirm_ui(ctx);
         self.close_choice_ui(ctx);
-        self.maintain_window_geometry(false);
+        #[cfg(feature = "field-validation")]
+        self.field_metrics
+            .record("render", field_render_start.elapsed());
+        #[cfg(feature = "field-validation")]
+        let field_geometry_start = Instant::now();
+        // Capture existing windows once at frame start, before hide/close
+        // intents. A newly-created viewport is restored on its next frame.
+        #[cfg(feature = "field-validation")]
+        self.field_metrics
+            .record("geometry-after", field_geometry_start.elapsed());
+        #[cfg(feature = "field-validation")]
+        let field_persist_start = Instant::now();
 
         if self.settings_dirty {
             self.settings_dirty = false;
@@ -3126,6 +3448,12 @@ impl eframe::App for App {
         }
 
         if self.exit_requested {
+            #[cfg(feature = "field-validation")]
+            {
+                self.field_metrics
+                    .record("update", field_update_start.elapsed());
+                self.field_metrics.finish();
+            }
             self.maintain_window_geometry(true);
             // Exit only after owned workers acknowledge process-tree cleanup.
             let active = self.downloads.active_count();
@@ -3164,5 +3492,12 @@ impl eframe::App for App {
         }
 
         ctx.request_repaint_after(Duration::from_millis(200));
+        #[cfg(feature = "field-validation")]
+        {
+            self.field_metrics
+                .record("persistence", field_persist_start.elapsed());
+            self.field_metrics
+                .record("update", field_update_start.elapsed());
+        }
     }
 }

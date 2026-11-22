@@ -121,6 +121,18 @@ fn existing_directory(path: &Path) -> Option<std::path::PathBuf> {
 
 /// Read a visible, normal owned window. Minimized/maximized/hidden geometry
 /// never replaces the user's last normal bounds.
+pub fn remember_main_window() -> bool {
+    #[cfg(windows)]
+    {
+        windows_impl::remember_main_window()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
+/// Query one persistent window on its owning GUI thread.
 pub fn window_geometry(
     kind: crate::window_geometry::WindowKind,
 ) -> Option<crate::window_geometry::WindowGeometry> {

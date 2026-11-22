@@ -1,5 +1,17 @@
 # ytTrayDL — design notes
 
+## 2026-11-21 Audit Verification
+
+| Area | Status | Scope |
+|---|---|---|
+| Audit library regressions | Verified | Full native Windows suite: 121 passed, no filtered/ignored tests; archive ID case, every capped format alternative, removed subscriptions, HTTP(S) playlist parsing, thumbnail retry/decode budgets and cancelled-history cap covered |
+| Windows build graph | Verified | Rust 1.100 format, host and explicit Windows Clippy, all-target check, optional field-harness Clippy, debug and release application builds passed with exit 0 |
+| Dependency advisory check | Partially verified | rustix 1.1.6 removes RUSTSEC-2026-0486; fresh known-advisory scan has zero vulnerability entries and six retained maintenance/optional-platform notices |
+| Native forwarding and hidden hotkey recovery | Partially verified | Owned native run passed four assertions: close-to-tray hidden root restored by WM_HOTKEY dispatch, second-launch URL popup, normal exit 0, exact URL received through actual platform two-process fixture. Physical hotkey input and exact popup UIA text remain unverified (provider returned no nodes) |
+| Installer, external extractors, sign-in and mixed DPI | Unverified by this audit | Historical evidence remains scoped to its recorded candidate; no host installer or physical display/sign-in testing performed |
+
+See the [audit report](AUDIT-2026-11-21.md) for findings, commands and limits.
+
 ## Purpose
 
 Make yt-dlp feel like a built-in Windows feature: copy a link, get the

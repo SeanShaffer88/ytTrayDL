@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Audit Fixes
+
+- Preserve explicit clipboard reads after listener notifications and retry failed notification reads.
+- Forward URL arguments to the running instance and restore hidden windows for the recovery hotkey.
+- Stop repeated failed thumbnail requests and bound decoded image dimensions and allocation.
+- Honor case-sensitive archive video IDs and enforce every quality preset's height cap.
+- Ignore pending results for removed channel subscriptions and reject malformed playlist URLs.
+- Keep cancelled download history within the existing 50-job limit and check disk space for new folders.
+- Balance native mutex, event, registry and taskbar COM resources.
+- Update locked rustix to 1.1.6 for RUSTSEC-2026-0486.
+
 ## 0.8.0 — 2026-11-04
 
 Promotes the unpublished 0.7.1 validation candidate; its actual field results

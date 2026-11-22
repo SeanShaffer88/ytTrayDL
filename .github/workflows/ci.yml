@@ -60,13 +60,19 @@ jobs:
         run: cargo test --locked
       - name: Release build
         run: cargo build --release --locked --bin yttraydl
+      - name: Stage portable payload with dependency notices
+        shell: pwsh
+        run: |
+          $null = New-Item -ItemType Directory -Path windows-payload
+          Copy-Item target/release/yttraydl.exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt -Destination windows-payload
+          Set-Content -LiteralPath windows-payload/portable.txt -Value '' -Encoding utf8NoBOM
       - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
           name: yttraydl-windows
-          path: target/release/yttraydl.exe
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress --yes
+          path: windows-payload/*
+      - name: Install Inno Setup 6.5.4
+        run: choco install innosetup --version=6.5.4 --no-progress --yes --allow-downgrade
       - name: Build installer
         shell: pwsh
         run: |
@@ -141,4 +147,39 @@ jobs:
         with:
           name: installer-${{ matrix.scenario }}-evidence
           path: ${{ runner.temp }}/installer-evidence
+          if-no-files-found: error
+
+  windows-installer-tools:
+    needs: windows-build
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [latest, upgrade-latest, offline-failure, skip]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: yttraydl-setup
+          path: candidate-setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: yttraydl-windows
+          path: candidate-exe
+      - name: Build actual owned process runner
+        shell: pwsh
+        run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/tools-state-probe"
+      - name: Actual tool provisioning, offline failure, or explicit skip
+        shell: pwsh
+        run: |
+          $candidate = @(Get-ChildItem candidate-setup -Filter '*.exe' -File)
+          if ($candidate.Count -ne 1) { throw 'Expected exactly one candidate installer' }
+          ./tools/Invoke-InstallerProvisioning.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/tools-state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-tools-evidence" -TrustIsolatedRunner
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-tools-${{ matrix.scenario }}-evidence
+          path: ${{ runner.temp }}/installer-tools-evidence
           if-no-files-found: error

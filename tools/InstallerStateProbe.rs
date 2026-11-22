@@ -5,6 +5,23 @@ fn main() {
         run_owned(&args[1..]);
         return;
     }
+    if args.first().is_some_and(|a| a == "--tool-status") {
+        let settings = yttraydl::settings::Settings::load();
+        let ytdlp = yttraydl::tools::managed_ytdlp_path();
+        let ffmpeg = yttraydl::tools::managed_ffmpeg_path();
+        let located = yttraydl::ytdlp::locate_ytdlp(&settings, None)
+            .expect("actual app resolver finds managed yt-dlp");
+        assert_eq!(
+            located.path, ytdlp,
+            "app resolver consumes current manifest"
+        );
+        assert!(ytdlp.is_file() && ffmpeg.is_file());
+        assert!(yttraydl::ytdlp::ffmpeg_available(&settings, None));
+        let ffprobe = ffmpeg.with_file_name("ffprobe.exe");
+        assert!(ffprobe.is_file());
+        println!("Actual app resolvers consumed managed yt-dlp, ffmpeg and ffprobe");
+        return;
+    }
     let settings = yttraydl::settings::Settings::load();
     assert!(!settings.monitoring_enabled, "synthetic setting was lost");
     assert_eq!(settings.filename_template, "field-071-%(id)s.%(ext)s");
@@ -41,12 +58,7 @@ fn run_owned(args: &[std::ffi::OsString]) {
     use yttraydl::process::{
         CancellationToken, OwnedProcess, ProcessError, ProcessLimits, ProcessSpec,
     };
-    let seconds: u64 = args
-        .first()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.parse().ok())
-        .filter(|s| (1..=300).contains(s))
-        .expect("deadline must be 1..=300 seconds");
+    let seconds = owned_deadline(args.first()).expect("deadline must be 1..=1800 seconds");
     let program = args.get(1).expect("explicit program required");
     let process = OwnedProcess::spawn(&ProcessSpec::new(program).args(&args[2..]))
         .expect("owned process spawn failed");
@@ -85,6 +97,30 @@ fn run_owned(args: &[std::ffi::OsString]) {
                 _ => 1,
             };
             std::process::exit(code);
+        }
+    }
+}
+
+fn owned_deadline(value: Option<&std::ffi::OsString>) -> Option<u64> {
+    value
+        .and_then(|value| value.to_str())
+        .and_then(|value| value.parse().ok())
+        .filter(|seconds| (1..=1800).contains(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn owned_deadlines_remain_explicit_and_bounded() {
+        assert_eq!(super::owned_deadline(None), None);
+        for invalid in ["0", "1801", "-1", "bad"] {
+            assert_eq!(super::owned_deadline(Some(&invalid.into())), None);
+        }
+        for seconds in [1, 300, 1500, 1800] {
+            assert_eq!(
+                super::owned_deadline(Some(&seconds.to_string().into())),
+                Some(seconds)
+            );
         }
     }
 }

@@ -1,0 +1,2 @@
+# Preserve upstream license text and the verified deterministic notice checksum.
+THIRD-PARTY-NOTICES.txt -text -whitespace

@@ -577,3 +577,16 @@ refreshed release artifacts and packed-crate consumption are tracked by the
 The [release contract](RELEASE-0.8.0.md) describes current automated checks and
 limits. Preserve earlier field reports as historical observations; this table
 supersedes their pending status only for the exact areas listed above.
+
+## Current 0.8.2 Settings Verification
+
+The [Settings without scrolling contract](SETTINGS-NO-SCROLL-0.8.2.md) defines the
+current bounded-page behavior and verification matrix. Earlier field reports and
+0.8.1 responsiveness results above remain historical.
+
+| Area | Candidate status | Scope / limitation |
+|---|---|---|
+| Settings actual-widget bounds and state | Locally verified by headless egui regression tests | Required practical size/text/DPI/progress matrix, all conditional fields, six paginated lists, actual add/remove/navigation and focused editor repacking; final exact-head Rust gates required before merge |
+| Physical DPI / monitor transitions | Not performed in this pass | Headless pixels-per-point tests do not establish physical display behavior |
+| Native Settings UI | Required before delivery | Owned private-profile inspection; does not certify accessibility |
+| Exact-head CI and installer lifecycle | Required before merge | Full hosted matrix; no installer executes on the developer host |

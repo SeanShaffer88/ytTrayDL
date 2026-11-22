@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — Settings Without Scrolling
+
+- Replace the Settings scroll container with responsive pages, bounded section navigation and independently paginated rule lists.
+- Keep draft inputs, custom values, tool progress and Cancel available as page capacity changes; preserve automatic saving and window geometry.
+- Use bounded quality/browser choices so Settings popups do not introduce scrollbars.
+
 ## 0.8.1 — GUI Responsiveness Candidate
 
 - Remove measured GUI stalls from cross-thread window-title queries; cache validated owned window handles and capture active geometry once per frame.

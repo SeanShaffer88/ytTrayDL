@@ -67,6 +67,51 @@ impl WindowGeometry {
     }
 }
 
+/// Maximum logical client size inside a physical monitor work area, with a
+/// 12-point margin on each edge and the actual native frame excluded.
+pub fn client_capacity(
+    work: [i32; 2],
+    outer: [i32; 2],
+    client: [i32; 2],
+    dpi: u32,
+) -> Option<[f32; 2]> {
+    if !(48..=768).contains(&dpi)
+        || work.iter().any(|v| *v <= 0)
+        || client.iter().any(|v| *v <= 0)
+        || outer
+            .iter()
+            .zip(client)
+            .any(|(outer, client)| *outer < client)
+    {
+        return None;
+    }
+    let scale = dpi as f32 / 96.0;
+    Some(std::array::from_fn(|axis| {
+        ((work[axis] as f32 - (outer[axis] - client[axis]) as f32) / scale - 24.0).max(1.0)
+    }))
+}
+
+#[cfg(test)]
+mod client_capacity_tests {
+    use super::client_capacity;
+    #[test]
+    fn actual_frame_workarea_and_dpi_bound_the_settings_client() {
+        assert_eq!(
+            client_capacity([960, 700], [616, 679], [600, 640], 96),
+            Some([920.0, 637.0])
+        );
+        assert_eq!(
+            client_capacity([960, 700], [632, 718], [600, 640], 192),
+            Some([440.0, 287.0])
+        );
+        assert_eq!(client_capacity([0, 700], [616, 679], [600, 640], 96), None);
+        assert_eq!(
+            client_capacity([960, 700], [590, 679], [600, 640], 96),
+            None
+        );
+    }
+}
+
 /// Transient windows keep current intent anchors rather than persisted bounds.
 #[derive(Debug, Clone, Copy)]
 pub enum TransientWindow {

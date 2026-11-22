@@ -8,6 +8,12 @@ downloads quietly in the background with your defaults while you keep working.
 
 ![ytTrayDL icon](assets/icon.png)
 
+Settings use bounded pages, never scrollbars. Related controls share a page when
+space permits; use the section arrows and Previous/Next page controls to reach
+all options. Domain rules and watched channels have independent list pages.
+Window resizing and tool-download progress adjust page capacity without changing
+saved preferences.
+
 The 0.8.1 responsiveness candidate fixes a measured GUI geometry stall and adds
 visible tool-download progress and cancellation. See the
 [responsiveness verification contract](docs/GUI-RESPONSIVENESS-0.8.1.md).

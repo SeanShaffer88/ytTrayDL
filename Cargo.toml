@@ -42,6 +42,8 @@ egui = { version = "0.33", default-features = false, features = ["default_fonts"
 # runs on effectively every Windows 10/11 machine and is more
 # than enough for this UI.
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
+sha2 = { version = "0.11.1", default-features = false }
+zip = { version = "=9.8.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(not(windows))'.dependencies]
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit", "x11"] }

@@ -30,6 +30,8 @@ pub enum PlatformEvent {
     /// The user asked the running instance to show itself
     /// (second launch, `--show`, or the Ctrl+Alt+G hotkey).
     ShowRequested,
+    /// A later invocation supplied a URL explicitly, independent of monitoring.
+    ManualUrl(String),
 }
 
 /// Owns the platform listeners. Dropping it stops the listener
@@ -71,6 +73,50 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
             already_running: false,
         }
     }
+}
+
+/// Deliver an explicit CLI URL to the running instance, with a bounded wait.
+pub fn forward_manual_url(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_impl::forward_manual_url(url)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = url;
+        Err("URL forwarding is only supported on Windows".into())
+    }
+}
+
+#[cfg(any(windows, test))]
+const MAX_MANUAL_URL_BYTES: usize = 32 * 1024;
+
+#[cfg(any(windows, test))]
+fn manual_url_payload(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() || bytes.len() > MAX_MANUAL_URL_BYTES {
+        return None;
+    }
+    let url = std::str::from_utf8(bytes).ok()?;
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    if !crate::url_detect::is_http_url(url) {
+        return None;
+    }
+    Some(url.to_owned())
+}
+
+#[cfg(any(windows, test))]
+fn existing_directory(path: &Path) -> Option<std::path::PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    absolute
+        .ancestors()
+        .find(|ancestor| ancestor.is_dir())
+        .map(Path::to_owned)
 }
 
 /// Read a visible, normal owned window. Minimized/maximized/hidden geometry
@@ -331,6 +377,20 @@ pub fn launched_with_show_flag(args: &[String]) -> bool {
 }
 
 #[cfg(any(windows, test))]
+fn clipboard_event_text(
+    last_sequence: &mut u32,
+    sequence: u32,
+    read: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if sequence != 0 && sequence == *last_sequence {
+        return None;
+    }
+    let text = read()?;
+    *last_sequence = sequence;
+    Some(text)
+}
+
+#[cfg(any(windows, test))]
 fn clipboard_allocation_units(bytes: usize) -> Option<usize> {
     if bytes < 2 || !bytes.is_multiple_of(2) {
         None
@@ -351,7 +411,61 @@ pub(crate) use windows_impl::{read_owned_pipe, ProcessTree};
 
 #[cfg(test)]
 mod clipboard_tests {
-    use super::{clipboard_allocation_units, decode_clipboard_units};
+    use super::{clipboard_allocation_units, clipboard_event_text, decode_clipboard_units};
+    #[test]
+    fn forwarded_url_requires_bounded_http_payload() {
+        for invalid in [
+            b"".as_slice(),
+            b"httpx://host",
+            b"https:///path",
+            b"https://host/\0x",
+            b"https://host/ two",
+            &[0xff],
+        ] {
+            assert_eq!(super::manual_url_payload(invalid), None);
+        }
+        assert_eq!(
+            super::manual_url_payload(&vec![b'a'; super::MAX_MANUAL_URL_BYTES + 1]),
+            None
+        );
+        for valid in ["https://example.invalid/audit-cli", "http://host/path"] {
+            assert_eq!(
+                super::manual_url_payload(valid.as_bytes()),
+                Some(valid.into())
+            );
+        }
+    }
+    #[test]
+    fn disk_probe_uses_existing_directory_for_new_or_file_path() {
+        let root = std::env::temp_dir();
+        let missing = root
+            .join(format!("yttraydl-absent-{}", std::process::id()))
+            .join("nested");
+        assert_eq!(super::existing_directory(&missing), Some(root));
+        let executable = std::env::current_exe().unwrap();
+        assert_eq!(
+            super::existing_directory(&executable),
+            executable.parent().map(std::path::Path::to_owned)
+        );
+    }
+    #[test]
+    fn failed_event_read_does_not_consume_sequence() {
+        let mut last = 0;
+        assert_eq!(clipboard_event_text(&mut last, 42, || None), None);
+        assert_eq!(last, 0);
+        assert_eq!(
+            clipboard_event_text(&mut last, 42, || Some("url".into())),
+            Some("url".into())
+        );
+        assert_eq!(
+            clipboard_event_text(&mut last, 42, || panic!("duplicate read")),
+            None
+        );
+        assert_eq!(
+            clipboard_event_text(&mut last, 43, || Some("next".into())),
+            Some("next".into())
+        );
+    }
     #[test]
     fn clipboard_allocation_must_hold_whole_units() {
         assert_eq!(clipboard_allocation_units(0), None);

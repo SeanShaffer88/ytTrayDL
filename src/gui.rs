@@ -1507,6 +1507,7 @@ pub struct App {
     pub watch_check_now: bool,
     /// In-flight popup thumbnail fetch: (for URL, decoded RGBA).
     thumb_rx: Option<Receiver<ThumbResult>>,
+    thumb_attempt: yttraydl::thumbnail::Attempt,
     /// The decoded popup thumbnail, keyed by its source URL.
     pub popup_thumb: Option<(String, egui::TextureHandle)>,
     /// The queue had active work at some point since it last
@@ -1656,6 +1657,7 @@ impl App {
             rule_watch_preset: Preset::default(),
             watch_check_now: false,
             thumb_rx: None,
+            thumb_attempt: yttraydl::thumbnail::Attempt::default(),
             popup_thumb: None,
             had_active_downloads: false,
             disk_warned: false,
@@ -1883,6 +1885,9 @@ impl App {
                 p.last_interaction = Instant::now();
                 p.info_loading = true;
                 self.spawn_info_fetch(&p.url);
+                self.thumb_attempt = yttraydl::thumbnail::Attempt::default();
+                self.thumb_rx = None;
+                self.popup_thumb = None;
                 self.active_popup = Some(p);
             }
         }
@@ -2068,6 +2073,9 @@ impl App {
                         }
                     }
                 }
+                PlatformEvent::ManualUrl(url) => {
+                    self.handle_detected_url(&url, true);
+                }
                 PlatformEvent::ShowRequested => {
                     self.settings.tray_icon_visible = true;
                     self.tray_visible = true;
@@ -2108,12 +2116,7 @@ impl App {
                 .and_then(|p| p.info.as_ref())
                 .and_then(|i| i.thumbnail.clone())
             {
-                if self
-                    .popup_thumb
-                    .as_ref()
-                    .map(|(u, _)| u != &thumb_url)
-                    .unwrap_or(true)
-                {
+                if self.thumb_attempt.begin(&thumb_url) {
                     self.spawn_thumb_fetch(thumb_url);
                 }
             }
@@ -2126,18 +2129,19 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.thumb_rx = Some(rx);
         self.background.spawn(move |token| {
-            let decoded = yttraydl::fetch_url_bytes_with_cancel(&url, &token).and_then(|bytes| {
-                let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-                let (w, h) = img.dimensions();
-                Some((w, h, img.into_raw()))
-            });
+            let decoded = yttraydl::fetch_url_bytes_with_cancel(&url, &token)
+                .and_then(|bytes| yttraydl::thumbnail::decode(&bytes));
             let _ = tx.send((url, decoded));
         });
     }
 
     fn process_thumbs(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.thumb_rx {
-            if let Ok((url, decoded)) = rx.try_recv() {
+            let received = rx.try_recv();
+            if matches!(received, Err(std::sync::mpsc::TryRecvError::Disconnected)) {
+                self.thumb_rx = None;
+            }
+            if let Ok((url, decoded)) = received {
                 self.thumb_rx = None;
                 if let Some((w, h, rgba)) = decoded {
                     // Centre-crop to the popup hero's aspect
@@ -2240,17 +2244,16 @@ impl App {
                         continue;
                     }
                     let ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
-                    let fresh = self.watch_data.record_poll(&sub_url, &ids);
+                    let Some((preset, fresh)) = self.watch_data.record_subscription_poll(
+                        &self.settings.subscriptions,
+                        &sub_url,
+                        &ids,
+                    ) else {
+                        continue;
+                    };
                     if fresh.is_empty() {
                         continue;
                     }
-                    let preset = self
-                        .settings
-                        .subscriptions
-                        .iter()
-                        .find(|s| s.url == sub_url)
-                        .map(|s| s.preset)
-                        .unwrap_or(self.settings.default_preset);
                     for entry in entries.iter().filter(|e| fresh.contains(&e.id)) {
                         let title = if entry.title.is_empty() {
                             entry.url.clone()

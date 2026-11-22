@@ -54,6 +54,19 @@ pub struct WatchData {
 pub const SEEN_CAP: usize = 300;
 
 impl WatchData {
+    /// Apply an in-flight result only while its subscription still exists.
+    pub fn record_subscription_poll(
+        &mut self,
+        subscriptions: &[crate::settings::Subscription],
+        url: &str,
+        ids: &[String],
+    ) -> Option<(crate::settings::Preset, Vec<String>)> {
+        let preset = subscriptions
+            .iter()
+            .find(|subscription| subscription.url == url)?
+            .preset;
+        Some((preset, self.record_poll(url, ids)))
+    }
     pub fn load() -> Self {
         let Ok(text) = std::fs::read_to_string(config_dir().join("watch.json")) else {
             return Self::default();
@@ -101,6 +114,26 @@ impl WatchData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_subscription_results_are_ignored_and_current_preset_wins() {
+        use crate::settings::{Preset, Subscription};
+        let mut data = WatchData::default();
+        data.record_poll("channel", &["old".into()]);
+        let ids = vec!["new".into(), "old".into()];
+        assert!(data
+            .record_subscription_poll(&[], "channel", &ids)
+            .is_none());
+        assert_eq!(data.seen["channel"], vec!["old"]);
+        let subscriptions = vec![Subscription {
+            url: "channel".into(),
+            preset: Preset::P720,
+        }];
+        assert_eq!(
+            data.record_subscription_poll(&subscriptions, "channel", &ids),
+            Some((Preset::P720, vec!["new".into()]))
+        );
+    }
 
     #[test]
     fn first_poll_baselines_and_second_reports_new() {

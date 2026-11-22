@@ -71,8 +71,31 @@ jobs:
         with:
           name: yttraydl-windows
           path: windows-payload/*
-      - name: Install Inno Setup 6.5.4
-        run: choco install innosetup --version=6.5.4 --no-progress --yes --allow-downgrade
+      - name: Install Inno Setup 6.7.1
+        run: choco install innosetup --version=6.7.1 --no-progress --yes
+      - name: Verify actual Inno compiler engine before packaging
+        shell: pwsh
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'inno-version-preflight'
+          $null = New-Item -ItemType Directory -Path $probeRoot
+          $probe = Join-Path $probeRoot 'version.iss'
+          @'
+          [Setup]
+          AppName=Compiler Version Probe
+          AppVersion=1
+          DefaultDirName={localappdata}\ytTrayDL-Compiler-Probe
+          PrivilegesRequired=lowest
+          CreateAppDir=no
+          Uninstallable=no
+          '@ | Set-Content -LiteralPath $probe -Encoding utf8NoBOM
+          # Inno 6 /? exits 1 without the engine version. Compile an inert
+          # disposable probe, never execute it, then gate the real package.
+          $banner = @(& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/O$probeRoot" '/Fversion-probe' $probe)
+          $code = $LASTEXITCODE
+          $banner | Write-Output
+          if ($code -ne 0 -or ($banner -join "`n") -notmatch 'Compiler engine version: Inno Setup 6\.7\.1(?:\s|$)') {
+            throw "Expected actual Inno engine 6.7.1; preflight exit $code"
+          }
       - name: Build installer
         shell: pwsh
         run: |

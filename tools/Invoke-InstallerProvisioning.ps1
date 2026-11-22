@@ -118,3 +118,6 @@ try {
 }finally{
  @{scenario=$Scenario;passed=$passed;commit=$env:GITHUB_SHA;events=$events.ToArray();scope='Actual silent installer on disposable hosted Windows; interactive Retry/Skip/Cancel UI not exercised.'}|ConvertTo-Json -Depth 9|Set-Content -LiteralPath (Join-Path $EvidenceRoot 'evidence.json')
 }
+# The offline scenario intentionally observes a nonzero native installer exit.
+# Successful assertions must not leak that expected code into GitHub's wrapper.
+if($passed){exit 0}

@@ -38,7 +38,7 @@ tools retain their own release license/provenance in their managed generations.
 ## Verification Scope
 
 Local Inno Setup 7.1.1 syntax compilation passed. No installer was executed on
-the host. CI explicitly selects Inno Setup 6.5.4 and executes installers only on
+the host. CI explicitly selects Inno Setup 6.7.1 and executes installers only on
 disposable GitHub-hosted Windows VMs. Hosted results for the exact commit remain
 required before delivery.
 
@@ -73,6 +73,23 @@ execution is covered separately by the existing media field harness.
 
 Interactive Retry/Skip/Cancel clicks and physical setup accessibility are not
 claimed by headless silent installer jobs.
+
+### Compiler Compatibility Regression
+
+The first hosted run exposed a real upgrade failure: a published 0.7.0 baseline
+contained an Inno 6.7.1 uninstaller, while a 6.5.4 candidate overwrote its uninstall
+data but retained the newer uninstaller executable. Uninstall then rejected the
+older compiled script record. CI now builds with 6.7.1, matching the verified
+baseline, and refuses a different compiler version before building. The uninstall
+assertions remain required; uninstall-log append is not used because it would
+restore the historical unsafe deletion records.
+
+The same run's offline-failure scenario passed every preservation/network
+assertion but leaked the expected native installer exit 7 into its CI wrapper.
+The harness now returns zero only after all assertions and evidence writing
+succeed; exceptions still fail. A bounded local PowerShell regression reproduced
+the prior exit 7 and the corrected wrapper exit 0. The failed hosted evidence is
+retained, and a fresh passing exact-head run is required.
 
 ## Implementation Sources
 

@@ -67,7 +67,7 @@ pub fn locate_ytdlp(settings: &Settings, exe_dir: Option<&std::path::Path>) -> O
             });
         }
     }
-    let managed = Settings::managed_bin_dir().join(file);
+    let managed = crate::tools::managed_ytdlp_path();
     if managed.is_file() {
         return Some(YtDlpBinary {
             path: managed,
@@ -111,7 +111,7 @@ pub fn ffmpeg_available(settings: &Settings, exe_dir: Option<&std::path::Path>) 
             return true;
         }
     }
-    if Settings::managed_bin_dir().join(file).is_file() {
+    if crate::tools::managed_ffmpeg_path().is_file() {
         return true;
     }
     find_on_path(file).is_some()
@@ -342,11 +342,7 @@ pub fn build_download_args_full(
         args.push("--ffmpeg-location".into());
         args.push(settings.ffmpeg_path.to_string_lossy().to_string());
     } else {
-        let managed = Settings::managed_bin_dir().join(if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        });
+        let managed = crate::tools::managed_ffmpeg_path();
         if managed.is_file() {
             args.push("--ffmpeg-location".into());
             args.push(managed.to_string_lossy().to_string());

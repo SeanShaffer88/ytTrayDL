@@ -46,7 +46,9 @@ function Run-Installer([string]$Path, [string[]]$Arguments, [string]$Phase) {
 function Install([string]$Path, [string]$Phase, [string]$Tasks='desktopicon,startup') {
     # OwnedProcess accepts argv, not a shell command line; Command supplies the
     # Windows quoting. Embedded quote characters become part of the log name.
-    Run-Installer $Path @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/TASKS=' + $Tasks), ('/LOG=' + (Join-Path $EvidenceRoot "$Phase.log"))) $Phase
+    # These historical lifecycle scenarios are intentionally offline. Dedicated
+    # provisioning jobs exercise the candidate's required-download default.
+    Run-Installer $Path @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/TOOLSDOWNLOAD=skip',('/TASKS=' + $Tasks), ('/LOG=' + (Join-Path $EvidenceRoot "$Phase.log"))) $Phase
 }
 function Hash-Data {
     $result = @{}
@@ -122,6 +124,7 @@ try {
     Assert (Test-Path $foreign) 'candidate installation preserved preexisting foreign media'
     Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'candidate installation preserved foreign media hash'
     Assert ((Get-FileHash $exe -Algorithm SHA256).Hash -eq (Get-FileHash $CandidateExe -Algorithm SHA256).Hash) 'installed executable matches candidate artifact'
+    Assert ((Get-FileHash -LiteralPath (Join-Path $install 'THIRD-PARTY-NOTICES.txt')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '../THIRD-PARTY-NOTICES.txt')).Hash) 'installer ships exact dependency notices'
     Assert ((Get-Item $exe).VersionInfo.ProductVersion.Trim() -eq '0.8.0') 'candidate executable product version'
     $registration = Get-ItemProperty $key
     Assert ($registration.DisplayVersion -eq '0.8.0') 'same AppId registers candidate version'
@@ -137,7 +140,7 @@ try {
     Assert ((Get-FileHash $siblingShortcut).Hash -eq $siblingShortcutHash) 'candidate preserved unrelated sibling shortcut'
     Assert ((Get-ItemProperty -LiteralPath $runKey -Name $siblingRunName).$siblingRunName -eq 'field-071-unrelated-sentinel') 'candidate preserved unrelated startup value'
     Run-Installer (Join-Path $install 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + (Join-Path $EvidenceRoot 'uninstall.log'))) 'uninstall'
-    foreach ($file in @('yttraydl.exe','README.md','LICENSE')) { Assert (!(Test-Path (Join-Path $install $file))) "uninstall removed owned file $file" }
+    foreach ($file in @('yttraydl.exe','README.md','LICENSE','THIRD-PARTY-NOTICES.txt')) { Assert (!(Test-Path (Join-Path $install $file))) "uninstall removed owned file $file" }
     Assert (!(Test-Path $key)) 'uninstall removed application registration'
     foreach ($shortcut in $shortcuts) { Assert (!(Test-Path $shortcut)) 'uninstall removed owned shortcut' }
     Assert ($null -eq (Get-ItemProperty $runKey -Name ytTrayDL -ErrorAction SilentlyContinue)) 'uninstall removed owned startup value'

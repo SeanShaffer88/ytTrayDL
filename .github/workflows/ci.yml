@@ -60,13 +60,42 @@ jobs:
         run: cargo test --locked
       - name: Release build
         run: cargo build --release --locked --bin yttraydl
+      - name: Stage portable payload with dependency notices
+        shell: pwsh
+        run: |
+          $null = New-Item -ItemType Directory -Path windows-payload
+          Copy-Item target/release/yttraydl.exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt -Destination windows-payload
+          Set-Content -LiteralPath windows-payload/portable.txt -Value '' -Encoding utf8NoBOM
       - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
           name: yttraydl-windows
-          path: target/release/yttraydl.exe
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress --yes
+          path: windows-payload/*
+      - name: Install Inno Setup 6.7.1
+        run: choco install innosetup --version=6.7.1 --no-progress --yes
+      - name: Verify actual Inno compiler engine before packaging
+        shell: pwsh
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'inno-version-preflight'
+          $null = New-Item -ItemType Directory -Path $probeRoot
+          $probe = Join-Path $probeRoot 'version.iss'
+          @'
+          [Setup]
+          AppName=Compiler Version Probe
+          AppVersion=1
+          DefaultDirName={localappdata}\ytTrayDL-Compiler-Probe
+          PrivilegesRequired=lowest
+          CreateAppDir=no
+          Uninstallable=no
+          '@ | Set-Content -LiteralPath $probe -Encoding utf8NoBOM
+          # Inno 6 /? exits 1 without the engine version. Compile an inert
+          # disposable probe, never execute it, then gate the real package.
+          $banner = @(& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/O$probeRoot" '/Fversion-probe' $probe)
+          $code = $LASTEXITCODE
+          $banner | Write-Output
+          if ($code -ne 0 -or ($banner -join "`n") -notmatch 'Compiler engine version: Inno Setup 6\.7\.1(?:\s|$)') {
+            throw "Expected actual Inno engine 6.7.1; preflight exit $code"
+          }
       - name: Build installer
         shell: pwsh
         run: |
@@ -141,4 +170,39 @@ jobs:
         with:
           name: installer-${{ matrix.scenario }}-evidence
           path: ${{ runner.temp }}/installer-evidence
+          if-no-files-found: error
+
+  windows-installer-tools:
+    needs: windows-build
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [latest, upgrade-latest, offline-failure, skip]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: yttraydl-setup
+          path: candidate-setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: yttraydl-windows
+          path: candidate-exe
+      - name: Build actual owned process runner
+        shell: pwsh
+        run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/tools-state-probe"
+      - name: Actual tool provisioning, offline failure, or explicit skip
+        shell: pwsh
+        run: |
+          $candidate = @(Get-ChildItem candidate-setup -Filter '*.exe' -File)
+          if ($candidate.Count -ne 1) { throw 'Expected exactly one candidate installer' }
+          ./tools/Invoke-InstallerProvisioning.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/tools-state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-tools-evidence" -TrustIsolatedRunner
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-tools-${{ matrix.scenario }}-evidence
+          path: ${{ runner.temp }}/installer-tools-evidence
           if-no-files-found: error

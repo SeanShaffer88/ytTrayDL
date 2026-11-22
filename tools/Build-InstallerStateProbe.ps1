@@ -24,3 +24,7 @@ foreach ($path in @($records | Where-Object reason -eq 'build-script-executed' |
 }
 & rustc --edition=2021 (Join-Path $PSScriptRoot 'InstallerStateProbe.rs') --extern "yttraydl=$($libraries[0])" @linkArguments -o (Join-Path $Destination 'InstallerStateProbe.exe')
 if ($LASTEXITCODE -ne 0) { throw "State probe compile failed: $LASTEXITCODE" }
+& rustc --edition=2021 --test (Join-Path $PSScriptRoot 'InstallerStateProbe.rs') --extern "yttraydl=$($libraries[0])" @linkArguments -o (Join-Path $Destination 'InstallerStateProbeTests.exe')
+if ($LASTEXITCODE -ne 0) { throw "State probe tests compile failed: $LASTEXITCODE" }
+& (Join-Path $Destination 'InstallerStateProbeTests.exe')
+if ($LASTEXITCODE -ne 0) { throw "State probe deadline tests failed: $LASTEXITCODE" }

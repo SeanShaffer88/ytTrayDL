@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Installer Tools
+
+- Offer verified latest stable yt-dlp, ffmpeg, and ffprobe downloads during per-user setup, with an explicit offline option.
+- Reuse the application's transactional managed-tool provider before installing application files; retain settings and prior tool generations on failure.
+- Add unattended required/skip download modes and independent hosted install, upgrade, offline-failure, and uninstall preservation checks.
+
 ## Unreleased — Audit Fixes
 
 - Preserve explicit clipboard reads after listener notifications and retry failed notification reads.

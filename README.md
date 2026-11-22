@@ -154,6 +154,13 @@ Two ways to get it from the
   optional desktop shortcut and start-with-Windows, and a
   standard uninstaller. Your settings/history in
   `%APPDATA%\ytTrayDL` are kept on uninstall.
+  The **Download Tools** page selects **Download Latest Tools** by default:
+  Setup fetches the latest stable official yt-dlp and ffmpeg essentials builds,
+  verifies their release hashes, and prepares ffprobe too. About 150 MB is
+  downloaded; the tools are downloaded instead of bundled to keep Setup small
+  and resolve current versions at installation time.
+  Choose **Skip Downloads — Install Offline** to avoid all tool-download
+  traffic and automatic application launch; existing tools remain available.
 - **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip`:
   unzip anywhere and run `yttraydl.exe`.
   Nothing is installed.
@@ -167,6 +174,22 @@ Then:
 Optional: enable **Start with Windows** in Settings (per-user, no admin
 needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button
 (or drop `ffmpeg.exe` next to `yttraydl.exe` / on PATH yourself).
+
+For unattended Setup, downloads are required unless `/TOOLSDOWNLOAD=skip` is
+explicitly supplied. A required download or verification failure returns a
+nonzero installer exit before application files are installed. Interactive
+failures offer **Retry**, **Skip Tools**, and **Cancel Setup**. The progress
+indicator describes the overall operation; it does not invent a percentage.
+During a download Setup waits for the bounded helper to finish before it can
+cancel. Settings, history, existing managed generations and user media survive
+failure and uninstall; a successful tool update does not roll back if a later
+application installation step fails.
+
+The same provider is available without the GUI:
+`yttraydl.exe --provision-tools all --report C:\\ExistingFolder\\new-report.json`.
+Selection may be `all`, `yt-dlp`, or `ffmpeg`; the report path must be new and
+its parent must exist. This mode does not start clipboard monitoring or a
+second UI instance. See [installer tool verification](docs/INSTALLER-TOOLS.md).
 
 ## Configuration tour
 

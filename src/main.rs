@@ -6,13 +6,16 @@ mod gui;
 use yttraydl::platform;
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = yttraydl::tools::run_cli(&args) {
+        std::process::exit(code);
+    }
     // No console in a tray app: panics go to the local diagnostic
     // log so a silent death is always explainable after the fact.
     std::panic::set_hook(Box::new(|info| {
         yttraydl::diag_log(&format!("PANIC: {info}"));
     }));
 
-    let args: Vec<String> = std::env::args().collect();
     let show = platform::launched_with_show_flag(&args);
     // `--background` is how Start-with-Windows launches the app:
     // straight to the tray, no window. A manual launch (double-click,

@@ -61,9 +61,13 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "startup"; Description: "Start ytTrayDL when Windows starts (tray, no window)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
+; Extract the exact candidate before installation. It shares the application's
+; canonical provisioner but is never copied as a second installed executable.
+Source: "{#ExeSourceDir}\yttraydl.exe"; DestName: "tool-provisioner.exe"; Flags: dontcopy
 Source: "{#ExeSourceDir}\yttraydl.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\ytTrayDL"; Filename: "{app}\{#AppExe}"; Comment: "Clipboard video downloader (yt-dlp front-end)"
@@ -78,7 +82,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "ytTrayDL"; Flags: dontcreatekey uninsdeletevalue
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch ytTrayDL"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "Launch ytTrayDL"; Flags: nowait postinstall skipifsilent; Check: CanLaunchApplication
 
 ; Inno removes only its tracked files. Preserve user downloads and other
 ; unowned content under {app}; never recursively delete the application folder.
@@ -86,3 +90,131 @@ Filename: "{app}\{#AppExe}"; Description: "Launch ytTrayDL"; Flags: nowait posti
 [UninstallDelete]
 ; Exact legacy optional shortcut only; never delete a directory or sibling.
 Type: files; Name: "{autodesktop}\ytTrayDL.lnk"
+
+[Code]
+var
+  ToolsPage: TInputOptionWizardPage;
+  ToolsProgress: TOutputMarqueeProgressWizardPage;
+  ToolsProvisioned: Boolean;
+  ProvisionAttempt: Integer;
+  CancelToolsSetup: Boolean;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  if CancelToolsSetup then begin
+    Cancel := True;
+    Confirm := False;
+  end;
+end;
+
+function ToolsDownloadMode: String;
+begin
+  Result := Lowercase(ExpandConstant('{param:TOOLSDOWNLOAD|required}'));
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := (ToolsDownloadMode = 'required') or (ToolsDownloadMode = 'skip');
+  if not Result then
+    Log('Invalid /TOOLSDOWNLOAD mode; expected required or skip.');
+end;
+
+procedure InitializeWizard;
+begin
+  ToolsPage := CreateInputOptionPage(wpSelectTasks, 'Download Tools',
+    'Choose how to prepare yt-dlp and ffmpeg.',
+    'yt-dlp downloads media. ffmpeg merges and converts it.' + #13#10 +
+    'Setup can fetch the latest stable tools from official sources (about 150 MB).' + #13#10 +
+    'Your settings, history, existing tools, and downloaded media are preserved.',
+    True, False);
+  ToolsPage.Add('Download Latest Tools (Recommended)');
+  ToolsPage.Add('Skip Downloads - Install Offline (Do Not Launch Automatically)');
+  ToolsPage.SelectedValueIndex := 0;
+  if ToolsDownloadMode = 'skip' then
+    ToolsPage.SelectedValueIndex := 1;
+  ToolsProgress := CreateOutputMarqueeProgressPage('Download Tools',
+    'Downloading and verifying latest tools.');
+end;
+
+function CanLaunchApplication: Boolean;
+begin
+  { Offline installs never launch automatically, even if older tools exist. }
+  Result := ToolsProvisioned;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Helper, Report, Failure: String;
+  ReportText: AnsiString;
+  ResultCode, Choice: Integer;
+  Started: Boolean;
+begin
+  Result := '';
+  if ToolsProvisioned then
+    Exit;
+  if (ToolsDownloadMode = 'skip') or (ToolsPage.SelectedValueIndex = 1) then begin
+    Log('Media tool downloads explicitly skipped. Application auto-launch disabled.');
+    Exit;
+  end;
+
+  ExtractTemporaryFile('tool-provisioner.exe');
+  Helper := ExpandConstant('{tmp}\tool-provisioner.exe');
+  repeat
+    ProvisionAttempt := ProvisionAttempt + 1;
+    Report := ExpandConstant('{tmp}\tools-report-') + IntToStr(ProvisionAttempt) + '.json';
+    Failure := '';
+    Started := False;
+    ResultCode := -1;
+    if not WizardSilent then begin
+      ToolsProgress.SetText('Downloading and verifying latest tools...',
+        'Checking official releases, downloading, verifying, and installing.' + #13#10 +
+        'This bounded operation must finish before Setup can continue or cancel.');
+      ToolsProgress.Show;
+      ToolsProgress.Animate;
+    end;
+    try
+      Started := Exec(Helper, '--provision-tools all --report "' + Report + '"',
+        ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    finally
+      if not WizardSilent then
+        ToolsProgress.Hide;
+    end;
+    if Started and (ResultCode = 0) and FileExists(Report) then begin
+      ToolsProvisioned := True;
+      Log('Media tool provisioning succeeded; canonical helper reported success.');
+      Exit;
+    end;
+    if not Started then
+      Failure := 'The tool downloader could not start: ' + SysErrorMessage(ResultCode)
+    else
+      Failure := 'The latest tools could not be downloaded or verified (code ' + IntToStr(ResultCode) + ').';
+    Log(Failure);
+    if LoadStringFromFile(Report, ReportText) then begin
+      Failure := Failure + #13#10 + Copy(String(ReportText), 1, 2000);
+      Log('Tool provisioner details: ' + Copy(String(ReportText), 1, 2000));
+    end;
+    if WizardSilent then begin
+      { Returning an error from PrepareToInstall aborts silent setup before
+        files/registration changes. No message box is shown. }
+      Result := Failure + ' Use /TOOLSDOWNLOAD=skip for an offline installation.';
+      Exit;
+    end;
+    Choice := TaskDialogMsgBox('Tool Download Failed',
+      Failure + #13#10 + #13#10 + 'Existing tool copies and settings are preserved.' + #13#10 +
+      'Retry, install without downloading tools, or cancel Setup.',
+      mbError, MB_ABORTRETRYIGNORE, ['Retry', 'Skip Tools', 'Cancel Setup'], 0);
+    if Choice = IDIGNORE then begin
+      ToolsPage.SelectedValueIndex := 1;
+      Log('User chose Skip Tools after a failed download. Auto-launch disabled.');
+      Exit;
+    end;
+    if Choice <> IDRETRY then begin
+      CancelToolsSetup := True;
+      Result := 'Setup was cancelled before installation because tools were not prepared.';
+      { Queue closing until PrepareToInstall returns and Inno re-enables
+        cancellation. The CancelButtonClick flag prevents a second prompt. }
+      PostMessage(WizardForm.Handle, $0010, 0, 0);
+      Exit;
+    end;
+  until False;
+end;

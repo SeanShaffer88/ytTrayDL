@@ -1938,7 +1938,7 @@ impl App {
             )
         });
         let ffmpeg_ok = self.ffmpeg_ok;
-        let ffmpeg_managed = Settings::managed_bin_dir().join("ffmpeg.exe").is_file();
+        let ffmpeg_managed = yttraydl::tools::managed_ffmpeg_path().is_file();
         let fetching = self.ytdlp_fetch_rx.is_some();
         let fetching_ffmpeg = self.ffmpeg_fetch_rx.is_some();
         let autostart_now = platform::Platform::autostart_enabled();

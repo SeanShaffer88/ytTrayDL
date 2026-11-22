@@ -8,7 +8,7 @@
 ; portable build can keep using it.
 
 #ifndef AppVersion
-  #define AppVersion "0.8.1"
+  #define AppVersion "0.8.2"
 #endif
 ; CI builds x64 only and passes /DAppVersion (the define above is the local-build fallback).
 #ifndef ExeSourceDir

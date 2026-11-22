@@ -677,6 +677,29 @@ pub fn window_geometry(
     native_geometry(hwnd)
 }
 
+/// Called on opening Settings or a cached viewport-monitor change, never per frame.
+pub fn window_client_capacity(
+    kind: crate::window_geometry::WindowKind,
+) -> Option<([f32; 2], [f32; 2])> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
+    let hwnd = find_owned_window(kind.title())?;
+    let outer = native_geometry(hwnd)?;
+    let work = work_area(hwnd)?;
+    let mut client: windows_sys::Win32::Foundation::RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
+        return None;
+    }
+    let size = [client.right - client.left, client.bottom - client.top];
+    let available = crate::window_geometry::client_capacity(
+        [work[2] - work[0], work[3] - work[1]],
+        [outer.width, outer.height],
+        size,
+        outer.dpi,
+    )?;
+    let scale = outer.dpi as f32 / 96.0;
+    Some((available, [size[0] as f32 / scale, size[1] as f32 / scale]))
+}
+
 pub fn restore_window_geometry(
     kind: crate::window_geometry::WindowKind,
     value: crate::window_geometry::WindowGeometry,

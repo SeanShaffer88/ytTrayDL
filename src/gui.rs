@@ -10,6 +10,7 @@
 #[cfg(feature = "field-validation")]
 mod field_metrics;
 mod gui_windows;
+mod settings_layout;
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
@@ -264,20 +265,6 @@ pub fn section_heading(text: &str) -> egui::RichText {
         .strong()
         .color(TEXT_FAINT)
         .size(11.5)
-}
-
-/// A card with a section heading on top (0.5.0). Returns
-/// whatever the body closure returns.
-pub fn section_card<R>(
-    ui: &mut egui::Ui,
-    heading: &str,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    premium_card(ui, |ui| {
-        ui.label(section_heading(heading));
-        ui.add_space(6.0);
-        add_contents(ui)
-    })
 }
 
 /// A focus ring for custom-painted controls (0.6.0): an
@@ -635,141 +622,6 @@ pub fn icon_text_button(
         }
     }
     response
-}
-
-/// One segment of a segmented control (0.6.0). Returns the
-/// click response; painting matches the mockups: selected =
-/// red gradient + top light edge, unselected = dim text that
-/// brightens on hover.
-fn segment(ui: &mut egui::Ui, label: &str, selected: bool, size: egui::Vec2) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let radius = 9.0_f32.min(rect.height() / 2.0);
-        if selected {
-            paint_soft_glow(painter, rect, radius, ACCENT_DARK);
-            let (mut top, mut bottom) = (ACCENT_LIGHT, ACCENT_DEEP);
-            if response.is_pointer_button_down_on() {
-                top = lerp_color(top, egui::Color32::BLACK, 0.15);
-                bottom = lerp_color(bottom, egui::Color32::BLACK, 0.15);
-            }
-            paint_vertical_gradient(painter, rect, radius, top, bottom);
-            painter.line_segment(
-                [
-                    egui::pos2(rect.left() + radius, rect.top() + 0.5),
-                    egui::pos2(rect.right() - radius, rect.top() + 0.5),
-                ],
-                egui::Stroke::new(
-                    1.0_f32,
-                    egui::Color32::from_rgba_unmultiplied(0xFF, 0xB0, 0xB4, 110),
-                ),
-            );
-        } else if response.hovered() {
-            painter.rect_filled(rect, radius, CONTROL_BG_HOVER);
-        }
-        if response.has_focus() && !selected {
-            paint_focus_ring(painter, rect, radius);
-        }
-        let rich = egui::RichText::new(label)
-            .color(if selected {
-                egui::Color32::WHITE
-            } else {
-                TEXT_DIM
-            })
-            .size(12.5);
-        let rich = if selected { rich.strong() } else { rich };
-        let galley = egui::WidgetText::from(rich).into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            (rect.width() - 12.0).max(0.0),
-            egui::TextStyle::Button,
-        );
-        painter.galley(
-            rect.center() - galley.size() / 2.0,
-            galley,
-            if selected {
-                egui::Color32::WHITE
-            } else {
-                TEXT_DIM
-            },
-        );
-    }
-    response
-}
-
-/// The Settings tab bar (0.6.0): a recessed well track with
-/// four equal segments; the selected one is filled with the
-/// red gradient. Returns true when the tab changed.
-pub fn settings_tab_bar(ui: &mut egui::Ui, tab: &mut usize) -> bool {
-    let labels = ["General", "Downloads", "Domains & rules", "yt-dlp"];
-    let mut changed = false;
-    egui::Frame::NONE
-        .fill(WELL)
-        .stroke(egui::Stroke::new(1.0_f32, STROKE_DARK))
-        .corner_radius(12)
-        .inner_margin(egui::Margin::same(4))
-        .outer_margin(egui::Margin {
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: 8,
-        })
-        .show(ui, |ui| {
-            let share =
-                (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / labels.len() as f32;
-            ui.horizontal(|ui| {
-                for (i, name) in labels.iter().enumerate() {
-                    if segment(ui, name, *tab == i, egui::vec2(share, 30.0))
-                        .on_hover_text("Switch settings section")
-                        .clicked()
-                    {
-                        *tab = i;
-                        changed = true;
-                    }
-                }
-            });
-        });
-    changed
-}
-
-/// A two-or-more-way segmented choice on a recessed track
-/// (0.6.0) — the General tab's Default action, which the
-/// mockup draws as a small segmented control instead of the
-/// old radio pair. `tips` carries each option's tooltip, so
-/// nothing the radios explained is lost. Returns the new
-/// index when the user picks a different segment.
-pub fn segmented_choice(
-    ui: &mut egui::Ui,
-    labels: &[&str],
-    tips: &[&str],
-    current: usize,
-    width: f32,
-) -> Option<usize> {
-    let mut picked = None;
-    egui::Frame::NONE
-        .fill(WELL)
-        .stroke(egui::Stroke::new(1.0_f32, STROKE_DARK))
-        .corner_radius(9)
-        .inner_margin(egui::Margin::same(3))
-        .show(ui, |ui| {
-            ui.set_width(width);
-            let share = (ui.available_width()
-                - (labels.len() - 1) as f32 * ui.spacing().item_spacing.x)
-                / labels.len() as f32;
-            ui.horizontal(|ui| {
-                for (i, name) in labels.iter().enumerate() {
-                    let resp = segment(ui, name, current == i, egui::vec2(share, 22.0));
-                    let resp = match tips.get(i) {
-                        Some(tip) => resp.on_hover_text(*tip),
-                        None => resp,
-                    };
-                    if resp.clicked() && current != i {
-                        picked = Some(i);
-                    }
-                }
-            });
-        });
-    picked
 }
 
 /// A visible focus ring for text fields (0.6.0): the mockup's
@@ -1505,6 +1357,12 @@ pub struct App {
     /// The dialog's "remember my choice" checkbox state.
     pub close_remember: bool,
     settings_tab: usize,
+    settings_sections: [usize; 4],
+    settings_anchors: [usize; 4],
+    settings_collection_pages: [usize; 6],
+    settings_viewport_capacity: Option<[f32; 2]>,
+    settings_viewport_monitor: Option<(egui::Vec2, f32)>,
+    settings_viewport_refined: bool,
     pub exit_requested: bool,
 
     popup_queue: VecDeque<PopupRequest>,
@@ -1701,6 +1559,12 @@ impl App {
             confirm_close: false,
             close_remember: false,
             settings_tab: 0,
+            settings_sections: [0; 4],
+            settings_anchors: [0; 4],
+            settings_collection_pages: [0; 6],
+            settings_viewport_capacity: None,
+            settings_viewport_monitor: None,
+            settings_viewport_refined: false,
             exit_requested: false,
             popup_queue: VecDeque::new(),
             active_popup: None,

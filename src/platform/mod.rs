@@ -147,6 +147,22 @@ pub fn window_geometry(
     }
 }
 
+/// Available and current logical client sizes for an exact owned window.
+/// The GUI caches this on open/monitor changes; it is not a frame-time probe.
+pub fn window_client_capacity(
+    kind: crate::window_geometry::WindowKind,
+) -> Option<([f32; 2], [f32; 2])> {
+    #[cfg(windows)]
+    {
+        windows_impl::window_client_capacity(kind)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = kind;
+        None
+    }
+}
+
 /// Restore normal bounds without showing, activating, or raising the window.
 pub fn restore_window_geometry(
     kind: crate::window_geometry::WindowKind,

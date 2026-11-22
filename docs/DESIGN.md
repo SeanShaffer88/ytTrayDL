@@ -8,6 +8,7 @@
 | Windows build graph | Verified | Rust 1.100 format, host and explicit Windows Clippy, all-target check, optional field-harness Clippy, debug and release application builds passed with exit 0 |
 | Dependency advisory check | Partially verified | rustix 1.1.6 removes RUSTSEC-2026-0486; fresh known-advisory scan has zero vulnerability entries and six retained maintenance/optional-platform notices |
 | Native forwarding and hidden hotkey recovery | Partially verified | Owned native run passed four assertions: close-to-tray hidden root restored by WM_HOTKEY dispatch, second-launch URL popup, normal exit 0, exact URL received through actual platform two-process fixture. Physical hotkey input and exact popup UIA text remain unverified (provider returned no nodes) |
+| Refreshed real-media tools | Verified locally | Version-addressed, SHA256/size-pinned ffmpeg/ffprobe 9.1 plus unchanged yt-dlp 2026.10.26 passed actual acquisition/version probes and all nine loopback media scenarios; updated hosted CI still required |
 | Installer, external extractors, sign-in and mixed DPI | Unverified by this audit | Historical evidence remains scoped to its recorded candidate; no host installer or physical display/sign-in testing performed |
 
 See the [audit report](AUDIT-2026-11-21.md) for findings, commands and limits.

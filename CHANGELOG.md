@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — GUI Responsiveness Candidate
+
+- Remove measured GUI stalls from cross-thread window-title queries; cache validated owned window handles and capture active geometry once per frame.
+- Resolve tool/autostart status off-thread and reject stale snapshots instead of probing files and registry from status rendering.
+- Show shared tool-download stage, bytes/total, speed/ETA and per-operation Cancel in Main and Settings; clear disconnected workers and allow retry.
+- Keep the manual URL editor and progress/Cancel ahead of long warnings, elide tool paths with full-path Copy, and use supported Close text.
+- Preserve existing small synchronous settings saves and the native-event repaint fallback; no zero-idle-CPU claim is made.
+
 ## Unreleased — Installer Tools
 
 - Offer verified latest stable yt-dlp, ffmpeg, and ffprobe downloads during per-user setup, with an explicit offline option.

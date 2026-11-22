@@ -12,15 +12,41 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[derive(Default, Debug)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    parent: Option<Arc<CancellationState>>,
+}
 #[derive(Clone, Default, Debug)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken(Arc<CancellationState>);
 impl CancellationToken {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        let mut state = Some(self.0.as_ref());
+        while let Some(current) = state {
+            if current.cancelled.load(Ordering::Acquire) {
+                return true;
+            }
+            state = current.parent.as_deref();
+        }
+        false
     }
+    /// Parent shutdown cancels every child; child cancellation stays local.
+    pub fn child(&self) -> Self {
+        Self(Arc::new(CancellationState {
+            cancelled: AtomicBool::new(false),
+            parent: Some(self.0.clone()),
+        }))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    Capture,
+    Lines,
+    Raw,
 }
 #[derive(Clone, Debug)]
 pub struct ProcessSpec {
@@ -221,7 +247,7 @@ impl OwnedProcess {
         limits: ProcessLimits,
         token: &CancellationToken,
     ) -> Result<ProcessOutput, ProcessError> {
-        self.collect(limits, token, false, |_, _| {})
+        self.collect(limits, token, OutputMode::Capture, |_, _| Ok(()))
     }
     /// Streaming retains bounded tails without a lifetime output cap. A single
     /// unterminated line exceeding line_bytes still fails and stops the tree.
@@ -229,15 +255,30 @@ impl OwnedProcess {
         self,
         limits: ProcessLimits,
         token: &CancellationToken,
+        mut callback: F,
+    ) -> Result<ProcessOutput, ProcessError> {
+        self.collect(limits, token, OutputMode::Lines, |stream, bytes| {
+            callback(stream, bytes);
+            Ok(())
+        })
+    }
+    /// Raw stdout has no text/line interpretation. Both returned tails and the
+    /// reader queue remain bounded; the sink enforces its own lifetime byte cap.
+    /// Empty stdout chunks are idle clock ticks, not EOF. Sink errors terminate
+    /// and reap the owned tree before returning.
+    pub fn stream_raw<F: FnMut(OutputStream, &[u8]) -> io::Result<()>>(
+        self,
+        limits: ProcessLimits,
+        token: &CancellationToken,
         callback: F,
     ) -> Result<ProcessOutput, ProcessError> {
-        self.collect(limits, token, true, callback)
+        self.collect(limits, token, OutputMode::Raw, callback)
     }
-    fn collect<F: FnMut(OutputStream, &[u8])>(
+    fn collect<F: FnMut(OutputStream, &[u8]) -> io::Result<()>>(
         mut self,
         limits: ProcessLimits,
         token: &CancellationToken,
-        streaming: bool,
+        mode: OutputMode,
         mut callback: F,
     ) -> Result<ProcessOutput, ProcessError> {
         let (tx, rx) = mpsc::sync_channel(16);
@@ -289,33 +330,28 @@ impl OwnedProcess {
                     } else {
                         limits.stderr_bytes
                     };
-                    for b in &chunk {
-                        if *b == b'\n' || *b == b'\r' {
-                            lines[index] = 0;
-                        } else {
-                            lines[index] = lines[index].saturating_add(1);
-                        }
-                        if lines[index] > limits.line_bytes && failure.is_none() {
-                            failure = Some(ProcessError::OutputLimit { stream });
+                    if mode != OutputMode::Raw || stream != OutputStream::Stdout {
+                        for b in &chunk {
+                            if *b == b'\n' || *b == b'\r' {
+                                lines[index] = 0;
+                            } else {
+                                lines[index] = lines[index].saturating_add(1);
+                            }
+                            if lines[index] > limits.line_bytes && failure.is_none() {
+                                failure = Some(ProcessError::OutputLimit { stream });
+                            }
                         }
                     }
-                    if !streaming
+                    if mode == OutputMode::Capture
                         && buffers[index].len().saturating_add(chunk.len()) > cap
                         && failure.is_none()
                     {
                         failure = Some(ProcessError::OutputLimit { stream });
                     }
-                    if failure.is_none()
-                        && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            callback(stream, &chunk)
-                        }))
-                        .is_err()
-                    {
-                        failure = Some(ProcessError::Io(io::Error::other(
-                            "output callback panicked",
-                        )));
+                    if failure.is_none() {
+                        failure = forward_output(&mut callback, stream, &chunk);
                     }
-                    if streaming {
+                    if mode != OutputMode::Capture {
                         if chunk.len() >= cap {
                             buffers[index].clear();
                             buffers[index].extend_from_slice(&chunk[chunk.len() - cap..]);
@@ -342,7 +378,11 @@ impl OwnedProcess {
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if mode == OutputMode::Raw && failure.is_none() {
+                        failure = forward_output(&mut callback, OutputStream::Stdout, &[]);
+                    }
+                }
             }
             if status.is_none() {
                 match self.try_wait() {
@@ -481,6 +521,20 @@ fn spawn_reader<R: ProcessPipe + Send + 'static>(
         let _ = tx.send(Message::Done(result));
     })
 }
+fn forward_output<F: FnMut(OutputStream, &[u8]) -> io::Result<()>>(
+    callback: &mut F,
+    stream: OutputStream,
+    bytes: &[u8],
+) -> Option<ProcessError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(stream, bytes))) {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(ProcessError::Io(error)),
+        Err(_) => Some(ProcessError::Io(io::Error::other(
+            "output callback panicked",
+        ))),
+    }
+}
+
 pub fn run_capture(
     spec: &ProcessSpec,
     limits: ProcessLimits,

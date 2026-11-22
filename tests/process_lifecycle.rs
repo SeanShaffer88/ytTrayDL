@@ -14,6 +14,68 @@ fn cancellation_before_spawn() {
     ));
 }
 
+#[test]
+fn child_cancellation_is_local_and_parent_shutdown_reaches_descendants() {
+    let parent = CancellationToken::default();
+    let first = parent.child();
+    let second = parent.child();
+    let nested = second.child();
+    first.cancel();
+    assert!(first.is_cancelled());
+    assert!(!parent.is_cancelled());
+    assert!(!second.is_cancelled());
+    assert!(!nested.is_cancelled());
+    parent.cancel();
+    assert!(second.is_cancelled());
+    assert!(nested.is_cancelled());
+}
+
+#[test]
+fn raw_binary_stream_bypasses_text_line_cap_and_bounds_retained_memory() {
+    use yttraydl::process::{OutputStream, OwnedProcess};
+    let mut count = 0usize;
+    let output = OwnedProcess::spawn(&fixture("binary"))
+        .unwrap()
+        .stream_raw(
+            ProcessLimits {
+                stdout_bytes: 0,
+                stderr_bytes: 32,
+                line_bytes: 16,
+                ..Default::default()
+            },
+            &CancellationToken::default(),
+            |stream, bytes| {
+                if stream == OutputStream::Stdout {
+                    assert!(bytes.iter().all(|byte| *byte == 0xa5));
+                    count += bytes.len();
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(count, 128 * 8192);
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.len() <= 32);
+}
+
+#[test]
+fn raw_sink_error_terminates_owned_process_without_waiting_for_output_cap() {
+    use yttraydl::process::{OwnedProcess, ProcessError};
+    let start = std::time::Instant::now();
+    let result = OwnedProcess::spawn(&fixture("flood")).unwrap().stream_raw(
+        ProcessLimits {
+            stdout_bytes: 0,
+            stderr_bytes: 32,
+            line_bytes: 16 * 1024,
+            ..Default::default()
+        },
+        &CancellationToken::default(),
+        |_, _| Err(std::io::Error::other("injected file sink failure")),
+    );
+    assert!(matches!(result, Err(ProcessError::Io(_))));
+    assert!(start.elapsed() < std::time::Duration::from_secs(3));
+}
+
 fn fixture(mode: &str) -> ProcessSpec {
     ProcessSpec::new(env!("CARGO_BIN_EXE_process_fixture")).arg(mode)
 }

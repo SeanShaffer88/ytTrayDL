@@ -12,6 +12,7 @@ use super::{Platform, PlatformEvent, PlatformSetup};
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
 
@@ -27,7 +28,7 @@ use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, GetCurrentProcessId, OpenEventW, OpenProcess,
+    CreateEventW, CreateMutexW, GetCurrentProcessId, GetCurrentThreadId, OpenEventW, OpenProcess,
     QueryFullProcessImageNameW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE, INFINITE,
     PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -36,12 +37,12 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, FindWindowExW, GetCursorPos,
-    GetMessageW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassW, SendMessageTimeoutW, SetForegroundWindow,
-    ShowWindow, TranslateMessage, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG, SMTO_ABORTIFHUNG,
-    SW_HIDE, SW_SHOW, WM_CLIPBOARDUPDATE, WM_COPYDATA, WM_DESTROY, WM_HOTKEY, WNDCLASSW,
-    WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumThreadWindows, FindWindowExW,
+    GetCursorPos, GetMessageW, GetPropW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
+    IsWindowVisible, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
+    SendMessageTimeoutW, SetForegroundWindow, SetPropW, ShowWindow, TranslateMessage, HWND_MESSAGE,
+    MB_ICONERROR, MB_OK, MSG, SMTO_ABORTIFHUNG, SW_HIDE, SW_SHOW, WM_CLIPBOARDUPDATE, WM_COPYDATA,
+    WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
 };
 
 const CF_UNICODETEXT: u32 = 13;
@@ -54,6 +55,12 @@ const MANUAL_URL_MESSAGE: usize = 0x59545501;
 
 static SENDER: OnceLock<Sender<PlatformEvent>> = OnceLock::new();
 static LISTENER_HWND: OnceLock<isize> = OnceLock::new();
+static MAIN_GUI_HWND: AtomicIsize = AtomicIsize::new(0);
+static MAIN_GUI_THREAD: AtomicU32 = AtomicU32::new(0);
+const WINDOW_ROLE_PROPERTY: &str = "ytTrayDL.PersistentWindowRole.v1";
+thread_local! {
+    static OWNED_WINDOWS: std::cell::RefCell<std::collections::HashMap<String, isize>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
 
 pub struct Inner {
     mutex: HANDLE,
@@ -482,12 +489,55 @@ pub fn autostart_enabled() -> bool {
 /// that would process a queued "show" request.
 /// Locate this process's main window (title "ytTrayDL").
 fn find_main_window() -> Option<HWND> {
-    find_owned_window("ytTrayDL")
+    let hwnd = MAIN_GUI_HWND.load(Ordering::Acquire) as HWND;
+    valid_cached_window(hwnd, MAIN_GUI_THREAD.load(Ordering::Acquire), 1).then_some(hwnd)
+}
+
+/// Called on the GUI thread after the native root exists, even in tray mode.
+pub fn remember_main_window() -> bool {
+    find_owned_window("ytTrayDL").is_some()
+}
+
+fn persistent_role(title: &str) -> usize {
+    match title {
+        "ytTrayDL" => 1,
+        "ytTrayDL — Settings" => 2,
+        "ytTrayDL — Downloads" => 3,
+        "About ytTrayDL" => 4,
+        _ => 0,
+    }
+}
+
+fn valid_cached_window(hwnd: HWND, thread: u32, role: usize) -> bool {
+    if hwnd.is_null() || thread == 0 {
+        return false;
+    }
+    unsafe {
+        let mut pid = 0;
+        IsWindow(hwnd) != 0
+            && GetWindowThreadProcessId(hwnd, &mut pid) == thread
+            && pid == GetCurrentProcessId()
+            && GetPropW(hwnd, wide(WINDOW_ROLE_PROPERTY).as_ptr()) as usize == role
+    }
 }
 
 fn find_owned_window(title: &str) -> Option<HWND> {
+    let thread = unsafe { GetCurrentThreadId() };
+    let role = persistent_role(title);
+    if role != 0 {
+        // Release cache borrows before any Win32 call, which can re-enter.
+        let cached = OWNED_WINDOWS.with(|windows| windows.borrow().get(title).copied());
+        if let Some(cached) = cached {
+            let hwnd = cached as HWND;
+            if valid_cached_window(hwnd, thread, role) {
+                return Some(hwnd);
+            }
+            OWNED_WINDOWS.with(|windows| windows.borrow_mut().remove(title));
+        }
+    }
     struct Search {
         pid: u32,
+        thread: u32,
         found: HWND,
         title: String,
     }
@@ -495,8 +545,8 @@ fn find_owned_window(title: &str) -> Option<HWND> {
         unsafe {
             let search = &mut *(lparam as *mut Search);
             let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, &mut pid);
-            if pid != search.pid {
+            let thread = GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid != search.pid || thread != search.thread {
                 return 1; // keep enumerating
             }
             let mut buf = [0u16; 64];
@@ -511,13 +561,31 @@ fn find_owned_window(title: &str) -> Option<HWND> {
     unsafe {
         let mut search = Search {
             pid: GetCurrentProcessId(),
+            thread,
             found: std::ptr::null_mut(),
             title: title.to_owned(),
         };
-        let _ = EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
+        let _ = EnumThreadWindows(thread, Some(visit), &mut search as *mut Search as LPARAM);
         if search.found.is_null() {
             None
         } else {
+            if role != 0
+                && SetPropW(
+                    search.found,
+                    wide(WINDOW_ROLE_PROPERTY).as_ptr(),
+                    role as HANDLE,
+                ) != 0
+            {
+                OWNED_WINDOWS.with(|windows| {
+                    windows
+                        .borrow_mut()
+                        .insert(title.to_owned(), search.found as isize)
+                });
+                if role == 1 {
+                    MAIN_GUI_THREAD.store(thread, Ordering::Release);
+                    MAIN_GUI_HWND.store(search.found as isize, Ordering::Release);
+                }
+            }
             Some(search.found)
         }
     }
@@ -1096,6 +1164,118 @@ pub(crate) fn read_owned_pipe<R: std::io::Read + std::os::windows::io::AsRawHand
             return pipe.read(&mut buffer[..count]);
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod geometry_cache_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, UnregisterClassW, WM_CLOSE, WM_GETTEXT,
+    };
+    static SLOW_TEXT_CALLS: AtomicU32 = AtomicU32::new(0);
+    unsafe extern "system" fn slow_window(
+        hwnd: HWND,
+        message: u32,
+        w: WPARAM,
+        l: LPARAM,
+    ) -> LRESULT {
+        if message == WM_GETTEXT {
+            SLOW_TEXT_CALLS.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        if message == WM_DESTROY {
+            PostQuitMessage(0);
+            return 0;
+        }
+        DefWindowProcW(hwnd, message, w, l)
+    }
+    unsafe fn create(
+        class: &[u16],
+        title: &str,
+        procedure: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+    ) -> HWND {
+        let instance = GetModuleHandleW(std::ptr::null());
+        let definition = WNDCLASSW {
+            lpfnWndProc: Some(procedure),
+            hInstance: instance,
+            lpszClassName: class.as_ptr(),
+            ..std::mem::zeroed()
+        };
+        RegisterClassW(&definition);
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            wide(title).as_ptr(),
+            WS_OVERLAPPED,
+            0,
+            0,
+            320,
+            240,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        )
+    }
+    #[test]
+    fn geometry_cache_excludes_other_thread_text_and_invalidates_destroyed_windows() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let foreign = std::thread::spawn(move || unsafe {
+            let class = wide(&format!("ytTrayDL-slow-field-{}", GetCurrentThreadId()));
+            let window = create(&class, "Owned other-thread sentinel", slow_window);
+            tx.send(window as isize).unwrap();
+            let mut message: MSG = std::mem::zeroed();
+            while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            UnregisterClassW(class.as_ptr(), GetModuleHandleW(std::ptr::null()));
+            let _ = done_tx.send(());
+        });
+        let other = rx.recv_timeout(Duration::from_secs(2)).unwrap() as HWND;
+        assert!(!other.is_null());
+        let mut text = [0u16; 64];
+        let control = Instant::now();
+        unsafe {
+            GetWindowTextW(other, text.as_mut_ptr(), text.len() as i32);
+        }
+        let control_duration = control.elapsed();
+        SLOW_TEXT_CALLS.store(0, Ordering::Relaxed);
+        let lookup = Instant::now();
+        let missing = find_owned_window("Absent owned field window");
+        let lookup_duration = lookup.elapsed();
+        let crossed = SLOW_TEXT_CALLS.load(Ordering::Relaxed);
+        unsafe {
+            PostMessageW(other, WM_CLOSE, 0, 0);
+        }
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        foreign.join().unwrap();
+        assert!(
+            control_duration >= Duration::from_millis(140),
+            "owned stall negative control must be armed"
+        );
+        assert!(missing.is_none());
+        assert_eq!(crossed, 0, "geometry must not query another thread's text");
+        assert!(
+            lookup_duration < Duration::from_millis(100),
+            "geometry lookup entered the armed 150ms stall"
+        );
+        unsafe {
+            let class = wide(&format!("ytTrayDL-cache-field-{}", GetCurrentThreadId()));
+            let first = create(&class, "ytTrayDL", DefWindowProcW);
+            assert_eq!(find_owned_window("ytTrayDL"), Some(first));
+            assert_eq!(find_main_window(), Some(first));
+            DestroyWindow(first);
+            assert!(!valid_cached_window(first, GetCurrentThreadId(), 1));
+            let second = create(&class, "ytTrayDL", DefWindowProcW);
+            assert_eq!(find_owned_window("ytTrayDL"), Some(second));
+            assert_eq!(find_main_window(), Some(second));
+            DestroyWindow(second);
+            UnregisterClassW(class.as_ptr(), GetModuleHandleW(std::ptr::null()));
+        }
     }
 }
 

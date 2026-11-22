@@ -28,6 +28,8 @@ $shortcuts = @((Join-Path ([Environment]::GetFolderPath('Programs')) 'ytTrayDL.l
 $isUpgrade = $Scenario -ne 'clean'
 $baselineVersion = if ($Scenario -eq 'upgrade070-off') { '0.7.0' } else { '0.6.1' }
 $candidateTasks = if ($Scenario -like '*-off') { '' } else { 'desktopicon,startup' }
+$candidateVersion = (Select-String -LiteralPath (Join-Path $PSScriptRoot '../Cargo.toml') -Pattern '^version = "([^"]+)"$').Matches.Groups[1].Value
+if ([string]::IsNullOrWhiteSpace($candidateVersion)) { throw 'Candidate Cargo version is required.' }
 $foreign = Join-Path $install 'user-downloads/original-user-media.txt'
 $siblingShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'field-071-unrelated.lnk'
 $siblingRunName = 'field-071-unrelated'
@@ -125,9 +127,9 @@ try {
     Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'candidate installation preserved foreign media hash'
     Assert ((Get-FileHash $exe -Algorithm SHA256).Hash -eq (Get-FileHash $CandidateExe -Algorithm SHA256).Hash) 'installed executable matches candidate artifact'
     Assert ((Get-FileHash -LiteralPath (Join-Path $install 'THIRD-PARTY-NOTICES.txt')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '../THIRD-PARTY-NOTICES.txt')).Hash) 'installer ships exact dependency notices'
-    Assert ((Get-Item $exe).VersionInfo.ProductVersion.Trim() -eq '0.8.0') 'candidate executable product version'
+    Assert ((Get-Item $exe).VersionInfo.ProductVersion.Trim() -eq $candidateVersion) 'candidate executable product version'
     $registration = Get-ItemProperty $key
-    Assert ($registration.DisplayVersion -eq '0.8.0') 'same AppId registers candidate version'
+    Assert ($registration.DisplayVersion -eq $candidateVersion) 'same AppId registers candidate version'
     Assert ($registration.InstallLocation.TrimEnd('\') -eq $install.TrimEnd('\')) 'registration install path'
     Assert ((Get-ItemProperty $runKey).ytTrayDL -eq ('"' + $exe + '" --background')) 'owned startup command has exact quoted path and background argument'
     $shell = New-Object -ComObject WScript.Shell

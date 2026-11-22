@@ -11,7 +11,7 @@ use yttraydl::platform;
 use yttraydl::settings::{
     Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
-use yttraydl::window_geometry::TransientWindow;
+use yttraydl::window_geometry::{TransientWindow, WindowKind};
 use yttraydl::ytdlp::YtDlpSource;
 
 fn status_color(status: HistoryStatus) -> egui::Color32 {
@@ -543,7 +543,7 @@ impl App {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button("✕ Close")
+                    .button("Close")
                     .on_hover_text("Close this panel. ytTrayDL keeps running in the tray.")
                     .clicked()
                 {
@@ -583,11 +583,15 @@ impl App {
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
         content.set_clip_rect(content_rect.intersect(ui.clip_rect()));
-        egui::ScrollArea::vertical()
+        let mut body = egui::ScrollArea::vertical()
             .id_salt("control-panel-body")
             .auto_shrink([false, false])
-            .max_height(content_rect.height())
-            .show(&mut content, |ui| self.panel_body(ui));
+            .max_height(content_rect.height());
+        if self.scroll_to_tool_progress {
+            body = body.vertical_scroll_offset(0.0);
+            self.scroll_to_tool_progress = false;
+        }
+        body.show(&mut content, |ui| self.panel_body(ui));
         let mut footer = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(footer_rect.shrink2(egui::vec2(12.0, 8.0)))
@@ -597,6 +601,48 @@ impl App {
     }
 
     fn panel_body(&mut self, ui: &mut egui::Ui) {
+        // Manual URL entry.
+        ui.add_space(12.0);
+        ui.label(section_heading("Download a link"));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            // Reserve the button FIRST (0.5.1). The 0.5.0 budget
+            // (available − 112) ran the row past the panel's
+            // right edge in the field: egui's TextEdit outer
+            // width is its desired_width PLUS its frame margin
+            // (2×8px \u2014 vendored egui 0.33.3 TextEdit
+            // builder), which the budget never subtracted, and
+            // the button's min_size was treated as its exact
+            // width. Now the button has a fixed size and the
+            // field gets what remains after button + spacing +
+            // the field's own margin.
+            let btn_w = 108.0;
+            let field_w =
+                (ui.available_width() - btn_w - ui.spacing().item_spacing.x - 16.0).max(80.0);
+            let resp = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.manual_url)
+                        .hint_text("Paste a video URL…")
+                        .desired_width(field_w),
+                )
+                .on_hover_text("Type or paste a URL, then press Enter or Download");
+            // Accent focus ring + deep-red outer glow (0.6.0).
+            paint_focus_ring_for_field(ui, &resp);
+            let go = ui
+                .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
+                .on_hover_text("Open the download popup for this link")
+                .clicked();
+            if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                && !self.manual_url.trim().is_empty()
+            {
+                let url = self.manual_url.trim().to_string();
+                self.manual_url.clear();
+                self.handle_detected_url(&url, true);
+            }
+        });
+
+        self.tool_progress_ui(ui);
+
         // Failure banner (0.4.0): the latest final failure, with
         // one-click retry — failures used to be easy to miss.
         if let Some(notice) = self.failure_notice.clone() {
@@ -646,39 +692,25 @@ impl App {
         ui.add_space(10.0);
         ui.label(section_heading("Engine"));
         ui.add_space(4.0);
-        premium_well(ui, |ui| match &self.bin {
-            Some(bin) => {
-                let version = self.ytdlp_version.clone().unwrap_or_else(|| "…".into());
+        premium_well(ui, |ui| {
+            if !self.tool_status_ready {
                 ui.horizontal(|ui| {
-                    status_dot(ui, OK_GREEN);
-                    ui.label(
-                        egui::RichText::new(format!("yt-dlp {version}"))
-                            .color(TEXT)
-                            .size(13.5),
-                    )
-                    .on_hover_text(bin.path.display().to_string());
-                    let remaining = ui.available_width();
-                    if remaining > 40.0 {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(remaining, 20.0),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(source_label(&bin.source))
-                                            .color(TEXT_FAINT)
-                                            .size(11.5),
-                                    )
-                                    .truncate(),
-                                );
-                            },
-                        );
-                    }
+                    ui.spinner();
+                    ui.label("Checking installed tools…");
                 });
-                if self.ffmpeg_ok {
+                return;
+            }
+            match &self.bin {
+                Some(bin) => {
+                    let version = self.ytdlp_version.clone().unwrap_or_else(|| "…".into());
                     ui.horizontal(|ui| {
                         status_dot(ui, OK_GREEN);
-                        ui.label(egui::RichText::new("ffmpeg found").color(TEXT).size(13.5));
+                        ui.label(
+                            egui::RichText::new(format!("yt-dlp {version}"))
+                                .color(TEXT)
+                                .size(13.5),
+                        )
+                        .on_hover_text(bin.path.display().to_string());
                         let remaining = ui.available_width();
                         if remaining > 40.0 {
                             ui.allocate_ui_with_layout(
@@ -687,11 +719,9 @@ impl App {
                                 |ui| {
                                     ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(
-                                                "merging and MP3 conversion available",
-                                            )
-                                            .color(TEXT_FAINT)
-                                            .size(11.5),
+                                            egui::RichText::new(source_label(&bin.source))
+                                                .color(TEXT_FAINT)
+                                                .size(11.5),
                                         )
                                         .truncate(),
                                     );
@@ -699,12 +729,36 @@ impl App {
                             );
                         }
                     });
-                } else {
-                    ui.label(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail.").color(ACCENT));
-                    ui.horizontal(|ui| {
+                    if self.ffmpeg_ok {
+                        ui.horizontal(|ui| {
+                            status_dot(ui, OK_GREEN);
+                            ui.label(egui::RichText::new("ffmpeg found").color(TEXT).size(13.5));
+                            let remaining = ui.available_width();
+                            if remaining > 40.0 {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(remaining, 20.0),
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(
+                                                    "merging and MP3 conversion available",
+                                                )
+                                                .color(TEXT_FAINT)
+                                                .size(11.5),
+                                            )
+                                            .truncate(),
+                                        );
+                                    },
+                                );
+                            }
+                        });
+                    } else {
+                        ui.add(egui::Label::new(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail.").color(ACCENT)).wrap());
+                        ui.horizontal(|ui| {
                             let busy = self.ffmpeg_fetch_rx.is_some();
                             if ui
-                                .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install ffmpeg" }))
+                                .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "Install ffmpeg" }))
                                 .on_hover_text("Download the GyanD essentials build (about 110 MB) from gyan.dev into %APPDATA%\\ytTrayDL\\bin — the same folder as the managed yt-dlp")
                                 .clicked()
                             {
@@ -716,21 +770,21 @@ impl App {
                                     .color(TEXT_DIM),
                             );
                         });
+                    }
                 }
-            }
-            None => {
-                ui.label(
-                    egui::RichText::new(
-                        "yt-dlp is not installed yet — ytTrayDL can't download without it.",
-                    )
-                    .color(ACCENT)
-                    .strong(),
-                );
-                ui.label("One click installs the official standalone yt-dlp.exe from GitHub into ytTrayDL's own folder. Nothing else on your PC is changed.");
-                ui.horizontal_wrapped(|ui| {
+                None => {
+                    ui.label(
+                        egui::RichText::new(
+                            "yt-dlp is not installed yet — ytTrayDL can't download without it.",
+                        )
+                        .color(ACCENT)
+                        .strong(),
+                    );
+                    ui.label("One click installs the official standalone yt-dlp.exe from GitHub into ytTrayDL's own folder. Nothing else on your PC is changed.");
+                    ui.horizontal_wrapped(|ui| {
                         let busy = self.ytdlp_fetch_rx.is_some();
                         if ui
-                            .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "⬇ Install yt-dlp" }))
+                            .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "Install yt-dlp" }))
                             .on_hover_text("Download yt-dlp.exe from github.com/yt-dlp/yt-dlp releases into %APPDATA%\\ytTrayDL\\bin")
                             .clicked()
                         {
@@ -755,6 +809,7 @@ impl App {
                             let _ = platform::open_url("https://github.com/yt-dlp/yt-dlp/releases");
                         }
                     });
+                }
             }
         });
 
@@ -828,46 +883,6 @@ impl App {
                 if let Err(e) = platform::open_path(&folder) {
                     self.toast(format!("Could not open folder: {e}"), ToastKind::Error);
                 }
-            }
-        });
-
-        // Manual URL entry.
-        ui.add_space(12.0);
-        ui.label(section_heading("Download a link"));
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            // Reserve the button FIRST (0.5.1). The 0.5.0 budget
-            // (available − 112) ran the row past the panel's
-            // right edge in the field: egui's TextEdit outer
-            // width is its desired_width PLUS its frame margin
-            // (2×8px \u2014 vendored egui 0.33.3 TextEdit
-            // builder), which the budget never subtracted, and
-            // the button's min_size was treated as its exact
-            // width. Now the button has a fixed size and the
-            // field gets what remains after button + spacing +
-            // the field's own margin.
-            let btn_w = 108.0;
-            let field_w =
-                (ui.available_width() - btn_w - ui.spacing().item_spacing.x - 16.0).max(80.0);
-            let resp = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.manual_url)
-                        .hint_text("Paste a video URL…")
-                        .desired_width(field_w),
-                )
-                .on_hover_text("Type or paste a URL, then press Enter or Download");
-            // Accent focus ring + deep-red outer glow (0.6.0).
-            paint_focus_ring_for_field(ui, &resp);
-            let go = ui
-                .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
-                .on_hover_text("Open the download popup for this link")
-                .clicked();
-            if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
-                && !self.manual_url.trim().is_empty()
-            {
-                let url = self.manual_url.trim().to_string();
-                self.manual_url.clear();
-                self.handle_detected_url(&url, true);
             }
         });
 
@@ -1938,10 +1953,10 @@ impl App {
             )
         });
         let ffmpeg_ok = self.ffmpeg_ok;
-        let ffmpeg_managed = yttraydl::tools::managed_ffmpeg_path().is_file();
+        let ffmpeg_managed = self.ffmpeg_managed;
         let fetching = self.ytdlp_fetch_rx.is_some();
         let fetching_ffmpeg = self.ffmpeg_fetch_rx.is_some();
-        let autostart_now = platform::Platform::autostart_enabled();
+        let autostart_now = self.autostart_status;
 
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-settings"),
@@ -1962,7 +1977,7 @@ impl App {
                                 .color(TEXT),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("✕").on_hover_text("Close settings").clicked() {
+                            if ui.button("Close").on_hover_text("Close Settings").clicked() {
                                 close = true;
                             }
                             ui.label(
@@ -1979,6 +1994,7 @@ impl App {
                     // buttons; the save note moved up beside
                     // the title, as in the mockup.)
                     settings_tab_bar(ui, &mut tab);
+                    self.tool_progress_ui(ui);
                     egui::ScrollArea::vertical().show(ui, |ui| match tab {
                         0 => settings_general(ui, &mut settings, &mut outcome, autostart_now),
                         1 => settings_downloads(ui, &mut settings, &mut outcome),
@@ -2016,6 +2032,7 @@ impl App {
             },
         );
 
+        self.restore_new_window_geometry(WindowKind::Settings);
         self.settings = settings;
         self.rule_input_ignore = rule_ignore;
         self.rule_input_auto = rule_auto;
@@ -2047,6 +2064,7 @@ impl App {
             match platform::Platform::set_autostart(target) {
                 Ok(()) => {
                     self.settings.start_with_windows = target;
+                    self.autostart_status = target;
                     self.settings_dirty = true;
                 }
                 Err(e) => {
@@ -3073,6 +3091,30 @@ pub struct ToolsUi {
     pub current_version: Option<String>,
 }
 
+fn tool_path_row(ui: &mut egui::Ui, path: &str) {
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - 54.0 - ui.spacing().item_spacing.x).max(40.0);
+        ui.add_sized(
+            [width, 20.0],
+            egui::Label::new(
+                egui::RichText::new(path)
+                    .monospace()
+                    .small()
+                    .color(TEXT_DIM),
+            )
+            .truncate(),
+        )
+        .on_hover_text(path);
+        if ui
+            .small_button("Copy")
+            .on_hover_text("Copy full tool path")
+            .clicked()
+        {
+            ui.ctx().copy_text(path.to_owned());
+        }
+    });
+}
+
 fn settings_ytdlp(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -3086,12 +3128,7 @@ fn settings_ytdlp(
         match bin_info {
             Some((path, source, version)) => {
                 ui.label(format!("Version {version} — {source}"));
-                ui.label(
-                    egui::RichText::new(path.clone())
-                        .monospace()
-                        .small()
-                        .color(TEXT_DIM),
-                );
+                tool_path_row(ui, path);
             }
             None => {
                 ui.label(
@@ -3103,7 +3140,7 @@ fn settings_ytdlp(
             }
         }
         ui.horizontal(|ui| {
-        if ui.add_enabled(!fetching, egui::Button::new(if fetching { "Downloading…" } else if bin_info.is_some() { "Update yt-dlp (managed copy)" } else { "⬇ Install yt-dlp" }))
+        if ui.add_enabled(!fetching, egui::Button::new(if fetching { "Downloading…" } else if bin_info.is_some() { "Update yt-dlp (managed copy)" } else { "Install yt-dlp" }))
             .on_hover_text("Downloads the latest official yt-dlp.exe from GitHub into %APPDATA%\\ytTrayDL\\bin. If you use your own copy elsewhere, update that one yourself.")
             .clicked()
         {
@@ -3118,11 +3155,12 @@ fn settings_ytdlp(
     });
         if !s.ytdlp_path.as_os_str().is_empty() {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Your path: {}", s.ytdlp_path.display()))
-                        .small()
-                        .color(TEXT_DIM),
-                );
+                let full = s.ytdlp_path.display().to_string();
+                ui.add(egui::Label::new(
+                    egui::RichText::new("Custom path").small().color(TEXT_DIM),
+                ));
+                ui.add(egui::Label::new(egui::RichText::new(&full).small()).truncate())
+                    .on_hover_text(full);
                 if ui
                     .small_button("Clear")
                     .on_hover_text("Go back to automatic locating")
@@ -3199,7 +3237,7 @@ fn settings_ytdlp(
                 } else if tools.ffmpeg_managed {
                     "Update ffmpeg (managed copy)"
                 } else {
-                    "⬇ Install ffmpeg"
+                    "Install ffmpeg"
                 }),
             )
             .on_hover_text("Downloads the GyanD essentials build (about 110 MB) from gyan.dev into %APPDATA%\\ytTrayDL\\bin and unpacks ffmpeg.exe + ffprobe.exe there")
@@ -3423,7 +3461,7 @@ impl App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if bin_missing {
                         ui.label(egui::RichText::new("yt-dlp isn't installed — downloads will wait in the queue.").color(ACCENT));
-                        if ui.add_enabled(!fetching, egui::Button::new("⬇ Install yt-dlp")).clicked() {
+                        if ui.add_enabled(!fetching, egui::Button::new("Install yt-dlp")).clicked() {
                             install = true;
                         }
                         ui.separator();
@@ -3602,6 +3640,7 @@ impl App {
             },
         );
 
+        self.restore_new_window_geometry(WindowKind::Downloads);
         self.show_downloads = open;
         if !open {
             self.downloads_initial_size = None;
@@ -3797,6 +3836,7 @@ impl App {
                 });
             },
         );
+        self.restore_new_window_geometry(WindowKind::About);
         self.show_about = open && !close;
     }
 

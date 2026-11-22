@@ -8,9 +8,11 @@ downloads quietly in the background with your defaults while you keep working.
 
 ![ytTrayDL icon](assets/icon.png)
 
-The 0.8.0 candidate and its execution gates are tracked in the
-[verification notes](docs/RELEASE-0.8.0.md). Historical 0.7.1 field results are
-retained as baseline evidence; exact 0.8.0 qualification is required before release.
+The 0.8.1 responsiveness candidate fixes a measured GUI geometry stall and adds
+visible tool-download progress and cancellation. See the
+[responsiveness verification contract](docs/GUI-RESPONSIVENESS-0.8.1.md).
+Earlier [0.8.0 verification notes](docs/RELEASE-0.8.0.md) retain their historical
+scope; they do not qualify the new binary automatically.
 
 ## TL;DR
 
@@ -95,6 +97,9 @@ click once to show it, click again to hide it.
   folder. Same for ffmpeg: if it's missing, one click downloads the GyanD
   essentials build (the Windows build ffmpeg.org links to) and unpacks
   it next to yt-dlp. Best-quality merging and MP3 conversion need ffmpeg.
+- **Visible tool updates** — Main and Settings show the actual download stage,
+  bytes, total, speed and ETA when available. Cancel stops that operation and
+  preserves the previous managed tools; a failed worker offers retry.
 - **Closing the window is your choice** — the X button asks: Exit,
   minimize to tray, minimize to taskbar, or hide entirely (keeps
   running in the background; **Ctrl+Alt+G**, relaunching, or `--show`

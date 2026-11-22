@@ -114,6 +114,7 @@ pub mod platform;
 pub mod rules;
 pub mod saved;
 pub mod settings;
+pub mod thumbnail;
 pub mod url_detect;
 pub mod ytdlp;
 

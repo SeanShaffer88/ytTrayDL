@@ -35,7 +35,12 @@ fn main() -> eframe::Result<()> {
         setup.already_running
     ));
     if setup.already_running {
-        // The running instance has been told to show itself.
+        if let Some(url) = &manual_url {
+            if let Err(error) = platform::forward_manual_url(url) {
+                yttraydl::diag_log(&format!("URL forwarding failed: {error}"));
+                platform::fatal_error_box("ytTrayDL could not forward the link", &error);
+            }
+        }
         return Ok(());
     }
 

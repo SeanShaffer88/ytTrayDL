@@ -427,12 +427,14 @@ impl DownloadManager {
             let mut job = self.queue.remove(pos).unwrap();
             job.state = JobState::Cancelled;
             self.finished.insert(0, job);
+            self.finished.truncate(50);
             return;
         }
         if let Some(pos) = self.paused.iter().position(|j| j.id == id) {
             let mut job = self.paused.remove(pos);
             job.state = JobState::Cancelled;
             self.finished.insert(0, job);
+            self.finished.truncate(50);
             return;
         }
         if let Some(r) = self.running.iter().find(|r| r.job.id == id) {
@@ -547,10 +549,12 @@ impl DownloadManager {
         while let Some(mut job) = self.queue.pop_front() {
             job.state = JobState::Cancelled;
             self.finished.insert(0, job);
+            self.finished.truncate(50);
         }
         for mut job in self.paused.drain(..) {
             job.state = JobState::Cancelled;
             self.finished.insert(0, job);
+            self.finished.truncate(50);
         }
         for r in &self.running {
             r.cancel.store(true, Ordering::SeqCst);
@@ -800,6 +804,44 @@ impl Drop for DownloadManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelling_queued_and_paused_jobs_keeps_only_latest_fifty() {
+        for cancel_all in [false, true] {
+            let mut manager = DownloadManager::new();
+            let mut ids = Vec::new();
+            for index in 0..120 {
+                let id = manager.enqueue(
+                    format!("https://example.invalid/{index}"),
+                    index.to_string(),
+                    Preset::Best,
+                    true,
+                );
+                if index % 2 == 1 {
+                    manager.pause(id);
+                }
+                ids.push(id);
+            }
+            if cancel_all {
+                manager.cancel_all();
+            } else {
+                for id in &ids {
+                    manager.cancel(*id);
+                }
+            }
+            assert_eq!(manager.finished_jobs().len(), 50);
+            assert_eq!(manager.active_count(), 0);
+            assert_eq!(manager.paused_count(), 0);
+            assert!(manager
+                .finished_jobs()
+                .iter()
+                .all(|job| job.state == JobState::Cancelled));
+            if !cancel_all {
+                assert_eq!(manager.finished_jobs().first().unwrap().id, ids[119]);
+                assert_eq!(manager.finished_jobs().last().unwrap().id, ids[70]);
+            }
+        }
+    }
 
     #[test]
     fn automatic_retry_only_requeues_failed_jobs_with_budget() {

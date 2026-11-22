@@ -34,6 +34,17 @@ pub fn extract_urls(text: &str) -> Vec<String> {
     out
 }
 
+/// A complete HTTP(S) URL with a nonempty host and no control/space bytes.
+pub fn is_http_url(url: &str) -> bool {
+    (url.get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        || url
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://")))
+        && !host_of(url).is_empty()
+        && !url.bytes().any(|byte| byte <= b' ' || byte == 0x7f)
+}
+
 fn starts_url(text: &str, i: usize) -> bool {
     let rest = &text[i..];
     rest.starts_with("https://") || rest.starts_with("http://")

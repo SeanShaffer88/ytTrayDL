@@ -10,7 +10,7 @@
 
 use super::{Platform, PlatformEvent, PlatformSetup};
 use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, GetClipboardData, GetClipboardSequenceNumber,
-    OpenClipboard, RemoveClipboardFormatListener,
+    OpenClipboard, RemoveClipboardFormatListener, COPYDATASTRUCT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
@@ -27,19 +27,21 @@ use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, GetCurrentProcessId, OpenEventW, SetEvent, WaitForSingleObject,
-    EVENT_MODIFY_STATE, INFINITE,
+    CreateEventW, CreateMutexW, GetCurrentProcessId, OpenEventW, OpenProcess,
+    QueryFullProcessImageNameW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE, INFINITE,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GetCursorPos,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, FindWindowExW, GetCursorPos,
     GetMessageW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, ShowWindow,
-    TranslateMessage, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG, SW_HIDE, SW_SHOW, WM_CLIPBOARDUPDATE,
-    WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_OVERLAPPED,
+    PostMessageW, PostQuitMessage, RegisterClassW, SendMessageTimeoutW, SetForegroundWindow,
+    ShowWindow, TranslateMessage, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG, SMTO_ABORTIFHUNG,
+    SW_HIDE, SW_SHOW, WM_CLIPBOARDUPDATE, WM_COPYDATA, WM_DESTROY, WM_HOTKEY, WNDCLASSW,
+    WS_OVERLAPPED,
 };
 
 const CF_UNICODETEXT: u32 = 13;
@@ -48,12 +50,14 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "ytTrayDL";
 const MUTEX_NAME: &str = "Local\\ytTrayDL_SingleInstance_v1";
 const SHOW_EVENT_NAME: &str = "Local\\ytTrayDL_ShowYourself_v1";
+const MANUAL_URL_MESSAGE: usize = 0x59545501;
 
 static SENDER: OnceLock<Sender<PlatformEvent>> = OnceLock::new();
 static LISTENER_HWND: OnceLock<isize> = OnceLock::new();
 
 pub struct Inner {
     mutex: HANDLE,
+    event_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Kept so the handle isn't dropped early; the listener thread
     /// is detached by design and runs for the process lifetime.
     _thread: Option<std::thread::JoinHandle<()>>,
@@ -74,11 +78,15 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
     let last_err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     const ERROR_ALREADY_EXISTS: u32 = 183;
     if !mutex.is_null() && last_err == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(mutex);
+        }
         signal_show_event();
         return PlatformSetup {
             platform: Platform {
                 inner: Inner {
                     mutex: std::ptr::null_mut(),
+                    event_stop: None,
                     _thread: None,
                 },
             },
@@ -87,16 +95,24 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
         };
     }
 
-    // "Show yourself" event waiter thread.
+    let event_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // "Show yourself" event waiter thread. Drop signals it without polling.
     {
         let tx2 = tx.clone();
+        let stop = event_stop.clone();
         std::thread::spawn(move || unsafe {
             let ev = CreateEventW(std::ptr::null(), 0, 0, wide(SHOW_EVENT_NAME).as_ptr());
             if ev.is_null() {
                 return;
             }
             loop {
+                if stop.load(std::sync::atomic::Ordering::Acquire) {
+                    break;
+                }
                 if WaitForSingleObject(ev, INFINITE) != 0 {
+                    break;
+                }
+                if stop.load(std::sync::atomic::Ordering::Acquire) {
                     break;
                 }
                 // A hidden viewport may stop scheduling egui frames. Queue the
@@ -107,6 +123,7 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
                 }
                 show_main_window();
             }
+            CloseHandle(ev);
         });
     }
 
@@ -124,6 +141,7 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
         platform: Platform {
             inner: Inner {
                 mutex,
+                event_stop: Some(event_stop),
                 _thread: Some(thread),
             },
         },
@@ -139,6 +157,86 @@ fn signal_show_event() {
             SetEvent(ev);
             CloseHandle(ev);
         }
+    }
+}
+
+/// WM_COPYDATA keeps the sender's payload valid for the synchronous call only.
+/// Receiver copies before acknowledging; timeout prevents a hung primary blocking launch.
+pub fn forward_manual_url(url: &str) -> Result<(), String> {
+    let payload =
+        super::manual_url_payload(url.as_bytes()).ok_or("expected a bounded HTTP(S) URL")?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let class = wide("ytTrayDLMessageWindow");
+    loop {
+        let hwnd = unsafe {
+            FindWindowExW(
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                class.as_ptr(),
+                std::ptr::null(),
+            )
+        };
+        if !hwnd.is_null() && window_executable_matches(hwnd, &exe) {
+            let data = COPYDATASTRUCT {
+                dwData: MANUAL_URL_MESSAGE,
+                cbData: payload.len() as u32,
+                lpData: payload.as_ptr() as *mut std::ffi::c_void,
+            };
+            let mut acknowledged = 0usize;
+            let remaining = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis()
+                .min(2000) as u32;
+            if remaining == 0 {
+                break;
+            }
+            let sent = unsafe {
+                SendMessageTimeoutW(
+                    hwnd,
+                    WM_COPYDATA,
+                    0,
+                    &data as *const _ as isize,
+                    SMTO_ABORTIFHUNG,
+                    remaining,
+                    &mut acknowledged,
+                )
+            };
+            return if sent != 0 && acknowledged == 1 {
+                Ok(())
+            } else {
+                Err("the running instance did not accept the link".into())
+            };
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Err("the running instance's URL receiver was unavailable".into())
+}
+
+fn window_executable_matches(hwnd: HWND, expected: &Path) -> bool {
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return false;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let mut buffer = vec![0u16; 32768];
+        let mut length = buffer.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            buffer.as_mut_ptr(),
+            &mut length,
+        );
+        CloseHandle(process);
+        ok != 0 && Path::new(&std::ffi::OsString::from_wide(&buffer[..length as usize])) == expected
     }
 }
 
@@ -194,8 +292,42 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_COPYDATA => {
+            if lparam == 0 {
+                return 0;
+            }
+            let data = &*(lparam as *const COPYDATASTRUCT);
+            if data.dwData != MANUAL_URL_MESSAGE
+                || data.cbData == 0
+                || data.cbData as usize > super::MAX_MANUAL_URL_BYTES
+                || data.lpData.is_null()
+            {
+                return 0;
+            }
+            let bytes = std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize);
+            let Some(url) = super::manual_url_payload(bytes) else {
+                return 0;
+            };
+            if SENDER
+                .get()
+                .is_some_and(|tx| tx.send(PlatformEvent::ManualUrl(url)).is_ok())
+            {
+                show_main_window();
+                1
+            } else {
+                0
+            }
+        }
         WM_CLIPBOARDUPDATE => {
-            if let Some(text) = read_clipboard_text_with_retry() {
+            static LAST_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let mut last_sequence = LAST_SEQ.load(std::sync::atomic::Ordering::Relaxed);
+            let text = super::clipboard_event_text(
+                &mut last_sequence,
+                GetClipboardSequenceNumber(),
+                || read_clipboard_text_with_retry(),
+            );
+            LAST_SEQ.store(last_sequence, std::sync::atomic::Ordering::Relaxed);
+            if let Some(text) = text {
                 if let Some(tx) = SENDER.get() {
                     let _ = tx.send(PlatformEvent::ClipboardText(text));
                 }
@@ -207,6 +339,7 @@ unsafe extern "system" fn wnd_proc(
                 if let Some(tx) = SENDER.get() {
                     let _ = tx.send(PlatformEvent::ShowRequested);
                 }
+                show_main_window();
             }
             0
         }
@@ -222,14 +355,8 @@ unsafe extern "system" fn wnd_proc(
 
 /// Read CF_UNICODETEXT. The clipboard can be momentarily locked by
 /// the app that just set it, so retry briefly (5 × 15 ms) — the
-/// sequence-number check keeps us from emitting the same content
-/// twice when several updates land back-to-back.
+/// event-specific deduplication belongs to WM_CLIPBOARDUPDATE, never manual reads.
 unsafe fn read_clipboard_text_with_retry() -> Option<String> {
-    static LAST_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let seq = GetClipboardSequenceNumber();
-    if seq != 0 && LAST_SEQ.swap(seq, std::sync::atomic::Ordering::SeqCst) == seq {
-        return None;
-    }
     for _ in 0..5 {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             std::thread::sleep(std::time::Duration::from_millis(15));
@@ -251,10 +378,13 @@ impl Drop for Platform {
     fn drop(&mut self) {
         #[cfg(windows)]
         unsafe {
+            if let Some(stop) = &self.inner.event_stop {
+                stop.store(true, std::sync::atomic::Ordering::Release);
+                signal_show_event();
+            }
             if let Some(&hwnd) = LISTENER_HWND.get() {
                 if hwnd != 0 {
                     PostMessageW(hwnd as HWND, 0x0010 /* WM_CLOSE */, 0, 0);
-                    DestroyWindow(hwnd as HWND);
                 }
             }
             if !self.inner.mutex.is_null() {
@@ -265,6 +395,11 @@ impl Drop for Platform {
 }
 
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    let exe = if enabled {
+        Some(std::env::current_exe().map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
     unsafe {
         let mut hkey: HKEY = std::ptr::null_mut();
         let rc = RegCreateKeyExW(
@@ -281,8 +416,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         if rc != 0 {
             return Err(format!("opening Run key failed ({rc})"));
         }
-        let result = if enabled {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let result = if let Some(exe) = exe {
             // `--background`: autostart goes straight to the tray;
             // only manual launches open the control panel.
             let value = format!("\"{}\" --background", exe.display());
@@ -620,7 +754,8 @@ fn close_listener() {
 // ---------------- notification sound + taskbar progress ----------------
 
 use windows_sys::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::UI::Shell::{
@@ -644,7 +779,8 @@ use windows_sys::Win32::System::Power::SetSuspendState;
 /// holding `path` (`GetDiskFreeSpaceExW`). The path doesn't
 /// need to exist yet — the volume root is derived from it.
 pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
-    let mut s = path.to_string_lossy().to_string();
+    let directory = super::existing_directory(path)?;
+    let mut s = directory.to_string_lossy().to_string();
     if !s.ends_with('\\') {
         s.push('\\');
     }
@@ -675,25 +811,54 @@ pub fn suspend_system() -> bool {
 const IID_ITASKBAR_LIST3: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xea1afb91_9e28_4b86_90e9_9e9f8a5eef75);
 
+struct TaskbarObject {
+    pointer: *mut std::ffi::c_void,
+    owns_com_init: bool,
+}
+
+impl Drop for TaskbarObject {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.pointer.is_null() {
+                type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
+                let release: ReleaseFn = vtbl_fn(self.pointer, 2);
+                release(self.pointer);
+            }
+            if self.owns_com_init {
+                CoUninitialize();
+            }
+        }
+    }
+}
+
 thread_local! {
     /// The ITaskbarList3 object pointer (as usize), created
     /// lazily. COM apartment rules: the object must be used
     /// from the thread that created it — every caller runs on
     /// the GUI thread, and the thread-local enforces that.
-    static TASKBAR_LIST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TASKBAR_LIST: std::cell::RefCell<Option<TaskbarObject>> = const { std::cell::RefCell::new(None) };
     static TASKBAR_INITED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn taskbar_list3() -> Option<*mut std::ffi::c_void> {
-    let cached = TASKBAR_LIST.with(|c| c.get());
-    if cached != 0 {
-        return Some(cached as *mut std::ffi::c_void);
+    let cached = TASKBAR_LIST.with(|c| c.borrow().as_ref().map(|object| object.pointer));
+    if cached.is_some() {
+        return cached;
     }
     unsafe {
         // Best-effort COM init for this thread; eframe/winit may
         // already have initialized an apartment (an RPC_E_CHANGED_MODE
         // result is fine — an apartment exists either way).
-        let _ = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let init = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        // A changed apartment mode already has COM initialized; other failures
+        // cannot safely create an object and must not be balanced with uninit.
+        if init < 0 && init != 0x80010106u32 as i32 {
+            return None;
+        }
+        let mut owner = TaskbarObject {
+            pointer: std::ptr::null_mut(),
+            owns_com_init: init >= 0,
+        };
         let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
         let hr = CoCreateInstance(
             &CLSID_TASKBAR_LIST,
@@ -705,7 +870,8 @@ fn taskbar_list3() -> Option<*mut std::ffi::c_void> {
         if hr < 0 || obj.is_null() {
             return None;
         }
-        TASKBAR_LIST.with(|c| c.set(obj as usize));
+        owner.pointer = obj;
+        TASKBAR_LIST.with(|c| *c.borrow_mut() = Some(owner));
         Some(obj)
     }
 }

@@ -258,7 +258,7 @@ pub fn build_download_args_full(
                 // Height-capped video presets.
                 let h = other.max_height().unwrap_or(4320);
                 args.push("-f".into());
-                args.push(format!("bv*[height<={h}]+ba/b[height<={h}]/b"));
+                args.push(format!("bv*[height<={h}]+ba/b[height<={h}]"));
             }
         }
     }
@@ -665,11 +665,11 @@ pub fn parse_playlist_entries(text: &str) -> Vec<PlaylistEntry> {
         let url = v
             .get("webpage_url")
             .and_then(|u| u.as_str())
-            .filter(|u| u.starts_with("http"))
+            .filter(|u| crate::url_detect::is_http_url(u))
             .or_else(|| {
                 v.get("url")
                     .and_then(|u| u.as_str())
-                    .filter(|u| u.starts_with("http"))
+                    .filter(|u| crate::url_detect::is_http_url(u))
             });
         let Some(url) = url else { continue };
         let id = v
@@ -740,10 +740,13 @@ pub fn archive_contains(archive_text: &str, extractor: &str, id: &str) -> bool {
     if extractor.is_empty() || id.is_empty() {
         return false;
     }
-    let needle = format!("{} {}", extractor.to_lowercase(), id);
-    archive_text
-        .lines()
-        .any(|l| l.trim().eq_ignore_ascii_case(&needle))
+    archive_text.lines().any(|line| {
+        line.trim()
+            .split_once(' ')
+            .is_some_and(|(stored_extractor, stored_id)| {
+                stored_extractor.eq_ignore_ascii_case(extractor) && stored_id == id
+            })
+    })
 }
 
 #[cfg(test)]
@@ -866,10 +869,19 @@ mod tests {
 
     #[test]
     fn capped_preset_uses_height_filter() {
-        let args = build_download_args(&settings(), Preset::P720, "https://youtu.be/x", true);
-        assert!(args
-            .iter()
-            .any(|a| a == "bv*[height<=720]+ba/b[height<=720]/b"));
+        for preset in Preset::ALL {
+            let Some(height) = preset.max_height() else {
+                continue;
+            };
+            let args = build_download_args(&settings(), preset, "https://youtu.be/x", true);
+            let format = &args[args.iter().position(|arg| arg == "-f").unwrap() + 1];
+            for alternative in format.split('/') {
+                assert!(
+                    alternative.contains(&format!("[height<={height}]")),
+                    "{preset:?}: {alternative}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1108,7 +1120,22 @@ mod tests {
     fn archive_matching() {
         let text = "youtube abc123\nvimeo 999\n";
         assert!(archive_contains(text, "YouTube", "abc123"));
+        assert!(!archive_contains(text, "YouTube", "Abc123"));
+        assert!(archive_contains("YouTube AbC123\n", "youtube", "AbC123"));
+        assert!(!archive_contains("YouTube AbC123\n", "youtube", "abc123"));
         assert!(!archive_contains(text, "youtube", "nope"));
         assert!(!archive_contains(text, "", "abc123"));
+    }
+
+    #[test]
+    fn playlist_rejects_invalid_schemes_and_uses_valid_fallback() {
+        let entries = parse_playlist_entries(concat!(
+            "{\"webpage_url\":\"httpx://invalid.example/video\",\"url\":\"https://valid.example/video\"}\n",
+            "{\"url\":\"http:garbage\"}\n",
+            "{\"url\":\"https:///no-host\"}\n",
+            "{\"url\":\"ftp://invalid.example/video\"}\n"
+        ));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url, "https://valid.example/video");
     }
 }

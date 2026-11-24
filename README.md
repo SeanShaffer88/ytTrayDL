@@ -56,8 +56,13 @@ outputs and colliding names. A batch stops on the first error or cancellation;
 completed outputs are kept and a partial output may remain. Closing the
 window leaves conversion running. An optional start/end trim in seconds can be
 applied to a single file or every item in a batch. Trimming re-encodes the media
-rather than doing lossless stream-copy cutting. Cropping, hardware presets and
-per-file percentage progress are not available yet.
+rather than doing lossless stream-copy cutting. Optional numeric cropping is
+applied before a fit-within resize preset (480p through 4K); resizing preserves
+aspect ratio and does not upscale. Crop coordinates are in source pixels, and
+ffmpeg can adjust offsets at frame edges; some encoders require even crop
+dimensions. Batch inputs can be reordered or
+removed before conversion. Hardware presets and per-file percentage progress
+are not available yet.
 
 The installer can optionally create a separate **ytTrayDL Downloads** desktop
 shortcut. It opens the Downloads window, including when ytTrayDL is already

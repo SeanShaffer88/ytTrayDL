@@ -474,15 +474,14 @@ shipped). The system:
 
 ## Verification matrix
 
-Video converter including sequential batch and trim: **Unverified** on Windows.
-Argument/path, trim and batch worker tests were added. A Linux standalone
-harness using the converter module and a substitute process runner converted
-two short files and verified a one-second trim with ffmpeg; this is not a full
-application or owned-process test. An opt-in owned-process integration test is
-available by setting `YTTRAYDL_TEST_FFMPEG` to an ffmpeg executable when running
-`cargo test --locked`. Real Windows conversion, cancellation, window lifecycle,
-tray launch, direct launch, installer shortcut behavior and batch conflicts
-still require Windows testing.
+Video converter including sequential batch, trim, crop, resize, and queue editing: **Unverified** on Windows.
+Argument/path, trim, crop, resize and batch worker tests were added. An isolated
+Linux harness using the real converter and owned-process modules passed unit,
+batch and opt-in ffmpeg integration tests for trimming, cropping and resizing;
+it is not the full application suite. The ffmpeg integration tests can also be
+run by setting `YTTRAYDL_TEST_FFMPEG` when running `cargo test --locked`. Real
+Windows conversion, cancellation, window lifecycle, tray launch, direct launch,
+installer shortcut behavior and batch conflicts still require Windows testing.
 
 Downloads direct-launch intent and optional desktop shortcut: **Unverified**
 on Windows. Cold launch, running-instance delivery, focus, installer upgrade

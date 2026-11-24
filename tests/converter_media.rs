@@ -55,3 +55,62 @@ fn ffmpeg_batch_trims_two_files() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn ffmpeg_crops_then_resizes_without_upscaling() {
+    use yttraydl::converter::{
+        build_conversion_with_options, ConversionOptions, CropRect, ResizePreset,
+    };
+    let Some(ffmpeg) = std::env::var_os("YTTRAYDL_TEST_FFMPEG").map(PathBuf::from) else {
+        eprintln!("Skipping ffmpeg integration: YTTRAYDL_TEST_FFMPEG is not set");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("yttraydl-media-effects-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("source.mkv");
+    let token = CancellationToken::default();
+    let fixture = ProcessSpec::new(&ffmpeg)
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=960x540:rate=2",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-n",
+        ])
+        .arg(&input);
+    run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+    for (name, crop, dimensions) in [
+        (
+            "cropped.mp4",
+            CropRect::parse("800", "400", "10", "10").unwrap(),
+            "s:800x400",
+        ),
+        ("scaled.mp4", None, "s:854x480"),
+    ] {
+        let output = dir.join(name);
+        let options = ConversionOptions {
+            crop,
+            resize: ResizePreset::P480,
+            ..Default::default()
+        };
+        let spec =
+            build_conversion_with_options(&ffmpeg, &input, &output, VideoProfile::Mp4, options)
+                .unwrap();
+        run_batch(&[spec], &token, |_, _| ()).unwrap();
+        let inspect = ProcessSpec::new(&ffmpeg)
+            .args(["-nostdin", "-hide_banner", "-i"])
+            .arg(output)
+            .args(["-vf", "showinfo", "-frames:v", "1", "-f", "null", "-"]);
+        let result = run_capture(&inspect, ProcessLimits::default(), &token).unwrap();
+        let info = String::from_utf8_lossy(&result.stderr);
+        assert!(info.contains(dimensions), "expected {dimensions}: {info}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

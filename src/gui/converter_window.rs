@@ -1,6 +1,6 @@
 //! Independent local video-converter viewport.
 use super::*;
-use yttraydl::converter::{self, VideoProfile};
+use yttraydl::converter::{self, BatchEdit, ResizePreset, VideoProfile};
 use yttraydl::process;
 
 enum ConverterMessage {
@@ -15,6 +15,11 @@ pub(super) struct ConverterState {
     profile: VideoProfile,
     trim_start: String,
     trim_end: String,
+    crop_width: String,
+    crop_height: String,
+    crop_x: String,
+    crop_y: String,
+    resize: ResizePreset,
     status: String,
     batch_inputs: Vec<std::path::PathBuf>,
     batch_folder: String,
@@ -63,6 +68,7 @@ impl App {
         let mut start = false;
         let mut start_batch = false;
         let mut cancel = false;
+        let mut batch_edit = None;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-converter"),
             egui::ViewportBuilder::default()
@@ -111,6 +117,26 @@ impl App {
                             ui.add(egui::TextEdit::singleline(&mut state.trim_end).desired_width(80.0).hint_text("end"));
                         });
                         ui.label("Up to 3 decimals. Empty end keeps the rest; output is re-encoded.");
+                        ui.label("Optional crop (pixels before resize; applies to every file)");
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Width");
+                            ui.add(egui::TextEdit::singleline(&mut state.crop_width).desired_width(62.0));
+                            ui.label("Height");
+                            ui.add(egui::TextEdit::singleline(&mut state.crop_height).desired_width(62.0));
+                            ui.label("X");
+                            ui.add(egui::TextEdit::singleline(&mut state.crop_x).desired_width(62.0).hint_text("0"));
+                            ui.label("Y");
+                            ui.add(egui::TextEdit::singleline(&mut state.crop_y).desired_width(62.0).hint_text("0"));
+                        });
+                        ui.label("Leave crop blank to keep the frame. Use even dimensions; ffmpeg may adjust edge offsets.");
+                        ui.label("Resize (never upscale)");
+                        egui::ComboBox::from_id_salt("converter-resize")
+                            .selected_text(state.resize.label())
+                            .show_ui(ui, |ui| {
+                                for preset in ResizePreset::ALL {
+                                    ui.selectable_value(&mut state.resize, preset, preset.label());
+                                }
+                            });
                         ui.label("Output file (new file, with matching extension)");
                         ui.horizontal(|ui| {
                             ui.add(
@@ -137,7 +163,7 @@ impl App {
                         ui.separator();
                         ui.heading("Batch conversion");
                         ui.label("Convert selected files one at a time into an existing folder.");
-                        ui.horizontal_wrapped(|ui| {
+                        ui.add_enabled_ui(state.receiver.is_none(), |ui| ui.horizontal_wrapped(|ui| {
                             if ui.button("Add input above to batch").clicked() && !state.input.trim().is_empty() {
                                 state.batch_inputs.push(state.input.trim().into());
                             }
@@ -150,14 +176,30 @@ impl App {
                             if ui.button("Clear batch").clicked() {
                                 state.batch_inputs.clear();
                             }
-                        });
+                        }));
                         ui.label(format!("{} files selected", state.batch_inputs.len()));
-                        for path in state.batch_inputs.iter().take(5) {
-                            ui.add(egui::Label::new(path.display().to_string()).truncate());
-                        }
-                        if state.batch_inputs.len() > 5 {
-                            ui.label(format!("and {} more", state.batch_inputs.len() - 5));
-                        }
+                        let count = state.batch_inputs.len();
+                        let editable = state.receiver.is_none();
+                        egui::ScrollArea::vertical().id_salt("converter-batch-list").max_height(180.0)
+                            .show_rows(ui, 28.0, count, |ui, rows| {
+                                for index in rows {
+                                    ui.push_id(index, |ui| {
+                                        ui.horizontal(|ui| {
+                                            let path = state.batch_inputs[index].display().to_string();
+                                            ui.add_sized([ (ui.available_width() - 190.0).max(20.0), 24.0 ], egui::Label::new(&path).truncate()).on_hover_text(&path);
+                                            if ui.add_enabled(editable && index > 0, egui::Button::new("Up")).on_hover_text("Move this file earlier").clicked() {
+                                                batch_edit = Some(BatchEdit::MoveUp(index));
+                                            }
+                                            if ui.add_enabled(editable && index + 1 < count, egui::Button::new("Down")).on_hover_text("Move this file later").clicked() {
+                                                batch_edit = Some(BatchEdit::MoveDown(index));
+                                            }
+                                            if ui.add_enabled(editable, egui::Button::new("Remove")).on_hover_text("Remove this file from the batch").clicked() {
+                                                batch_edit = Some(BatchEdit::Remove(index));
+                                            }
+                                        });
+                                    });
+                                }
+                            });
                         ui.label("Batch output folder");
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut state.batch_folder).desired_width((ui.available_width() - 90.0).max(40.0)));
@@ -191,6 +233,9 @@ impl App {
             },
         );
         self.show_converter = open;
+        if let Some(edit) = batch_edit {
+            converter::edit_batch(&mut state.batch_inputs, edit);
+        }
         if let (true, Some(token)) = (cancel, &state.cancel) {
             token.cancel();
             state.status = "Cancelling…".into();
@@ -204,6 +249,11 @@ impl App {
             let profile = state.profile;
             let trim_start = state.trim_start.clone();
             let trim_end = state.trim_end.clone();
+            let crop_width = state.crop_width.clone();
+            let crop_height = state.crop_height.clone();
+            let crop_x = state.crop_x.clone();
+            let crop_y = state.crop_y.clone();
+            let resize = state.resize;
             let (tx, rx) = std::sync::mpsc::channel();
             let wake = ctx.clone();
             let token = self.background.child_token();
@@ -212,7 +262,12 @@ impl App {
                 let exe_dir = std::env::current_exe()
                     .ok()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()));
-                let specs = converter::TrimRange::parse(&trim_start, &trim_end).and_then(|trim| {
+                let options =
+                    converter::TrimRange::parse(&trim_start, &trim_end).and_then(|trim| {
+                        converter::CropRect::parse(&crop_width, &crop_height, &crop_x, &crop_y)
+                            .map(|crop| converter::ConversionOptions { trim, crop, resize })
+                    });
+                let specs = options.and_then(|options| {
                     converter::locate_ffmpeg(&settings, exe_dir.as_deref())
                         .ok_or_else(|| {
                             "ffmpeg not found. Configure or install it in Settings".to_string()
@@ -222,20 +277,20 @@ impl App {
                                 if batch_folder.trim().is_empty() {
                                     return Err("Choose a batch output folder".into());
                                 }
-                                converter::build_batch_with_trim(
+                                converter::build_batch_with_options(
                                     &bin,
                                     &batch_inputs,
                                     std::path::Path::new(&batch_folder),
                                     profile,
-                                    trim,
+                                    options,
                                 )
                             } else {
-                                converter::build_conversion_with_trim(
+                                converter::build_conversion_with_options(
                                     &bin,
                                     std::path::Path::new(&input),
                                     std::path::Path::new(&output),
                                     profile,
-                                    trim,
+                                    options,
                                 )
                                 .map(|spec| vec![spec])
                             }

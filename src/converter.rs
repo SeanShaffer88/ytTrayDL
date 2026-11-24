@@ -85,6 +85,135 @@ fn parse_seconds(value: &str) -> Result<u64, String> {
         .ok_or_else(|| "Trim time is too large".into())
 }
 
+/// A numeric crop rectangle in source pixels, before any resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CropRect {
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+}
+
+impl CropRect {
+    /// Blank fields disable cropping; otherwise width and height are required.
+    /// Blank offsets mean zero. Expressions and negative values are rejected.
+    pub fn parse(width: &str, height: &str, x: &str, y: &str) -> Result<Option<Self>, String> {
+        if [width, height, x, y].iter().all(|v| v.trim().is_empty()) {
+            return Ok(None);
+        }
+        fn number(value: &str, name: &str, default_zero: bool) -> Result<u32, String> {
+            let value = value.trim();
+            if default_zero && value.is_empty() {
+                return Ok(0);
+            }
+            if value.is_empty() || !value.bytes().all(|v| v.is_ascii_digit()) {
+                return Err(format!("Crop {name} must be a non-negative whole number"));
+            }
+            value
+                .parse()
+                .map_err(|_| format!("Crop {name} is too large"))
+        }
+        let width = number(width, "width", false)?;
+        let height = number(height, "height", false)?;
+        if width == 0 || height == 0 {
+            return Err("Crop width and height must be greater than zero".into());
+        }
+        Ok(Some(Self {
+            width,
+            height,
+            x: number(x, "x", true)?,
+            y: number(y, "y", true)?,
+        }))
+    }
+}
+
+/// Fit inside a bounding box without upscaling, preserving aspect ratio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResizePreset {
+    #[default]
+    Original,
+    P480,
+    P720,
+    P1080,
+    P2160,
+}
+impl ResizePreset {
+    pub const ALL: [Self; 5] = [
+        Self::Original,
+        Self::P480,
+        Self::P720,
+        Self::P1080,
+        Self::P2160,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "Original size",
+            Self::P480 => "Fit within 854 × 480",
+            Self::P720 => "Fit within 1280 × 720",
+            Self::P1080 => "Fit within 1920 × 1080",
+            Self::P2160 => "Fit within 3840 × 2160",
+        }
+    }
+    fn dimensions(self) -> Option<(u32, u32)> {
+        match self {
+            Self::Original => None,
+            Self::P480 => Some((854, 480)),
+            Self::P720 => Some((1280, 720)),
+            Self::P1080 => Some((1920, 1080)),
+            Self::P2160 => Some((3840, 2160)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConversionOptions {
+    pub trim: TrimRange,
+    pub crop: Option<CropRect>,
+    pub resize: ResizePreset,
+}
+
+fn video_filters(options: ConversionOptions) -> Option<String> {
+    let mut filters = Vec::new();
+    if let Some(crop) = options.crop {
+        filters.push(format!(
+            "crop={}:{}:{}:{}:exact=1",
+            crop.width, crop.height, crop.x, crop.y
+        ));
+    }
+    if let Some((width, height)) = options.resize.dimensions() {
+        // Quotes are parsed by ffmpeg's filter parser, not a shell. The min
+        // expressions prevent enlarging small inputs, including portrait video.
+        filters.push(format!("scale=w='min(iw,{width})':h='min(ih,{height})':force_original_aspect_ratio=decrease:force_divisible_by=2"));
+    }
+    (!filters.is_empty()).then(|| filters.join(","))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchEdit {
+    Remove(usize),
+    MoveUp(usize),
+    MoveDown(usize),
+}
+
+/// Reorder or remove a pending input. Invalid indices are harmless.
+pub fn edit_batch(inputs: &mut Vec<PathBuf>, edit: BatchEdit) -> bool {
+    match edit {
+        BatchEdit::Remove(index) if index < inputs.len() => {
+            inputs.remove(index);
+            true
+        }
+        BatchEdit::MoveUp(index) if index > 0 && index < inputs.len() => {
+            inputs.swap(index, index - 1);
+            true
+        }
+        BatchEdit::MoveDown(index) if index < inputs.len().saturating_sub(1) => {
+            inputs.swap(index, index + 1);
+            true
+        }
+        _ => false,
+    }
+}
+
 fn seconds_arg(ms: u64) -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
@@ -135,6 +264,27 @@ pub fn build_conversion_with_trim(
     profile: VideoProfile,
     trim: TrimRange,
 ) -> Result<ProcessSpec, String> {
+    build_conversion_with_options(
+        ffmpeg,
+        input,
+        output,
+        profile,
+        ConversionOptions {
+            trim,
+            ..Default::default()
+        },
+    )
+}
+
+/// Build an invocation with validated trim, crop and resize options.
+pub fn build_conversion_with_options(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    profile: VideoProfile,
+    options: ConversionOptions,
+) -> Result<ProcessSpec, String> {
+    let trim = options.trim;
     let input = input
         .canonicalize()
         .map_err(|e| format!("Cannot open input: {e}"))?;
@@ -176,6 +326,9 @@ pub fn build_conversion_with_trim(
     if let Some(end_ms) = trim.end_ms {
         spec = spec.arg("-t").arg(seconds_arg(end_ms - trim.start_ms));
     }
+    if let Some(filters) = video_filters(options) {
+        spec = spec.arg("-vf").arg(filters);
+    }
     Ok(spec
         .args([
             "-map", "0:v:0", "-map", "0:a:0?", "-c:v", video, "-c:a", audio,
@@ -203,6 +356,26 @@ pub fn build_batch_with_trim(
     output_dir: &Path,
     profile: VideoProfile,
     trim: TrimRange,
+) -> Result<Vec<ProcessSpec>, String> {
+    build_batch_with_options(
+        ffmpeg,
+        inputs,
+        output_dir,
+        profile,
+        ConversionOptions {
+            trim,
+            ..Default::default()
+        },
+    )
+}
+
+/// Preflight a batch with the same validated options for every item.
+pub fn build_batch_with_options(
+    ffmpeg: &Path,
+    inputs: &[PathBuf],
+    output_dir: &Path,
+    profile: VideoProfile,
+    options: ConversionOptions,
 ) -> Result<Vec<ProcessSpec>, String> {
     if inputs.is_empty() {
         return Err("Choose at least one input file".into());
@@ -235,8 +408,8 @@ pub fn build_batch_with_trim(
                 output.display()
             ));
         }
-        specs.push(build_conversion_with_trim(
-            ffmpeg, input, &output, profile, trim,
+        specs.push(build_conversion_with_options(
+            ffmpeg, input, &output, profile, options,
         )?);
         outputs.push(output);
     }
@@ -278,6 +451,89 @@ pub fn run_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crop_validation_and_filter_order_are_safe() {
+        assert_eq!(CropRect::parse("", "", "", "").unwrap(), None);
+        for values in [
+            ("", "10", "", ""),
+            ("0", "10", "", ""),
+            ("10", "0", "", ""),
+            ("10", "10", "-1", ""),
+            ("10:evil", "10", "", ""),
+            ("4294967296", "10", "", ""),
+        ] {
+            assert!(CropRect::parse(values.0, values.1, values.2, values.3).is_err());
+        }
+        let crop = CropRect::parse("640", "360", "10", "20").unwrap();
+        let options = ConversionOptions {
+            crop,
+            resize: ResizePreset::P720,
+            ..Default::default()
+        };
+        let filters = video_filters(options).unwrap();
+        assert!(filters.starts_with("crop=640:360:10:20:exact=1,scale="));
+        assert!(filters.contains("min(iw,1280)"));
+        assert!(video_filters(ConversionOptions::default()).is_none());
+        assert_eq!(
+            video_filters(ConversionOptions {
+                crop,
+                ..Default::default()
+            })
+            .unwrap(),
+            "crop=640:360:10:20:exact=1"
+        );
+    }
+
+    #[test]
+    fn batch_queue_edits_respect_bounds_and_order() {
+        let mut items: Vec<PathBuf> = ["a", "b", "c"].into_iter().map(PathBuf::from).collect();
+        assert!(!edit_batch(&mut items, BatchEdit::MoveUp(0)));
+        assert!(!edit_batch(&mut items, BatchEdit::MoveDown(2)));
+        assert!(!edit_batch(&mut items, BatchEdit::Remove(3)));
+        assert!(edit_batch(&mut items, BatchEdit::MoveDown(0)));
+        assert_eq!(
+            items,
+            [PathBuf::from("b"), PathBuf::from("a"), PathBuf::from("c")]
+        );
+        assert!(edit_batch(&mut items, BatchEdit::MoveUp(2)));
+        assert!(edit_batch(&mut items, BatchEdit::Remove(1)));
+        assert_eq!(items, [PathBuf::from("b"), PathBuf::from("a")]);
+    }
+
+    #[test]
+    fn batch_applies_crop_and_resize_to_each_item() {
+        let dir = std::env::temp_dir().join(format!("yttraydl-crop-batch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inputs = [dir.join("a.mov"), dir.join("b.mov")];
+        for path in &inputs {
+            std::fs::write(path, b"input").unwrap();
+        }
+        let options = ConversionOptions {
+            trim: TrimRange::parse("0.5", "1.5").unwrap(),
+            crop: CropRect::parse("640", "360", "0", "0").unwrap(),
+            resize: ResizePreset::P480,
+        };
+        let specs = build_batch_with_options(
+            Path::new("ffmpeg"),
+            &inputs,
+            &dir,
+            VideoProfile::Mp4,
+            options,
+        )
+        .unwrap();
+        for spec in specs {
+            assert!(spec.args.windows(2).any(|p| p[0] == "-vf"
+                && p[1]
+                    .to_string_lossy()
+                    .starts_with("crop=640:360:0:0:exact=1,scale=")));
+            assert!(spec
+                .args
+                .windows(2)
+                .any(|p| p[0] == "-t" && p[1] == "1.000"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn trim_range_validates_decimal_seconds() {

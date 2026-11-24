@@ -6,8 +6,7 @@ fn main() {
     use yttraydl::platform::{self, PlatformEvent};
     const URL: &str = "https://example.invalid/audit-cli";
     let args: Vec<String> = std::env::args().collect();
-    if let Some(mode) = args.get(1).filter(|arg| arg.as_str() == "--sender") {
-        let _ = mode;
+    if args.get(1).is_some_and(|arg| arg == "--sender") {
         let setup = platform::setup_with_launch_intent(false, true);
         assert!(setup.already_running, "primary instance must already exist");
         match args.get(2).map(String::as_str) {

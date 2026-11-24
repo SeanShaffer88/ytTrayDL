@@ -1,5 +1,12 @@
 # ytTrayDL — design notes
 
+## Subsequent hosted validation
+
+The Windows CI run 45482072492 passed the owned two-process fixture for URL,
+Downloads, Converter, Tags and repeated Player intent delivery through the
+native platform receiver. This does not verify interactive shortcut activation,
+window focus, physical hotkeys or display behavior.
+
 ## 2026-11-21 Audit Verification
 
 | Area | Status | Scope |
@@ -474,6 +481,14 @@ shipped). The system:
 
 ## Verification matrix
 
+Module shortcut and saved-player-data installer lifecycle: **Partially verified**.
+Hosted Windows CI executes clean and published-baseline upgrade/uninstall
+scenarios with requested module shortcuts and with optional shortcuts disabled.
+It checks each shortcut target and exact argument, removal, and byte preservation
+and real library loading of saved player queue/options. This does not exercise
+shortcut activation, module GUI lifecycle, physical input or display scaling.
+
+
 FluentGruv dark token alignment: **Partially verified**. Automated GUI tests
 check selected palette assignments and key text/background contrast ratios.
 The application still contains custom legacy styling; light-theme switching,
@@ -481,6 +496,12 @@ complete keyboard and focus behavior, actual contrast in every widget, and
 interactive Windows DPI/monitor validation remain unverified. These partial
 changes do not establish full FluentGruv compliance.
 
+
+Player M3U export: **Unverified** interactively on Windows. Unit tests cover
+UTF-8 queue round-trips, existing-file protection and invalid paths, including
+Windows verbatim drive and UNC path classification. File dialogs, portable use,
+external player compatibility and actual Windows export need validation. An
+I/O failure after file creation may leave a partial playlist.
 
 Player M3U import: **Unverified** interactively on Windows. Unit tests cover
 UTF-8 parsing, bounds, relative paths, rejected URL/share entries and queue

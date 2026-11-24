@@ -529,6 +529,56 @@ pub(crate) use windows_impl::{read_owned_pipe, ProcessTree};
 mod clipboard_tests {
     use super::{clipboard_allocation_units, clipboard_event_text, decode_clipboard_units};
     #[test]
+    fn module_intents_reject_cross_module_and_malformed_payloads() {
+        use super::{
+            copydata_event, PlatformEvent, OPEN_CONVERTER_MESSAGE, OPEN_DOWNLOADS_MESSAGE,
+            OPEN_PLAYER_MESSAGE, OPEN_TAGS_MESSAGE,
+        };
+        let messages = [
+            (
+                OPEN_DOWNLOADS_MESSAGE,
+                b"downloads".as_slice(),
+                PlatformEvent::OpenDownloads,
+            ),
+            (
+                OPEN_CONVERTER_MESSAGE,
+                b"converter".as_slice(),
+                PlatformEvent::OpenConverter,
+            ),
+            (
+                OPEN_TAGS_MESSAGE,
+                b"tags".as_slice(),
+                PlatformEvent::OpenTags,
+            ),
+            (
+                OPEN_PLAYER_MESSAGE,
+                b"player".as_slice(),
+                PlatformEvent::OpenPlayer,
+            ),
+        ];
+        for (message, payload, expected) in &messages {
+            assert_eq!(copydata_event(*message, payload), Some(expected.clone()));
+            assert_eq!(copydata_event(*message, b""), None);
+            let mut trailing = payload.to_vec();
+            trailing.push(0);
+            assert_eq!(copydata_event(*message, &trailing), None);
+            assert_eq!(
+                copydata_event(*message, &payload.to_ascii_uppercase()),
+                None
+            );
+            assert_eq!(
+                copydata_event(*message, &vec![b'x'; super::MAX_MANUAL_URL_BYTES + 1]),
+                None
+            );
+            for (other_message, _, _) in &messages {
+                if other_message != message {
+                    assert_eq!(copydata_event(*other_message, payload), None);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn launch_intents_are_separate_from_urls_and_bounded() {
         use super::{
             copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,

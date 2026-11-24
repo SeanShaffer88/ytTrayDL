@@ -117,6 +117,15 @@ jobs:
       - name: Build owned process runner
         shell: pwsh
         run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/process-runner"
+      - name: Verify native module intent forwarding
+        shell: pwsh
+        run: |
+          cargo build --locked --example native_intent
+          if ($LASTEXITCODE -ne 0) { throw 'Native intent fixture build failed' }
+          $runner = "$env:RUNNER_TEMP/process-runner/InstallerStateProbe.exe"
+          $fixture = (Resolve-Path './target/debug/examples/native_intent.exe').Path
+          & $runner --run-owned 45 $fixture
+          if ($LASTEXITCODE -ne 0) { throw "Native module intent fixture failed: $LASTEXITCODE" }
       - name: Resolve hash-pinned real tools
         shell: pwsh
         run: ./tools/Get-FieldTools.ps1 -Destination "$env:RUNNER_TEMP/field-tools" -ProcessRunner "$env:RUNNER_TEMP/process-runner/InstallerStateProbe.exe"

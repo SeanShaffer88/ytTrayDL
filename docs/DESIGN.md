@@ -482,6 +482,12 @@ interactive Windows DPI/monitor validation remain unverified. These partial
 changes do not establish full FluentGruv compliance.
 
 
+Optional saved player queue: **Unverified** interactively on Windows. Tests
+cover bounded versioned storage, overwrite and invalid-file handling. Storage is
+explicitly requested, keeps paths but not media, and is not auto-loaded; app data
+is retained on uninstall. GUI lifecycle, inaccessible media and portable-mode
+storage still require interactive Windows validation.
+
 Local player: **Unverified** on Windows and no real ffplay playback has been
 run in the development sandbox. An isolated Linux harness covers queue bounds,
 ordering, progression/repeat, local argv construction and cancellation of an

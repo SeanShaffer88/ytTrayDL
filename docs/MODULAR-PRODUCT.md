@@ -6,8 +6,8 @@ desktop shortcuts; Windows runtime behavior still needs verification. The
 converter supports sequential batches, video and audio profiles, trim and
 basic transforms. Lyrics/tags supports local editing, opt-in online lyrics search,
 and artwork extraction or replacement in supported formats. The local player
-uses a separately installed ffplay and a session-only queue; Windows behavior
-and actual playback still require validation.
+uses a separately installed ffplay and a queue that can optionally be saved
+in app data; Windows behavior and actual playback still require validation.
 ytTrayDL remains a Windows-first tray application; the existing downloader and
 its settings continue to work while new capabilities are added incrementally.
 

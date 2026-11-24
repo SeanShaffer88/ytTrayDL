@@ -8,6 +8,19 @@ struct PlayerResult {
     result: Result<(), String>,
 }
 
+enum QueueIoResult {
+    Saved(Result<(), String>),
+    Loaded(Result<PlayQueue, String>),
+    Deleted(Result<(), String>),
+}
+
+#[derive(Clone, Copy)]
+enum QueueIoAction {
+    Save,
+    Load,
+    Delete,
+}
+
 pub(super) struct PlayerState {
     queue: PlayQueue,
     input: String,
@@ -21,6 +34,7 @@ pub(super) struct PlayerState {
     status: String,
     receiver: Option<Receiver<PlayerResult>>,
     cancel: Option<CancellationToken>,
+    queue_io: Option<Receiver<QueueIoResult>>,
 }
 impl Default for PlayerState {
     fn default() -> Self {
@@ -37,6 +51,7 @@ impl Default for PlayerState {
             status: String::new(),
             receiver: None,
             cancel: None,
+            queue_io: None,
         }
     }
 }
@@ -89,6 +104,37 @@ impl App {
 
     pub(super) fn player_ui(&mut self, ctx: &egui::Context) {
         let mut state = std::mem::take(&mut self.player);
+        if let Some(receiver) = &state.queue_io {
+            let result = match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(QueueIoResult::Saved(
+                    Err("Queue storage worker stopped unexpectedly".into()),
+                )),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(result) = result {
+                state.queue_io = None;
+                state.status = match result {
+                    QueueIoResult::Saved(Ok(())) => "Queue saved to the app data folder.".into(),
+                    QueueIoResult::Loaded(Ok(queue)) => {
+                        let count = queue.items().len();
+                        let added = state.queue.add(queue.items().iter().cloned());
+                        format!(
+                            "Appended {added} of {count} saved file(s); queue limit is {}.",
+                            player::MAX_QUEUE
+                        )
+                    }
+                    QueueIoResult::Deleted(Ok(())) => {
+                        "Saved queue deleted; the current queue is unchanged.".into()
+                    }
+                    QueueIoResult::Saved(Err(error))
+                    | QueueIoResult::Loaded(Err(error))
+                    | QueueIoResult::Deleted(Err(error)) => {
+                        format!("Queue storage failed: {error}")
+                    }
+                };
+            }
+        }
         let mut start_after = None;
         if let Some(rx) = &state.receiver {
             let event = match rx.try_recv() {
@@ -135,6 +181,7 @@ impl App {
         let mut remove = None;
         let mut up = None;
         let mut down = None;
+        let mut queue_action = None;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-player"),
             egui::ViewportBuilder::default().with_title("ytTrayDL — Player")
@@ -145,14 +192,15 @@ impl App {
                     ui.heading("Local player");
                     ui.label("Play local audio and video with a separately installed ffplay.");
                     if !state.status.is_empty() { ui.add(egui::Label::new(&state.status).truncate()).on_hover_text(&state.status); }
-                    let busy = state.receiver.is_some();
+                    let playing = state.receiver.is_some();
+                    let busy = playing || state.queue_io.is_some();
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_enabled(!busy && !state.queue.items().is_empty(), egui::Button::new("Play selected")).clicked() { start = true; }
-                        if ui.add_enabled(busy && !state.stopping, egui::Button::new("Stop")).clicked() { stop = true; }
+                        if ui.add_enabled(playing && !state.stopping, egui::Button::new("Stop")).clicked() { stop = true; }
                         let prev = state.active.and_then(|i| i.checked_sub(1));
-                        if ui.add_enabled(busy && !state.stopping && prev.is_some(), egui::Button::new("Previous")).clicked() { skip_to = prev; }
+                        if ui.add_enabled(playing && !state.stopping && prev.is_some(), egui::Button::new("Previous")).clicked() { skip_to = prev; }
                         let next = state.active.and_then(|i| state.queue.next(i, state.repeat));
-                        if ui.add_enabled(busy && !state.stopping && next.is_some(), egui::Button::new("Next")).clicked() { skip_to = next; }
+                        if ui.add_enabled(playing && !state.stopping && next.is_some(), egui::Button::new("Next")).clicked() { skip_to = next; }
                         ui.checkbox(&mut state.repeat, "Repeat queue");
                     });
                     ui.label("Playback window: Space = pause, arrows = seek, 9/0 = volume, M = mute.")
@@ -185,6 +233,12 @@ impl App {
                             }
                         });
                         if ui.button("Clear queue").clicked() { state.queue.clear(); state.selected = 0; }
+                        ui.label("Saved queue (optional; stores file paths in app data)");
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.add_enabled(!state.queue.items().is_empty(), egui::Button::new("Save / replace saved queue")).clicked() { queue_action = Some(QueueIoAction::Save); }
+                            if ui.button("Append saved queue").clicked() { queue_action = Some(QueueIoAction::Load); }
+                            if ui.button("Delete saved queue").clicked() { queue_action = Some(QueueIoAction::Delete); }
+                        });
                     });
                     });
                     ui.separator();
@@ -217,6 +271,29 @@ impl App {
         }
         if let Some(index) = down.filter(|&index| state.queue.move_down(index)) {
             state.selected = index + 1;
+        }
+        if let Some(action) = queue_action {
+            let queue = state.queue.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let wake = ctx.clone();
+            state.queue_io = Some(rx);
+            state.status = "Working with saved queue…".into();
+            self.background.spawn(move |_| {
+                let path = player::saved_queue_path();
+                let result = match action {
+                    QueueIoAction::Save => QueueIoResult::Saved(
+                        player::save_queue(&path, &queue).map_err(|e| e.to_string()),
+                    ),
+                    QueueIoAction::Load => {
+                        QueueIoResult::Loaded(player::load_queue(&path).map_err(|e| e.to_string()))
+                    }
+                    QueueIoAction::Delete => QueueIoResult::Deleted(
+                        std::fs::remove_file(&path).map_err(|e| e.to_string()),
+                    ),
+                };
+                let _ = tx.send(result);
+                wake.request_repaint();
+            });
         }
         if start {
             let selected = state.selected;

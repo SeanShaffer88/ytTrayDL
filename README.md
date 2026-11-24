@@ -94,8 +94,13 @@ are required for tag inspection and export, and a failed or cancelled export
 may leave a partial output. Closing the window leaves the job running.
 
 The **Player** opens from the panel, tray, optional desktop shortcut, or
-`yttraydl.exe --player`. It manages a session-only queue of up to 500 local audio
-and video files, with reorder, remove, repeat, previous, next and stop. Playback
+`yttraydl.exe --player`. It manages a queue of up to 500 local audio and video files, with reorder,
+remove, repeat, previous, next and stop. In Media & playback options, you can
+explicitly save or replace one queue, append its entries later, or delete the
+saved queue. Saving records file paths in `player-queue.json` in the normal or
+portable app data folder; it does not save media or automatically resume
+playback. The queue is otherwise session-only, and app data is retained on
+uninstall. Playback
 uses a separate ffplay window: Space pauses, arrows seek, 9/0 adjust volume and
 M mutes. Closing that playback window advances the queue; closing the manager
 does not stop playback. The starting volume applies when each track starts.

@@ -1,6 +1,7 @@
 //! Local playback queue and shell-free invocation of a separately installed ffplay.
 //! Media and players are owned by the application; no online playback is supported.
 use crate::process::{self, CancellationToken, ProcessLimits, ProcessSpec};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ pub fn supported_path(path: &Path) -> bool {
         })
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct PlayQueue {
     items: Vec<PathBuf>,
 }
@@ -78,6 +79,101 @@ impl PlayQueue {
             None
         }
     }
+}
+
+/// Maximum on-disk playlist size; file paths may contain private information.
+pub const MAX_SAVED_QUEUE_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedQueue {
+    version: u8,
+    items: Vec<PathBuf>,
+}
+
+/// Explicitly saved queue in the application's normal or portable data directory.
+pub fn saved_queue_path() -> PathBuf {
+    crate::settings::config_dir().join("player-queue.json")
+}
+
+/// Save a snapshot atomically. Relative paths are resolved now, without
+/// requiring the files to exist. It never changes the original media files.
+pub fn save_queue(path: &Path, queue: &PlayQueue) -> io::Result<()> {
+    let current = std::env::current_dir()?;
+    let items: Vec<PathBuf> = queue
+        .items()
+        .iter()
+        .map(|item| {
+            if item.is_absolute() {
+                item.clone()
+            } else {
+                current.join(item)
+            }
+        })
+        .collect();
+    validate_saved_items(&items)?;
+    let bytes = serde_json::to_vec_pretty(&SavedQueue { version: 1, items })?;
+    if bytes.len() as u64 > MAX_SAVED_QUEUE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Saved queue is too large",
+        ));
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    let result = (|| {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+/// Read and strictly validate a saved queue without touching the live queue.
+/// Missing media is retained; playback reports inaccessible files when selected.
+pub fn load_queue(path: &Path) -> io::Result<PlayQueue> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SAVED_QUEUE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SAVED_QUEUE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Saved queue is too large",
+        ));
+    }
+    let saved: SavedQueue = serde_json::from_slice(&bytes)?;
+    if saved.version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Unsupported saved queue version",
+        ));
+    }
+    validate_saved_items(&saved.items)?;
+    Ok(PlayQueue { items: saved.items })
+}
+
+fn validate_saved_items(items: &[PathBuf]) -> io::Result<()> {
+    if items.len() > MAX_QUEUE
+        || items.iter().any(|path| {
+            !path.is_absolute()
+                || !supported_path(path)
+                || path.to_str().is_none_or(|s| s.contains('\0'))
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Saved queue contains invalid or unsupported paths",
+        ));
+    }
+    Ok(())
 }
 
 /// Decide the next queue action after a track exits. An explicit skip wins
@@ -211,6 +307,41 @@ mod tests {
         queue.clear();
         assert_eq!(queue.next(0, true), None);
     }
+    #[test]
+    fn saved_queue_roundtrip_replacement_and_invalid_data() {
+        let dir = std::env::temp_dir().join(format!("yttray-player-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("player-queue.json");
+        let mut queue = PlayQueue::default();
+        queue.add([dir.join("missing song.mp3"), dir.join("video.mp4")]);
+        save_queue(&path, &queue).unwrap();
+        assert_eq!(load_queue(&path).unwrap().items(), queue.items());
+        queue.remove(0);
+        save_queue(&path, &queue).unwrap();
+        assert_eq!(load_queue(&path).unwrap().items(), queue.items());
+        let original = std::fs::read(&path).unwrap();
+        let oversized = PlayQueue {
+            items: vec![dir.join(format!(
+                "{}.mp3",
+                "x".repeat(MAX_SAVED_QUEUE_BYTES as usize)
+            ))],
+        };
+        assert!(save_queue(&path, &oversized).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        for content in [
+            r#"{"version":2,"items":[]}"#,
+            r#"{"version":1,"items":["relative.mp3"]}"#,
+            r#"{"version":1,"items":[],"extra":true}"#,
+            "not json",
+        ] {
+            std::fs::write(&path, content).unwrap();
+            assert!(load_queue(&path).is_err());
+        }
+        std::fs::write(&path, vec![b'x'; MAX_SAVED_QUEUE_BYTES as usize + 1]).unwrap();
+        assert!(load_queue(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn completion_handles_repeat_skip_stop_and_failure() {
         let mut queue = PlayQueue::default();

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Optional saved player queue
+
+- Explicitly save, append or delete a player queue in app data; no media or
+  playback position is stored and nothing is automatically resumed.
+
 ## Unreleased — Dark theme tokens
 
 - Align the shared dark canvas, surfaces, text and accent with FluentGruv dark

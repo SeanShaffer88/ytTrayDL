@@ -263,6 +263,8 @@ impl App {
         let mut stop = false;
         let mut skip_to = None;
         let mut remove = None;
+        let mut clear_queue = false;
+        let mut deduplicate = false;
         let mut up = None;
         let mut down = None;
         let mut queue_action = None;
@@ -349,7 +351,11 @@ impl App {
                             export_file = choose_playlist_output();
                         }
                         ui.label("UTF-8 local playlists only. Import skips URLs, shares and nested playlists. Export never overwrites.");
-                        if ui.button("Clear queue").clicked() { state.queue.clear(); state.selected = 0; }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.add_enabled(!state.queue.items().is_empty(), egui::Button::new("Clear queue")).clicked() { clear_queue = true; }
+                            if ui.add_enabled(state.queue.items().len() > 1, egui::Button::new("Remove duplicate paths")).clicked() { deduplicate = true; }
+                        });
+                        ui.label("Duplicate removal keeps the first matching path; it does not inspect files or ignore case.");
                         ui.label("Saved queue (optional; stores file paths in app data)");
                         ui.horizontal_wrapped(|ui| {
                             if ui.add_enabled(!state.queue.items().is_empty(), egui::Button::new("Save / replace saved queue")).clicked() { queue_action = Some(QueueIoAction::Save); }
@@ -382,6 +388,15 @@ impl App {
             },
         );
         self.show_player = open;
+        // Mutate only after rendering rows, whose indices were captured above.
+        if clear_queue {
+            state.queue.clear();
+            state.selected = 0;
+        } else if deduplicate {
+            let (removed, selected) = state.queue.remove_duplicates(state.selected);
+            state.selected = selected;
+            state.status = format!("Removed {removed} duplicate path(s).");
+        }
         if let Some(index) = remove {
             state.queue.remove(index);
             state.selected =

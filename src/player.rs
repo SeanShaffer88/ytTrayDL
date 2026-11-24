@@ -57,6 +57,32 @@ impl PlayQueue {
             .collect()
     }
 
+    /// Remove repeated path entries while retaining their first occurrence and
+    /// relative order. Returns (removed count, remapped selection). Comparison
+    /// is lexical Path equality; no filesystem access or case folding occurs.
+    pub fn remove_duplicates(&mut self, selected: usize) -> (usize, usize) {
+        let original_len = self.items.len();
+        let mut indices = std::collections::HashMap::new();
+        let mut unique = Vec::with_capacity(self.items.len());
+        let mut new_selection = 0;
+        for (index, path) in self.items.drain(..).enumerate() {
+            let mapped = if let Some(&first) = indices.get(&path) {
+                first
+            } else {
+                let first = unique.len();
+                indices.insert(path.clone(), first);
+                unique.push(path);
+                first
+            };
+            if index == selected {
+                new_selection = mapped;
+            }
+        }
+        let removed = original_len - unique.len();
+        self.items = unique;
+        (removed, new_selection)
+    }
+
     pub fn clear(&mut self) {
         self.items.clear();
     }
@@ -852,6 +878,38 @@ mod tests {
         assert_eq!(selection_after_remove(1, 1, 2), 1);
         assert_eq!(selection_after_remove(2, 2, 2), 1);
         assert_eq!(selection_after_remove(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn deduplicate_preserves_order_and_remaps_selection() {
+        let make_queue = || {
+            let mut queue = PlayQueue::default();
+            queue.add([
+                "a.mp3".into(),
+                "b.mp4".into(),
+                "a.mp3".into(),
+                "c.ogg".into(),
+                "b.mp4".into(),
+            ]);
+            queue
+        };
+        for (selected, expected) in [(0, 0), (1, 1), (2, 0), (3, 2), (4, 1), (99, 0)] {
+            let mut queue = make_queue();
+            assert_eq!(queue.remove_duplicates(selected), (2, expected));
+            assert_eq!(
+                queue.items(),
+                [
+                    PathBuf::from("a.mp3"),
+                    PathBuf::from("b.mp4"),
+                    PathBuf::from("c.ogg")
+                ]
+            );
+            assert_eq!(queue.remove_duplicates(expected), (0, expected));
+        }
+        assert_eq!(PlayQueue::default().remove_duplicates(0), (0, 0));
+        let mut queue = PlayQueue::default();
+        queue.add(["A.mp3".into(), "a.mp3".into()]);
+        assert_eq!(queue.remove_duplicates(1), (0, 1));
     }
 
     #[test]

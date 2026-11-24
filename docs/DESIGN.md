@@ -1,5 +1,12 @@
 # ytTrayDL — design notes
 
+## Subsequent hosted validation
+
+The Windows CI run 45482072492 passed the owned two-process fixture for URL,
+Downloads, Converter, Tags and repeated Player intent delivery through the
+native platform receiver. This does not verify interactive shortcut activation,
+window focus, physical hotkeys or display behavior.
+
 ## 2026-11-21 Audit Verification
 
 | Area | Status | Scope |

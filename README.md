@@ -106,7 +106,9 @@ files are never overwritten. It rejects queues containing network shares, URLs,
 non-UTF-8 or multiline paths, and an I/O failure may leave a partial file.
 Filter the queue by path without changing
 playback order; Up and Down move entries within the full queue, including hidden
-items. In Media & playback options, you can
+items. Remove duplicate paths keeps the first occurrence and preserves the
+selected track; it compares paths lexically without accessing files or ignoring
+case. In Media & playback options, you can
 explicitly save or replace one queue, append its entries later, or delete the
 saved queue. Saving records file paths in `player-queue.json` in the normal or
 portable app data folder; it does not save media or automatically resume

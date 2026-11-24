@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Player queue management
+
+- Remove duplicate queue paths on request while retaining order and selection.
+- Defer queue clearing until after row rendering to avoid stale row indices.
+
 ## Unreleased — Module intent forwarding validation
 
 - Exercise URL and all four module intents through the real Windows message

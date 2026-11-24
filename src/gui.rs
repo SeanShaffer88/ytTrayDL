@@ -10,6 +10,7 @@
 #[cfg(feature = "field-validation")]
 mod field_metrics;
 mod gui_windows;
+mod converter_window;
 mod settings_layout;
 
 use std::collections::VecDeque;
@@ -1013,6 +1014,7 @@ pub struct TrayHandles {
     id_autostart: tray_icon::menu::MenuId,
     id_download_clipboard: tray_icon::menu::MenuId,
     id_downloads: tray_icon::menu::MenuId,
+    id_converter: tray_icon::menu::MenuId,
     id_open_folder: tray_icon::menu::MenuId,
     id_pause_all: tray_icon::menu::MenuId,
     id_settings: tray_icon::menu::MenuId,
@@ -1112,6 +1114,8 @@ fn tray_item_name(t: &TrayHandles, id: &tray_icon::menu::MenuId) -> &'static str
         "download from clipboard"
     } else if *id == t.id_downloads {
         "downloads"
+    } else if *id == t.id_converter {
+        "video converter"
     } else if *id == t.id_open_folder {
         "open download folder"
     } else if *id == t.id_pause_all {
@@ -1350,6 +1354,8 @@ pub struct App {
     #[cfg_attr(not(windows), allow(dead_code))]
     tray_auto_checked: Option<bool>,
     pub show_downloads: bool,
+    pub show_converter: bool,
+    converter: converter_window::ConverterState,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
     /// The "closing the window — what should happen?" dialog.
@@ -1554,6 +1560,8 @@ impl App {
             tray_monitoring_checked: None,
             tray_auto_checked: None,
             show_downloads: false,
+            show_converter: false,
+            converter: converter_window::ConverterState::default(),
             show_about: false,
             confirm_hide_icon: false,
             confirm_close: false,
@@ -2236,6 +2244,17 @@ impl App {
                     self.show_panel = true;
                     ctx.request_repaint();
                 }
+                PlatformEvent::OpenConverter => {
+                    if self.show_converter {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of("yttraydl-converter"),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                    self.show_converter = true;
+                    self.show_panel = true;
+                    ctx.request_repaint();
+                }
                 PlatformEvent::ShowRequested => {
                     self.settings.tray_icon_visible = true;
                     self.tray_visible = true;
@@ -2889,6 +2908,7 @@ impl App {
         );
         let download_clipboard = MenuItem::new("Download from clipboard", true, None);
         let downloads = MenuItem::new("Downloads\u{2026}", true, None);
+        let converter = MenuItem::new("Video converter…", true, None);
         let open_folder = MenuItem::new("Open download folder", true, None);
         let pause_all = MenuItem::new("Pause all downloads", true, None);
         let settings_item = MenuItem::new("Settings\u{2026}", true, None);
@@ -2909,6 +2929,7 @@ impl App {
             hide_icon.id().clone(),
             about.id().clone(),
             exit.id().clone(),
+            converter.id().clone(),
         );
         let _ = menu.append_items(&[
             &header,
@@ -2918,6 +2939,7 @@ impl App {
             &PredefinedMenuItem::separator(),
             &download_clipboard,
             &downloads,
+            &converter,
             &open_folder,
             &pause_all,
             &PredefinedMenuItem::separator(),
@@ -2975,6 +2997,7 @@ impl App {
                 id_autostart: ids.2,
                 id_download_clipboard: ids.3,
                 id_downloads: ids.4,
+                id_converter: ids.11,
                 id_open_folder: ids.5,
                 id_pause_all: ids.6,
                 id_settings: ids.7,
@@ -3051,6 +3074,7 @@ impl App {
                 item_name,
                 id_download_clipboard,
                 id_downloads,
+                id_converter,
                 id_settings,
                 id_about,
                 id_exit,
@@ -3060,6 +3084,7 @@ impl App {
                     tray_item_name(t, &ev.id),
                     t.id_download_clipboard.clone(),
                     t.id_downloads.clone(),
+                    t.id_converter.clone(),
                     t.id_settings.clone(),
                     t.id_about.clone(),
                     t.id_exit.clone(),
@@ -3086,6 +3111,9 @@ impl App {
                 }
             } else if ev.id == id_downloads {
                 self.show_downloads = true;
+                self.show_panel = true;
+            } else if ev.id == id_converter {
+                self.show_converter = true;
                 self.show_panel = true;
             } else if ev.id == id_settings {
                 // Settings is its own window (0.5.1) — opening
@@ -3292,6 +3320,7 @@ impl eframe::App for App {
         self.popup_ui(ctx);
         self.settings_ui(ctx);
         self.downloads_ui(ctx);
+        self.converter_ui(ctx);
         self.toasts_ui(ctx);
         self.about_ui(ctx);
         self.hide_icon_confirm_ui(ctx);

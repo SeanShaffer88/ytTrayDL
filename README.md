@@ -46,6 +46,15 @@ or a portable zip.
     with your default quality and folder; a small toast confirms it finished
     (and failures are always reported, never silent).
 
+The **Video converter** opens from the panel or tray, or via the optional
+installer desktop shortcut (`yttraydl.exe --converter` in portable mode). It
+converts one local file at a time to MP4, MKV or WebM using ffmpeg. Select a
+new output filename with the matching extension; existing files are not
+intentionally overwritten. Closing the converter window leaves a conversion
+running; cancellation or failure can leave a partial output file. Batch
+conversion, trimming, cropping, hardware presets and progress reporting are
+not available yet.
+
 The installer can optionally create a separate **ytTrayDL Downloads** desktop
 shortcut. It opens the Downloads window, including when ytTrayDL is already
 running. Portable users can launch `yttraydl.exe --downloads` directly.

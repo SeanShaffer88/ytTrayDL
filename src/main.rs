@@ -32,13 +32,20 @@ fn main() -> eframe::Result<()> {
         .cloned();
 
     let open_downloads = args.iter().any(|arg| arg == "--downloads");
-    let setup = platform::setup_with_launch_intent(show, open_downloads);
+    let open_converter = args.iter().any(|arg| arg == "--converter");
+    let setup = platform::setup_with_launch_intent(show, open_downloads || open_converter);
     yttraydl::diag_log(&format!(
         "launch: v{} background={background} show={show} already_running={}",
         env!("CARGO_PKG_VERSION"),
         setup.already_running
     ));
     if setup.already_running {
+        if open_converter {
+            if let Err(error) = platform::forward_open_converter() {
+                yttraydl::diag_log(&format!("Converter launch forwarding failed: {error}"));
+                platform::fatal_error_box("ytTrayDL could not open Video converter", &error);
+            }
+        }
         if open_downloads {
             if let Err(error) = platform::forward_open_downloads() {
                 yttraydl::diag_log(&format!("Downloads launch forwarding failed: {error}"));
@@ -54,7 +61,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let open_panel = show || !background || open_downloads;
+    let open_panel = show || !background || open_downloads || open_converter;
     let icon = gui::app_icon_data();
     let options = eframe::NativeOptions {
         // Glow (OpenGL), pinned explicitly — see Cargo.toml for
@@ -82,6 +89,7 @@ fn main() -> eframe::Result<()> {
             Box::new(move |cc| {
                 let mut app = gui::App::new(cc, setup, open_panel, manual_url.clone());
                 app.show_downloads = open_downloads;
+                app.show_converter = open_converter;
                 Ok(Box::new(app))
             }),
         )

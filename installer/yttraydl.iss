@@ -59,6 +59,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "downloadsicon"; Description: "Create a desktop shortcut for Downloads"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "convertericon"; Description: "Create a desktop shortcut for Video converter"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "startup"; Description: "Start ytTrayDL when Windows starts (tray, no window)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
@@ -75,6 +76,8 @@ Name: "{autoprograms}\ytTrayDL"; Filename: "{app}\{#AppExe}"; Comment: "Clipboar
 Name: "{autodesktop}\ytTrayDL"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 Name: "{autodesktop}\ytTrayDL Downloads"; Filename: "{app}\{#AppExe}"; Parameters: "--downloads"; Tasks: downloadsicon
+
+Name: "{autodesktop}\ytTrayDL Video Converter"; Filename: "{app}\{#AppExe}"; Parameters: "--converter"; Tasks: convertericon
 
 [Registry]
 ; Same value ytTrayDL's own "Start with Windows" writes, with the
@@ -93,6 +96,8 @@ Filename: "{app}\{#AppExe}"; Description: "Launch ytTrayDL"; Flags: nowait posti
 [UninstallDelete]
 ; Exact legacy optional shortcut only; never delete a directory or sibling.
 Type: files; Name: "{autodesktop}\ytTrayDL.lnk"
+Type: files; Name: "{autodesktop}\ytTrayDL Downloads.lnk"
+Type: files; Name: "{autodesktop}\ytTrayDL Video Converter.lnk"
 
 [Code]
 var

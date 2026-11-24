@@ -34,6 +34,8 @@ pub enum PlatformEvent {
     ManualUrl(String),
     /// Open the existing Downloads window from a direct launch.
     OpenDownloads,
+    /// Open the local video converter from a direct launch.
+    OpenConverter,
 }
 
 /// Owns the platform listeners. Dropping it stops the listener
@@ -95,6 +97,18 @@ pub fn forward_open_downloads() -> Result<(), String> {
     }
 }
 
+/// Deliver a direct video-converter request to the running instance.
+pub fn forward_open_converter() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_impl::forward_open_converter()
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Launch intent forwarding is only supported on Windows".into())
+    }
+}
+
 /// Deliver an explicit CLI URL to the running instance, with a bounded wait.
 pub fn forward_manual_url(url: &str) -> Result<(), String> {
     #[cfg(windows)]
@@ -112,6 +126,8 @@ pub fn forward_manual_url(url: &str) -> Result<(), String> {
 const MANUAL_URL_MESSAGE: usize = 0x59545501;
 #[cfg(any(windows, test))]
 const OPEN_DOWNLOADS_MESSAGE: usize = 0x59545502;
+#[cfg(any(windows, test))]
+const OPEN_CONVERTER_MESSAGE: usize = 0x59545503;
 
 #[cfg(any(windows, test))]
 fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
@@ -121,6 +137,7 @@ fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
     match message {
         MANUAL_URL_MESSAGE => manual_url_payload(bytes).map(PlatformEvent::ManualUrl),
         OPEN_DOWNLOADS_MESSAGE if bytes == b"downloads" => Some(PlatformEvent::OpenDownloads),
+        OPEN_CONVERTER_MESSAGE if bytes == b"converter" => Some(PlatformEvent::OpenConverter),
         _ => None,
     }
 }
@@ -479,7 +496,9 @@ mod clipboard_tests {
     use super::{clipboard_allocation_units, clipboard_event_text, decode_clipboard_units};
     #[test]
     fn launch_intents_are_separate_from_urls_and_bounded() {
-        use super::{copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
+        use super::{copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
+        assert_eq!(copydata_event(OPEN_CONVERTER_MESSAGE, b"converter"), Some(PlatformEvent::OpenConverter));
+        assert_eq!(copydata_event(OPEN_CONVERTER_MESSAGE, b"downloads"), None);
         assert_eq!(
             copydata_event(OPEN_DOWNLOADS_MESSAGE, b"downloads"),
             Some(PlatformEvent::OpenDownloads)

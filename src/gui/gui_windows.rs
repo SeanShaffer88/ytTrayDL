@@ -888,6 +888,10 @@ impl App {
             }
         });
 
+        if ui.button("Video converter…").on_hover_text("Open the local video converter").clicked() {
+            self.show_converter = true;
+        }
+
         // Active downloads (compact).
         let active: Vec<(u64, String, String, f32, Option<String>, JobState)> = self
             .downloads

@@ -8,7 +8,7 @@
 //!
 //! All three report through the same mpsc channel the GUI drains.
 
-use super::{Platform, PlatformEvent, PlatformSetup};
+use super::{Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
@@ -51,7 +51,6 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "ytTrayDL";
 const MUTEX_NAME: &str = "Local\\ytTrayDL_SingleInstance_v1";
 const SHOW_EVENT_NAME: &str = "Local\\ytTrayDL_ShowYourself_v1";
-use super::{MANUAL_URL_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
 
 static SENDER: OnceLock<Sender<PlatformEvent>> = OnceLock::new();
 static LISTENER_HWND: OnceLock<isize> = OnceLock::new();
@@ -179,6 +178,10 @@ pub fn forward_manual_url(url: &str) -> Result<(), String> {
 
 pub fn forward_open_downloads() -> Result<(), String> {
     forward_copydata(OPEN_DOWNLOADS_MESSAGE, b"downloads")
+}
+
+pub fn forward_open_converter() -> Result<(), String> {
+    forward_copydata(OPEN_CONVERTER_MESSAGE, b"converter")
 }
 
 fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {

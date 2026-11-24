@@ -1,8 +1,9 @@
 # Modular product direction
 
 This document records the intended direction; most modules are not implemented yet.
-The existing Downloads window has an optional direct-launch desktop shortcut;
-its Windows runtime behavior still needs verification.
+The existing Downloads window and the initial single-file video converter have
+optional direct-launch desktop shortcuts; Windows runtime behavior still needs
+verification. Batch conversion and additional converter features are pending.
 ytTrayDL remains a Windows-first tray application; the existing downloader and
 its settings continue to work while new capabilities are added incrementally.
 
@@ -10,7 +11,7 @@ its settings continue to work while new capabilities are added incrementally.
 
 - **Downloader:** the existing panel, download popup and queue remain available.
 - **Video converter:** a separate window for converting local media, including
-  a conversion queue and output choices.
+  output choices; a conversion queue is planned.
 - **Lyrics and tags:** a separate window for working with local audio metadata,
   artwork and lyrics. Existing lyrics must not be silently overwritten.
 - **Player:** a separate window for music and video playback, with its own

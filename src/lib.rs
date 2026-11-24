@@ -14,6 +14,7 @@
 //! - [`platform`] — Win32 clipboard listener, single-instance,
 //!   autostart, shell helpers (with non-Windows fallbacks).
 
+pub mod converter;
 pub mod process;
 pub mod window_geometry;
 

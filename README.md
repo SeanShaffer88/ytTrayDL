@@ -101,6 +101,9 @@ points and has entry, depth and queue limits. Inaccessible entries are reported.
 You can also import UTF-8 M3U/M3U8 playlists: relative paths resolve against the
 playlist folder, while URLs, network-share entries and nested playlists are
 skipped. Import appends paths only; it never fetches media or starts playback.
+Export writes a UTF-8 M3U/M3U8 with absolute paths to a new file; existing
+files are never overwritten. It rejects queues containing network shares, URLs,
+non-UTF-8 or multiline paths, and an I/O failure may leave a partial file.
 Filter the queue by path without changing
 playback order; Up and Down move entries within the full queue, including hidden
 items. In Media & playback options, you can

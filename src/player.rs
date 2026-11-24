@@ -139,6 +139,22 @@ pub fn import_playlist(path: &Path, capacity: usize) -> Result<PlaylistImport, S
     parse_playlist(text, base, capacity.min(MAX_QUEUE))
 }
 
+/// Reject URL and network-share references while allowing Windows verbatim
+/// local drive paths (returned by `canonicalize`) to round-trip in playlists.
+fn unsafe_playlist_reference(value: &str) -> bool {
+    if value.contains('\0') || value.contains("://") || value.starts_with("//") {
+        return true;
+    }
+    if let Some(rest) = value.strip_prefix("\\\\?\\") {
+        let bytes = rest.as_bytes();
+        return !(bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/'));
+    }
+    value.starts_with("\\\\")
+}
+
 fn parse_playlist(text: &str, base: &Path, capacity: usize) -> Result<PlaylistImport, String> {
     let mut result = PlaylistImport {
         files: Vec::new(),
@@ -153,11 +169,7 @@ fn parse_playlist(text: &str, base: &Path, capacity: usize) -> Result<PlaylistIm
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if line.contains('\0')
-            || line.contains("://")
-            || line.starts_with("\\\\")
-            || line.starts_with("//")
-        {
+        if unsafe_playlist_reference(line) {
             result.skipped += 1;
             continue;
         }
@@ -183,6 +195,57 @@ fn parse_playlist(text: &str, base: &Path, capacity: usize) -> Result<PlaylistIm
         });
     }
     Ok(result)
+}
+
+/// Export one UTF-8 M3U playlist to a new file; never overwrite an existing
+/// destination. Path conversion is validated before the output is created.
+/// Files that no longer exist are retained, but URLs, network shares and paths
+/// that cannot be represented safely as a single line reject the entire export.
+/// An I/O failure after creation can leave a partial file.
+pub fn export_playlist(path: &Path, queue: &PlayQueue) -> Result<(), String> {
+    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+    if !["m3u", "m3u8"]
+        .iter()
+        .any(|ext| extension.eq_ignore_ascii_case(ext))
+    {
+        return Err("Choose an M3U or M3U8 output filename".into());
+    }
+    let current =
+        std::env::current_dir().map_err(|e| format!("Cannot resolve relative paths: {e}"))?;
+    let mut text = String::from("#EXTM3U\n");
+    for entry in queue.items() {
+        let raw = entry.to_str().ok_or("Playlist paths must be UTF-8")?;
+        if unsafe_playlist_reference(raw) || raw.contains(['\r', '\n']) || !supported_path(entry) {
+            return Err("Queue contains a URL, share, unsupported or multiline path".into());
+        }
+        let absolute = if entry.is_absolute() {
+            entry.clone()
+        } else {
+            current.join(entry)
+        };
+        let line = absolute.to_str().ok_or("Playlist paths must be UTF-8")?;
+        if !absolute.is_absolute()
+            || unsafe_playlist_reference(line)
+            || line.contains(['\r', '\n'])
+            || line.len() > MAX_PLAYLIST_LINE_BYTES
+        {
+            return Err("Queue contains a path that cannot be exported safely".into());
+        }
+        text.push_str(line);
+        text.push('\n');
+        if text.len() as u64 > MAX_PLAYLIST_BYTES {
+            return Err("Playlist is too large".into());
+        }
+    }
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| format!("Cannot create playlist: {e}"))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| format!("Cannot write playlist; a partial file may remain: {e}"))
 }
 
 /// A bounded scan result. `limit_reached` means a scan limit was reached;
@@ -662,6 +725,42 @@ mod tests {
         assert!(import_playlist(&path, 10).is_err());
         std::fs::write(&path, vec![b'x'; MAX_PLAYLIST_BYTES as usize + 1]).unwrap();
         assert!(import_playlist(&path, 10).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn playlist_export_round_trips_and_never_overwrites() {
+        let dir =
+            std::env::temp_dir().join(format!("yttray-playlist-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let mut queue = PlayQueue::default();
+        queue.add([
+            dir.join("music & one.mp3"),
+            dir.join("missing.flac"),
+            dir.join("music & one.mp3"),
+        ]);
+        let out = dir.join("queue.m3u8");
+        export_playlist(&out, &queue).unwrap();
+        assert_eq!(
+            import_playlist(&out, MAX_QUEUE).unwrap().files,
+            queue.items()
+        );
+        let bytes = std::fs::read(&out).unwrap();
+        assert!(export_playlist(&out, &queue).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), bytes);
+        let mut invalid = PlayQueue::default();
+        invalid.add([PathBuf::from("https://example.test/song.mp3")]);
+        assert!(export_playlist(&dir.join("bad.m3u"), &invalid).is_err());
+        assert!(!dir.join("bad.m3u").exists());
+        let mut multiline = PlayQueue::default();
+        multiline.add([PathBuf::from("line\nbreak.mp3")]);
+        assert!(export_playlist(&dir.join("bad.m3u"), &multiline).is_err());
+        assert!(!dir.join("bad.m3u").exists());
+        assert!(!unsafe_playlist_reference(r"\\?\C:\Music\song.mp3"));
+        assert!(unsafe_playlist_reference(r"\\?\UNC\host\share\song.mp3"));
+        assert!(unsafe_playlist_reference(r"\\host\share\song.mp3"));
+        assert!(export_playlist(&dir.join("out.txt"), &queue).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

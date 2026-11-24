@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Player playlist export
+
+- Export a local queue to a new UTF-8 M3U/M3U8 file without overwriting existing
+  files. Reject paths that cannot safely round-trip in a local playlist.
+
 ## 0.11.0 — Converter, player and dark theme
 
 ### Player playlist import

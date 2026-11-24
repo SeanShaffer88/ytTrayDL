@@ -16,6 +16,20 @@ fn pick_playlist() -> Option<std::path::PathBuf> {
     }
 }
 
+fn choose_playlist_output() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        rfd::FileDialog::new()
+            .add_filter("M3U playlist", &["m3u8", "m3u"])
+            .set_file_name("ytTrayDL-queue.m3u8")
+            .save_file()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 struct PlayerResult {
     index: usize,
     result: Result<(), String>,
@@ -27,6 +41,7 @@ enum QueueIoResult {
     Deleted(Result<(), String>),
     Scanned(Result<player::FolderScan, String>),
     Imported(Result<player::PlaylistImport, String>),
+    Exported(Result<(), String>),
     OptionsSaved(Result<(), String>),
     OptionsLoaded(Result<player::PlayerOptions, String>),
 }
@@ -179,6 +194,10 @@ impl App {
                     QueueIoResult::Imported(Err(error)) => {
                         format!("Playlist import failed: {error}")
                     }
+                    QueueIoResult::Exported(Ok(())) => "Playlist exported to a new file.".into(),
+                    QueueIoResult::Exported(Err(error)) => {
+                        format!("Playlist export failed: {error}")
+                    }
                     QueueIoResult::OptionsSaved(Ok(())) => {
                         "Player options saved to app data.".into()
                     }
@@ -249,6 +268,7 @@ impl App {
         let mut queue_action = None;
         let mut scan_folder = None;
         let mut playlist_file: Option<std::path::PathBuf> = None;
+        let mut export_file: Option<std::path::PathBuf> = None;
         let mut cancel_scan = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-player"),
@@ -325,7 +345,10 @@ impl App {
                         if ui.add_enabled(state.queue.items().len() < player::MAX_QUEUE, egui::Button::new("Import M3U playlist…")).clicked() {
                             playlist_file = pick_playlist();
                         }
-                        ui.label("UTF-8 local playlists only. URLs, network shares and nested playlists are skipped.");
+                        if ui.add_enabled(!state.queue.items().is_empty(), egui::Button::new("Export M3U playlist…")).clicked() {
+                            export_file = choose_playlist_output();
+                        }
+                        ui.label("UTF-8 local playlists only. Import skips URLs, shares and nested playlists. Export never overwrites.");
                         if ui.button("Clear queue").clicked() { state.queue.clear(); state.selected = 0; }
                         ui.label("Saved queue (optional; stores file paths in app data)");
                         ui.horizontal_wrapped(|ui| {
@@ -395,6 +418,18 @@ impl App {
             self.background.spawn(move |_| {
                 let result = player::import_playlist(&path, capacity);
                 let _ = tx.send(QueueIoResult::Imported(result));
+                wake.request_repaint();
+            });
+        }
+        if let Some(path) = export_file {
+            let queue = state.queue.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let wake = ctx.clone();
+            state.queue_io = Some(rx);
+            state.status = "Exporting playlist…".into();
+            self.background.spawn(move |_| {
+                let result = player::export_playlist(&path, &queue);
+                let _ = tx.send(QueueIoResult::Exported(result));
                 wake.request_repaint();
             });
         }

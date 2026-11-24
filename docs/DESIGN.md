@@ -482,6 +482,12 @@ interactive Windows DPI/monitor validation remain unverified. These partial
 changes do not establish full FluentGruv compliance.
 
 
+Player M3U export: **Unverified** interactively on Windows. Unit tests cover
+UTF-8 queue round-trips, existing-file protection and invalid paths, including
+Windows verbatim drive and UNC path classification. File dialogs, portable use,
+external player compatibility and actual Windows export need validation. An
+I/O failure after file creation may leave a partial playlist.
+
 Player M3U import: **Unverified** interactively on Windows. Unit tests cover
 UTF-8 parsing, bounds, relative paths, rejected URL/share entries and queue
 capacity. File-picker behavior, encoding compatibility, drive/UNC paths and

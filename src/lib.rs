@@ -15,6 +15,7 @@
 //!   autostart, shell helpers (with non-Windows fallbacks).
 
 pub mod converter;
+pub mod lyrics;
 pub mod process;
 pub mod tags;
 pub mod window_geometry;

@@ -888,7 +888,11 @@ impl App {
             }
         });
 
-        if ui.button("Video converter…").on_hover_text("Open the local video converter").clicked() {
+        if ui
+            .button("Video converter…")
+            .on_hover_text("Open the local video converter")
+            .clicked()
+        {
             self.show_converter = true;
         }
 

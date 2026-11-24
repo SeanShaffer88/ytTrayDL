@@ -918,7 +918,9 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            serde_json::from_str::<Settings>(&json).unwrap().audio_quality,
+            serde_json::from_str::<Settings>(&json)
+                .unwrap()
+                .audio_quality,
             AudioQuality::Kbps320
         );
     }

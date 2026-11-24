@@ -496,8 +496,14 @@ mod clipboard_tests {
     use super::{clipboard_allocation_units, clipboard_event_text, decode_clipboard_units};
     #[test]
     fn launch_intents_are_separate_from_urls_and_bounded() {
-        use super::{copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
-        assert_eq!(copydata_event(OPEN_CONVERTER_MESSAGE, b"converter"), Some(PlatformEvent::OpenConverter));
+        use super::{
+            copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
+            OPEN_DOWNLOADS_MESSAGE,
+        };
+        assert_eq!(
+            copydata_event(OPEN_CONVERTER_MESSAGE, b"converter"),
+            Some(PlatformEvent::OpenConverter)
+        );
         assert_eq!(copydata_event(OPEN_CONVERTER_MESSAGE, b"downloads"), None);
         assert_eq!(
             copydata_event(OPEN_DOWNLOADS_MESSAGE, b"downloads"),
@@ -510,7 +516,10 @@ mod clipboard_tests {
         assert_eq!(copydata_event(MANUAL_URL_MESSAGE, b"downloads"), None);
         assert_eq!(copydata_event(0, b"downloads"), None);
         assert_eq!(
-            copydata_event(OPEN_DOWNLOADS_MESSAGE, &vec![b'x'; super::MAX_MANUAL_URL_BYTES + 1]),
+            copydata_event(
+                OPEN_DOWNLOADS_MESSAGE,
+                &vec![b'x'; super::MAX_MANUAL_URL_BYTES + 1]
+            ),
             None
         );
         assert_eq!(

@@ -7,10 +7,10 @@
 //! accent. Every interactive control carries a tooltip (hover text),
 //! and no essential information is tooltip-only.
 
+mod converter_window;
 #[cfg(feature = "field-validation")]
 mod field_metrics;
 mod gui_windows;
-mod converter_window;
 mod settings_layout;
 
 use std::collections::VecDeque;

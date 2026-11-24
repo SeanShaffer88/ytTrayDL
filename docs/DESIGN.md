@@ -474,10 +474,12 @@ shipped). The system:
 
 ## Verification matrix
 
-Video converter MVP: **Unverified**. Added argument/path validation tests, but
-actual ffmpeg conversions, cancellation, window lifecycle, tray launch, direct
-launch and installer shortcut behavior require real Windows testing. This
-initial implementation handles one file at a time, not batch conversion.
+Video converter including sequential batch: **Unverified** on Windows. Added
+argument/path and batch worker tests. A Linux standalone harness using the
+converter module and a substitute process runner converted two short files
+with ffmpeg; this is not a full application or owned-process test. Real Windows
+conversion, cancellation, window lifecycle, tray launch, direct launch,
+installer shortcut behavior and batch conflicts still require Windows testing.
 
 Downloads direct-launch intent and optional desktop shortcut: **Unverified**
 on Windows. Cold launch, running-instance delivery, focus, installer upgrade

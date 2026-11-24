@@ -8,7 +8,10 @@
 //!
 //! All three report through the same mpsc channel the GUI drains.
 
-use super::{Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
+use super::{
+    Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
+    OPEN_DOWNLOADS_MESSAGE,
+};
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
@@ -327,10 +330,7 @@ unsafe extern "system" fn wnd_proc(
             let Some(event) = super::copydata_event(data.dwData, bytes) else {
                 return 0;
             };
-            if SENDER
-                .get()
-                .is_some_and(|tx| tx.send(event).is_ok())
-            {
+            if SENDER.get().is_some_and(|tx| tx.send(event).is_ok()) {
                 show_main_window();
                 1
             } else {

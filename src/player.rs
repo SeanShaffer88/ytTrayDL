@@ -1,6 +1,7 @@
 //! Local playback queue and shell-free invocation of a separately installed ffplay.
 //! Media and players are owned by the application; no online playback is supported.
 use crate::process::{self, CancellationToken, ProcessLimits, ProcessSpec};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ pub fn supported_path(path: &Path) -> bool {
         })
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct PlayQueue {
     items: Vec<PathBuf>,
 }
@@ -42,6 +43,20 @@ impl PlayQueue {
         }
         added
     }
+    /// Return original queue indices matching a case-insensitive path filter.
+    /// Filtering never changes playback order and duplicate entries remain distinct.
+    pub fn matching_indices(&self, query: &str) -> Vec<usize> {
+        let query = query.trim().to_lowercase();
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                (query.is_empty() || path.to_string_lossy().to_lowercase().contains(&query))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
     pub fn clear(&mut self) {
         self.items.clear();
     }
@@ -78,6 +93,414 @@ impl PlayQueue {
             None
         }
     }
+}
+
+/// Results from an explicitly selected local M3U/M3U8 playlist. Entries remain
+/// in playlist order; importing never opens or fetches referenced media.
+#[derive(Debug)]
+pub struct PlaylistImport {
+    pub files: Vec<PathBuf>,
+    pub skipped: usize,
+    pub limit_reached: bool,
+}
+
+const MAX_PLAYLIST_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_PLAYLIST_LINE_BYTES: usize = 32_768;
+
+/// Read a bounded UTF-8 M3U/M3U8 file. Comments/EXTINF are ignored; URL,
+/// network-share, nested-playlist and unsupported entries are skipped. Relative
+/// paths are resolved against the playlist's directory; existence is checked
+/// only when playback is requested. No referenced files are opened here.
+pub fn import_playlist(path: &Path, capacity: usize) -> Result<PlaylistImport, String> {
+    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+    if !["m3u", "m3u8"]
+        .iter()
+        .any(|ext| extension.eq_ignore_ascii_case(ext))
+    {
+        return Err("Choose an M3U or M3U8 playlist".into());
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("Cannot open playlist: {e}"))?;
+    if !path.is_file() {
+        return Err("Playlist must be a file".into());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .map_err(|e| format!("Cannot open playlist: {e}"))?
+        .take(MAX_PLAYLIST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Cannot read playlist: {e}"))?;
+    if bytes.len() as u64 > MAX_PLAYLIST_BYTES {
+        return Err("Playlist is too large".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "Playlist must be UTF-8")?;
+    let base = path.parent().ok_or("Playlist has no parent directory")?;
+    parse_playlist(text, base, capacity.min(MAX_QUEUE))
+}
+
+fn parse_playlist(text: &str, base: &Path, capacity: usize) -> Result<PlaylistImport, String> {
+    let mut result = PlaylistImport {
+        files: Vec::new(),
+        skipped: 0,
+        limit_reached: false,
+    };
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        if line.len() > MAX_PLAYLIST_LINE_BYTES {
+            return Err("Playlist contains an oversized line".into());
+        }
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.contains('\0')
+            || line.contains("://")
+            || line.starts_with("\\\\")
+            || line.starts_with("//")
+        {
+            result.skipped += 1;
+            continue;
+        }
+        let candidate = Path::new(line);
+        if !supported_path(candidate)
+            || (!candidate.is_absolute()
+                && (candidate.has_root()
+                    || candidate
+                        .components()
+                        .any(|c| matches!(c, std::path::Component::Prefix(_)))))
+        {
+            result.skipped += 1;
+            continue;
+        }
+        if result.files.len() >= capacity {
+            result.limit_reached = true;
+            break;
+        }
+        result.files.push(if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            base.join(candidate)
+        });
+    }
+    Ok(result)
+}
+
+/// A bounded scan result. `limit_reached` means a scan limit was reached;
+/// `skipped` counts unreadable entries and intentionally ignored links.
+#[derive(Debug)]
+pub struct FolderScan {
+    pub files: Vec<PathBuf>,
+    pub skipped: usize,
+    pub limit_reached: bool,
+}
+
+/// Scan a selected folder off-thread. No child symlink or Windows reparse
+/// point is followed. Traversal, results, depth and cancellation are bounded.
+pub fn scan_folder(
+    folder: &Path,
+    capacity: usize,
+    token: &CancellationToken,
+) -> Result<FolderScan, String> {
+    scan_folder_with_limits(folder, capacity.min(MAX_QUEUE), 10_000, 512, 16, token)
+}
+
+fn scan_folder_with_limits(
+    folder: &Path,
+    capacity: usize,
+    max_entries: usize,
+    max_dirs: usize,
+    max_depth: usize,
+    token: &CancellationToken,
+) -> Result<FolderScan, String> {
+    if token.is_cancelled() {
+        return Err("Folder scan cancelled".into());
+    }
+    let root = folder
+        .canonicalize()
+        .map_err(|e| format!("Cannot open folder: {e}"))?;
+    if !root.is_dir() {
+        return Err("Choose a directory".into());
+    }
+    let mut result = FolderScan {
+        files: Vec::new(),
+        skipped: 0,
+        limit_reached: false,
+    };
+    if capacity == 0 {
+        result.limit_reached = true;
+        return Ok(result);
+    }
+    let mut pending = vec![(root, 0usize)];
+    let mut entries_seen = 0usize;
+    let mut dirs_seen = 0usize;
+    while let Some((directory, depth)) = pending.pop() {
+        if token.is_cancelled() {
+            return Err("Folder scan cancelled".into());
+        }
+        if dirs_seen >= max_dirs {
+            result.limit_reached = true;
+            break;
+        }
+        dirs_seen += 1;
+        let reader = match std::fs::read_dir(&directory) {
+            Ok(reader) => reader,
+            Err(e) if depth == 0 => return Err(format!("Cannot read folder: {e}")),
+            Err(_) => {
+                result.skipped += 1;
+                continue;
+            }
+        };
+        let mut paths = Vec::new();
+        for entry in reader {
+            if token.is_cancelled() {
+                return Err("Folder scan cancelled".into());
+            }
+            if entries_seen >= max_entries {
+                result.limit_reached = true;
+                break;
+            }
+            entries_seen += 1;
+            match entry {
+                Ok(entry) => paths.push(entry.path()),
+                Err(_) => result.skipped += 1,
+            }
+        }
+        paths.sort();
+        for path in paths {
+            if token.is_cancelled() {
+                return Err("Folder scan cancelled".into());
+            }
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    result.skipped += 1;
+                    continue;
+                }
+            };
+            if is_link_or_reparse(&metadata) {
+                result.skipped += 1;
+                continue;
+            }
+            if metadata.is_dir() {
+                if depth >= max_depth || pending.len() >= max_dirs {
+                    result.limit_reached = true;
+                } else {
+                    pending.push((path, depth + 1));
+                }
+            } else if metadata.is_file() && supported_path(&path) {
+                result.files.push(path);
+                if result.files.len() >= capacity {
+                    result.limit_reached = true;
+                    break;
+                }
+            }
+        }
+        if entries_seen >= max_entries {
+            result.limit_reached = true;
+            break;
+        }
+        if result.files.len() >= capacity {
+            break;
+        }
+    }
+    if token.is_cancelled() {
+        return Err("Folder scan cancelled".into());
+    }
+    result.files.sort();
+    Ok(result)
+}
+
+fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_type().is_symlink()
+            || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+/// Preserve the selected track after removing an entry before it. If the
+/// selected entry itself is removed, select its successor (or the new last).
+pub fn selection_after_remove(selected: usize, removed: usize, remaining: usize) -> usize {
+    if remaining == 0 {
+        return 0;
+    }
+    selected
+        .saturating_sub(usize::from(removed < selected))
+        .min(remaining - 1)
+}
+
+/// Maximum on-disk playlist size; file paths may contain private information.
+pub const MAX_SAVED_QUEUE_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedQueue {
+    version: u8,
+    items: Vec<PathBuf>,
+}
+
+/// Explicitly saved queue in the application's normal or portable data directory.
+pub fn saved_queue_path() -> PathBuf {
+    crate::settings::config_dir().join("player-queue.json")
+}
+
+/// Save a snapshot atomically. Relative paths are resolved now, without
+/// requiring the files to exist. It never changes the original media files.
+pub fn save_queue(path: &Path, queue: &PlayQueue) -> io::Result<()> {
+    let current = std::env::current_dir()?;
+    let items: Vec<PathBuf> = queue
+        .items()
+        .iter()
+        .map(|item| {
+            if item.is_absolute() {
+                item.clone()
+            } else {
+                current.join(item)
+            }
+        })
+        .collect();
+    validate_saved_items(&items)?;
+    let bytes = serde_json::to_vec_pretty(&SavedQueue { version: 1, items })?;
+    if bytes.len() as u64 > MAX_SAVED_QUEUE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Saved queue is too large",
+        ));
+    }
+    write_atomic(path, &bytes)
+}
+
+/// Player preferences are saved only when explicitly requested; loading them
+/// does not launch a process or start playback.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlayerOptions {
+    version: u8,
+    pub ffplay_path: String,
+    pub volume: u8,
+    pub repeat: bool,
+}
+impl PlayerOptions {
+    pub fn new(ffplay_path: String, volume: u8, repeat: bool) -> Self {
+        Self {
+            version: 1,
+            ffplay_path,
+            volume,
+            repeat,
+        }
+    }
+    fn validate(&self) -> io::Result<()> {
+        if self.version != 1
+            || self.volume > 100
+            || self.ffplay_path.len() > 32_768
+            || self.ffplay_path.contains('\0')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid or unsupported player options",
+            ));
+        }
+        Ok(())
+    }
+}
+const MAX_PLAYER_OPTIONS_BYTES: u64 = 128 * 1024;
+
+pub fn player_options_path() -> PathBuf {
+    crate::settings::config_dir().join("player-options.json")
+}
+
+/// Save options with write-then-rename, preserving the previous file if validation fails.
+pub fn save_options(path: &Path, options: &PlayerOptions) -> io::Result<()> {
+    options.validate()?;
+    let bytes = serde_json::to_vec_pretty(options)?;
+    if bytes.len() as u64 > MAX_PLAYER_OPTIONS_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Player options are too large",
+        ));
+    }
+    write_atomic(path, &bytes)
+}
+
+/// A malformed, unsupported or oversized file is rejected without changing state.
+pub fn load_options(path: &Path) -> io::Result<PlayerOptions> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_PLAYER_OPTIONS_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PLAYER_OPTIONS_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Player options are too large",
+        ));
+    }
+    let options: PlayerOptions = serde_json::from_slice(&bytes)?;
+    options.validate()?;
+    Ok(options)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    let result = (|| {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+/// Read and strictly validate a saved queue without touching the live queue.
+/// Missing media is retained; playback reports inaccessible files when selected.
+pub fn load_queue(path: &Path) -> io::Result<PlayQueue> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SAVED_QUEUE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SAVED_QUEUE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Saved queue is too large",
+        ));
+    }
+    let saved: SavedQueue = serde_json::from_slice(&bytes)?;
+    if saved.version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Unsupported saved queue version",
+        ));
+    }
+    validate_saved_items(&saved.items)?;
+    Ok(PlayQueue { items: saved.items })
+}
+
+fn validate_saved_items(items: &[PathBuf]) -> io::Result<()> {
+    if items.len() > MAX_QUEUE
+        || items.iter().any(|path| {
+            !path.is_absolute()
+                || !supported_path(path)
+                || path.to_str().is_none_or(|s| s.contains('\0'))
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Saved queue contains invalid or unsupported paths",
+        ));
+    }
+    Ok(())
 }
 
 /// Decide the next queue action after a track exits. An explicit skip wins
@@ -211,6 +634,162 @@ mod tests {
         queue.clear();
         assert_eq!(queue.next(0, true), None);
     }
+    #[test]
+    fn local_playlist_import_is_bounded_and_never_accepts_urls() {
+        let dir = std::env::temp_dir().join(format!("yttray-playlist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let path = dir.join("list.m3u8");
+        std::fs::write(&path, "\u{feff}#EXTM3U\n#EXTINF:12,Title\na song.MP3\nhttps://example.test/audio.mp3\nfile:///remote.mp4\n//server/share/a.mp3\nother.m3u\nfolder/second.flac\n").unwrap();
+        let result = import_playlist(&path, 10).unwrap();
+        assert_eq!(
+            result.files,
+            [dir.join("a song.MP3"), dir.join("folder/second.flac")]
+        );
+        assert_eq!(result.skipped, 4);
+        assert!(!result.limit_reached);
+        let result = import_playlist(&path, 1).unwrap();
+        assert_eq!(result.files, [dir.join("a song.MP3")]);
+        assert!(result.limit_reached);
+        assert!(import_playlist(&dir.join("list.txt"), 10).is_err());
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(import_playlist(&path, 10).is_err());
+        std::fs::write(
+            &path,
+            format!("{}.mp3", "x".repeat(MAX_PLAYLIST_LINE_BYTES)),
+        )
+        .unwrap();
+        assert!(import_playlist(&path, 10).is_err());
+        std::fs::write(&path, vec![b'x'; MAX_PLAYLIST_BYTES as usize + 1]).unwrap();
+        assert!(import_playlist(&path, 10).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn player_options_round_trip_and_reject_invalid_files() {
+        let dir =
+            std::env::temp_dir().join(format!("yttray-player-options-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("player-options.json");
+        let options = PlayerOptions::new("C:/Tools/ffplay.exe".into(), 35, true);
+        save_options(&path, &options).unwrap();
+        assert_eq!(load_options(&path).unwrap(), options);
+        let original = std::fs::read(&path).unwrap();
+        assert!(save_options(&path, &PlayerOptions::new("bad\0path".into(), 100, false)).is_err());
+        assert!(save_options(&path, &PlayerOptions::new(String::new(), 101, false)).is_err());
+        assert!(save_options(&path, &PlayerOptions::new("x".repeat(32769), 50, false)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        for text in [
+            r#"{"version":2,"ffplay_path":"","volume":50,"repeat":false}"#,
+            r#"{"version":1,"ffplay_path":"","volume":101,"repeat":false}"#,
+            r#"{"version":1,"ffplay_path":"","volume":50,"repeat":false,"extra":true}"#,
+            "broken",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert!(load_options(&path).is_err());
+        }
+        std::fs::write(&path, vec![b'x'; MAX_PLAYER_OPTIONS_BYTES as usize + 1]).unwrap();
+        assert!(load_options(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn folder_scan_is_bounded_sorted_and_cancellable() {
+        let dir = std::env::temp_dir().join(format!("yttray-player-scan-{}", std::process::id()));
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let nested = dir.join("nested");
+        for path in [
+            dir.join("B.mp3"),
+            dir.join("a.MP4"),
+            dir.join("ignore.txt"),
+            nested.join("c.flac"),
+        ] {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&nested, dir.join("link")).unwrap();
+        let token = CancellationToken::default();
+        let result = scan_folder(&dir, 10, &token).unwrap();
+        assert_eq!(
+            result.files,
+            [dir.join("B.mp3"), dir.join("a.MP4"), nested.join("c.flac")]
+        );
+        #[cfg(unix)]
+        assert_eq!(result.skipped, 1);
+        assert!(!result.limit_reached);
+        let capped = scan_folder(&dir, 1, &token).unwrap();
+        assert_eq!(capped.files.len(), 1);
+        assert!(capped.limit_reached);
+        let shallow = scan_folder_with_limits(&dir, 10, 100, 10, 0, &token).unwrap();
+        assert_eq!(shallow.files.len(), 2);
+        assert!(shallow.limit_reached);
+        let capped_entries = scan_folder_with_limits(&dir, 10, 1, 10, 10, &token).unwrap();
+        assert!(capped_entries.limit_reached);
+        token.cancel();
+        assert!(scan_folder(&dir, 10, &token)
+            .unwrap_err()
+            .contains("cancelled"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn filtering_keeps_original_indices_and_selection_tracks_removal() {
+        let mut queue = PlayQueue::default();
+        queue.add([
+            "Music/Álbum/First.MP3".into(),
+            "Other/second.mp4".into(),
+            "Music/Álbum/First.MP3".into(),
+        ]);
+        assert_eq!(queue.matching_indices("  áLBUM  "), [0, 2]);
+        assert_eq!(queue.matching_indices("second"), [1]);
+        assert!(queue.matching_indices("missing").is_empty());
+        assert_eq!(queue.matching_indices(" "), [0, 1, 2]);
+        assert_eq!(queue.next(0, false), Some(1));
+        assert!(queue.move_down(0));
+        assert_eq!(queue.matching_indices("ÁLBUM"), [1, 2]);
+        assert_eq!(selection_after_remove(2, 0, 2), 1);
+        assert_eq!(selection_after_remove(1, 1, 2), 1);
+        assert_eq!(selection_after_remove(2, 2, 2), 1);
+        assert_eq!(selection_after_remove(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn saved_queue_roundtrip_replacement_and_invalid_data() {
+        let dir = std::env::temp_dir().join(format!("yttray-player-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("player-queue.json");
+        let mut queue = PlayQueue::default();
+        queue.add([dir.join("missing song.mp3"), dir.join("video.mp4")]);
+        save_queue(&path, &queue).unwrap();
+        assert_eq!(load_queue(&path).unwrap().items(), queue.items());
+        queue.remove(0);
+        save_queue(&path, &queue).unwrap();
+        assert_eq!(load_queue(&path).unwrap().items(), queue.items());
+        let original = std::fs::read(&path).unwrap();
+        let oversized = PlayQueue {
+            items: vec![dir.join(format!(
+                "{}.mp3",
+                "x".repeat(MAX_SAVED_QUEUE_BYTES as usize)
+            ))],
+        };
+        assert!(save_queue(&path, &oversized).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        for content in [
+            r#"{"version":2,"items":[]}"#,
+            r#"{"version":1,"items":["relative.mp3"]}"#,
+            r#"{"version":1,"items":[],"extra":true}"#,
+            "not json",
+        ] {
+            std::fs::write(&path, content).unwrap();
+            assert!(load_queue(&path).is_err());
+        }
+        std::fs::write(&path, vec![b'x'; MAX_SAVED_QUEUE_BYTES as usize + 1]).unwrap();
+        assert!(load_queue(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn completion_handles_repeat_skip_stop_and_failure() {
         let mut queue = PlayQueue::default();

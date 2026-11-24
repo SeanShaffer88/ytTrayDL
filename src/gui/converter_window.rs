@@ -2,7 +2,7 @@
 use super::*;
 use yttraydl::converter::{
     self, AudioBitrate, BatchEdit, BatchProgress, EncodingQuality, ResizePreset, Rotation,
-    VideoProfile,
+    VideoEncoder, VideoProfile,
 };
 use yttraydl::process;
 
@@ -17,6 +17,7 @@ pub(super) struct ConverterState {
     output: String,
     profile: VideoProfile,
     quality: EncodingQuality,
+    encoder: VideoEncoder,
     audio_bitrate: AudioBitrate,
     trim_start: String,
     trim_end: String,
@@ -136,6 +137,19 @@ impl App {
                             ui.label("Audio-only profiles ignore video options; FLAC is lossless.");
                         }
                         ui.add_enabled_ui(!state.profile.is_audio_only(), |ui| {
+                        ui.label("Video encoder");
+                        egui::ComboBox::from_id_salt("converter-encoder")
+                            .selected_text(state.encoder.label())
+                            .show_ui(ui, |ui| {
+                                for encoder in VideoEncoder::ALL {
+                                    ui.selectable_value(&mut state.encoder, encoder, encoder.label());
+                                }
+                            });
+                        if state.encoder != VideoEncoder::Software {
+                            state.quality = EncodingQuality::EncoderDefault;
+                            ui.label("Hardware requires H.264/HEVC MP4 or MKV, a compatible GPU, driver and ffmpeg build. No automatic fallback.");
+                        }
+                        ui.add_enabled_ui(state.encoder == VideoEncoder::Software, |ui| {
                         ui.label("Video encoding quality");
                         egui::ComboBox::from_id_salt("converter-quality")
                             .selected_text(state.quality.label())
@@ -144,6 +158,7 @@ impl App {
                                     ui.selectable_value(&mut state.quality, quality, quality.label());
                                 }
                             });
+                        });
                         });
                         ui.label("Audio bitrate (lossy profiles)");
                         egui::ComboBox::from_id_salt("converter-audio-bitrate")
@@ -290,6 +305,11 @@ impl App {
             let batch_folder = state.batch_folder.clone();
             let profile = state.profile;
             let quality = state.quality;
+            let encoder = if profile.is_audio_only() {
+                VideoEncoder::Software
+            } else {
+                state.encoder
+            };
             let audio_bitrate = state.audio_bitrate;
             let trim_start = state.trim_start.clone();
             let trim_end = state.trim_end.clone();
@@ -320,17 +340,21 @@ impl App {
                             crop,
                             resize,
                             quality,
+                            encoder,
                             rotation,
                             mute_audio,
                             audio_bitrate,
                         })
                     });
+                let mut probe_context = None;
                 let specs = options.and_then(|options| {
                     converter::locate_ffmpeg(&settings, exe_dir.as_deref())
                         .ok_or_else(|| {
                             "ffmpeg not found. Configure or install it in Settings".to_string()
                         })
                         .and_then(|bin| {
+                            probe_context =
+                                Some((yttraydl::tags::locate_ffprobe(&bin), options.trim));
                             if start_batch {
                                 if batch_folder.trim().is_empty() {
                                     return Err("Choose a batch output folder".into());
@@ -355,9 +379,28 @@ impl App {
                         })
                 });
                 let result = specs.and_then(|specs| {
+                    let (probe, trim) =
+                        probe_context.expect("validated conversion has probe context");
+                    let mut duration = None;
+                    let mut started = std::time::Instant::now();
                     converter::run_batch_with_progress(&specs, &token, |event| {
                         let message = match event {
                             BatchProgress::Started { index, total } => {
+                                let message = format!("Preparing file {index} of {total}…");
+                                let _ = tx.send(ConverterMessage::Progress(message));
+                                wake.request_repaint();
+                                let path = if start_batch {
+                                    &batch_inputs[index - 1]
+                                } else {
+                                    std::path::Path::new(&input)
+                                };
+                                duration = probe
+                                    .as_deref()
+                                    .and_then(|probe| {
+                                        converter::probe_duration_us(probe, path, &token)
+                                    })
+                                    .and_then(|d| converter::trimmed_duration_us(d, trim));
+                                started = std::time::Instant::now();
                                 format!("Converting file {index} of {total}…")
                             }
                             BatchProgress::EncodedTime {
@@ -366,12 +409,27 @@ impl App {
                                 microseconds,
                             } => {
                                 let seconds = microseconds / 1_000_000;
-                                format!(
+                                let mut text = format!(
                                     "File {index} of {total} · encoded {:02}:{:02}:{:02}",
                                     seconds / 3600,
                                     (seconds / 60) % 60,
                                     seconds % 60
-                                )
+                                );
+                                if let Some((percent, eta)) = duration.and_then(|d| {
+                                    converter::estimate_progress(microseconds, d, started.elapsed())
+                                }) {
+                                    text.push_str(&format!(" · ~{percent}%"));
+                                    if let Some(eta) = eta {
+                                        let seconds = eta.as_secs();
+                                        text.push_str(&format!(
+                                            " · ETA ~{:02}:{:02}:{:02}",
+                                            seconds / 3600,
+                                            (seconds / 60) % 60,
+                                            seconds % 60
+                                        ));
+                                    }
+                                }
+                                text
                             }
                         };
                         let _ = tx.send(ConverterMessage::Progress(message));

@@ -165,6 +165,126 @@ fn parse_seconds(value: &str) -> Result<u64, String> {
         .ok_or_else(|| "Trim time is too large".into())
 }
 
+/// Explicit hardware encoders. They require a compatible GPU, driver and ffmpeg
+/// build; no automatic fallback is performed if initialization fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VideoEncoder {
+    #[default]
+    Software,
+    Nvenc,
+    Qsv,
+    Amf,
+}
+impl VideoEncoder {
+    pub const ALL: [Self; 4] = [Self::Software, Self::Nvenc, Self::Qsv, Self::Amf];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Software => "Software (default)",
+            Self::Nvenc => "NVIDIA NVENC (H.264 / HEVC)",
+            Self::Qsv => "Intel Quick Sync (H.264 / HEVC)",
+            Self::Amf => "AMD AMF (H.264 / HEVC)",
+        }
+    }
+    fn codec(self, profile: VideoProfile) -> Result<Option<&'static str>, String> {
+        if self == Self::Software {
+            return Ok(None);
+        }
+        let hevc = match profile {
+            VideoProfile::Mp4 | VideoProfile::Mkv => false,
+            VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => true,
+            _ => {
+                return Err("Hardware encoding supports only H.264 or HEVC MP4/MKV profiles".into())
+            }
+        };
+        Ok(Some(match (self, hevc) {
+            (Self::Nvenc, false) => "h264_nvenc",
+            (Self::Nvenc, true) => "hevc_nvenc",
+            (Self::Qsv, false) => "h264_qsv",
+            (Self::Qsv, true) => "hevc_qsv",
+            (Self::Amf, false) => "h264_amf",
+            (Self::Amf, true) => "hevc_amf",
+            (Self::Software, _) => unreachable!(),
+        }))
+    }
+}
+
+/// Approximate the trimmed output duration from the container duration.
+/// Unknown/zero lengths and trims beyond EOF intentionally produce no estimate.
+pub fn trimmed_duration_us(source_us: u64, trim: TrimRange) -> Option<u64> {
+    let start = trim.start_ms.checked_mul(1000)?;
+    let end = match trim.end_ms {
+        Some(end) => source_us.min(end.checked_mul(1000)?),
+        None => source_us,
+    };
+    end.checked_sub(start).filter(|&v| v > 0)
+}
+
+/// Conservative per-file estimate; 100% is reserved for successful completion.
+/// ETA is withheld until at least one second and one percent of work have elapsed.
+pub fn estimate_progress(
+    encoded_us: u64,
+    duration_us: u64,
+    elapsed: std::time::Duration,
+) -> Option<(u8, Option<std::time::Duration>)> {
+    if duration_us == 0 {
+        return None;
+    }
+    let fraction = (encoded_us as f64 / duration_us as f64).clamp(0.0, 1.0);
+    let percent = ((fraction * 100.0) as u8).min(99);
+    let remaining = if (0.01..1.0).contains(&fraction) && elapsed.as_secs() >= 1 {
+        let seconds = elapsed.as_secs_f64() * (1.0 - fraction) / fraction;
+        (seconds.is_finite() && seconds <= 7.0 * 24.0 * 3600.0)
+            .then(|| std::time::Duration::from_secs_f64(seconds))
+    } else {
+        None
+    };
+    Some((percent, remaining))
+}
+
+/// Probe a local file for an approximate container duration. Errors, unknown
+/// duration, or cancellation return None; conversion remains usable without ffprobe.
+pub fn probe_duration_us(ffprobe: &Path, input: &Path, token: &CancellationToken) -> Option<u64> {
+    if token.is_cancelled() {
+        return None;
+    }
+    let input = input.canonicalize().ok()?;
+    if !input.is_file() {
+        return None;
+    }
+    let spec = ProcessSpec::new(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            "-i",
+        ])
+        .arg(input);
+    let output = process::run_capture(
+        &spec,
+        ProcessLimits {
+            timeout: std::time::Duration::from_secs(15),
+            stdout_bytes: 4096,
+            stderr_bytes: 8192,
+            line_bytes: 4096,
+        },
+        token,
+    )
+    .ok()?;
+    let value = std::str::from_utf8(&output.stdout)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    if !value.is_finite() || value <= 0.0 || value > 7.0 * 24.0 * 3600.0 {
+        return None;
+    }
+    let micros = (value * 1_000_000.0).round() as u64;
+    (micros > 0).then_some(micros)
+}
+
 /// A numeric crop rectangle in source pixels, before any resize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CropRect {
@@ -315,6 +435,7 @@ pub struct ConversionOptions {
     pub crop: Option<CropRect>,
     pub resize: ResizePreset,
     pub quality: EncodingQuality,
+    pub encoder: VideoEncoder,
     pub rotation: Rotation,
     pub mute_audio: bool,
     pub audio_bitrate: AudioBitrate,
@@ -486,6 +607,10 @@ pub fn build_conversion_with_options(
     if let Some(end_ms) = trim.end_ms {
         spec = spec.arg("-t").arg(seconds_arg(end_ms - trim.start_ms));
     }
+    let hardware_codec = options.encoder.codec(profile)?;
+    if hardware_codec.is_some() && options.quality != EncodingQuality::EncoderDefault {
+        return Err("Hardware encoding requires encoder-default quality".into());
+    }
     if profile.is_audio_only() {
         if options.mute_audio {
             return Err("Audio-only output cannot remove audio".into());
@@ -507,6 +632,7 @@ pub fn build_conversion_with_options(
             VideoProfile::WebmAv1 => ("libaom-av1", "libopus"),
             _ => unreachable!(),
         };
+        let video = hardware_codec.unwrap_or(video);
         if let Some(filters) = video_filters(options) {
             spec = spec.arg("-vf").arg(filters);
         }
@@ -686,6 +812,9 @@ pub fn run_batch_with_progress(
             return Err(format!("cancelled before file {index} of {total}"));
         }
         progress(BatchProgress::Started { index, total });
+        if token.is_cancelled() {
+            return Err(format!("cancelled before file {index} of {total}"));
+        }
         let mut parser = ProgressParser::default();
         let mut last_report = None;
         let limits = ProcessLimits {
@@ -820,6 +949,91 @@ mod tests {
         )
         .unwrap();
         assert!(!default.args.iter().any(|arg| arg == "-crf"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn duration_and_estimates_handle_trim_unknown_and_overrun() {
+        use std::time::Duration;
+        let trim = TrimRange::parse("1", "4").unwrap();
+        assert_eq!(trimmed_duration_us(10_000_000, trim), Some(3_000_000));
+        assert_eq!(trimmed_duration_us(2_000_000, trim), Some(1_000_000));
+        assert_eq!(trimmed_duration_us(500_000, trim), None);
+        assert_eq!(trimmed_duration_us(0, TrimRange::default()), None);
+        assert_eq!(estimate_progress(1, 0, Duration::ZERO), None);
+        assert_eq!(
+            estimate_progress(500_000, 2_000_000, Duration::from_secs(4)),
+            Some((25, Some(Duration::from_secs(12))))
+        );
+        assert_eq!(
+            estimate_progress(500_000, 2_000_000, Duration::ZERO),
+            Some((25, None))
+        );
+        assert_eq!(
+            estimate_progress(3_000_000, 2_000_000, Duration::from_secs(4)),
+            Some((99, None))
+        );
+    }
+
+    #[test]
+    fn hardware_encoder_requires_supported_profile_and_default_quality() {
+        let dir = std::env::temp_dir().join(format!("yttraydl-hardware-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.mp4");
+        std::fs::write(&input, b"fixture").unwrap();
+        for (encoder, h264, hevc) in [
+            (VideoEncoder::Nvenc, "h264_nvenc", "hevc_nvenc"),
+            (VideoEncoder::Qsv, "h264_qsv", "hevc_qsv"),
+            (VideoEncoder::Amf, "h264_amf", "hevc_amf"),
+        ] {
+            for (profile, codec) in [(VideoProfile::Mp4, h264), (VideoProfile::MkvHevc, hevc)] {
+                let options = ConversionOptions {
+                    encoder,
+                    ..Default::default()
+                };
+                let spec = build_conversion_with_options(
+                    Path::new("ffmpeg"),
+                    &input,
+                    &dir.join(format!("out.{}", profile.extension())),
+                    profile,
+                    options,
+                )
+                .unwrap();
+                assert!(spec
+                    .args
+                    .windows(2)
+                    .any(|p| p[0] == "-c:v" && p[1] == codec));
+                assert!(!spec.args.iter().any(|p| p == "-crf"));
+                assert!(build_conversion_with_options(
+                    Path::new("ffmpeg"),
+                    &input,
+                    &dir.join(format!("out.{}", profile.extension())),
+                    profile,
+                    ConversionOptions {
+                        quality: EncodingQuality::High,
+                        ..options
+                    }
+                )
+                .is_err());
+            }
+            for profile in [
+                VideoProfile::Webm,
+                VideoProfile::Mp4Av1,
+                VideoProfile::Mp3Audio,
+            ] {
+                assert!(build_conversion_with_options(
+                    Path::new("ffmpeg"),
+                    &input,
+                    &dir.join(format!("out.{}", profile.extension())),
+                    profile,
+                    ConversionOptions {
+                        encoder,
+                        ..Default::default()
+                    }
+                )
+                .is_err());
+            }
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

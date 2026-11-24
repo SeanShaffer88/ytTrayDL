@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.11.0 — Converter, player and dark theme
+
+### Player playlist import
+
+- Import bounded UTF-8 M3U/M3U8 playlists into the local queue, without fetching
+  URLs or opening referenced files during import.
+
+### Player options
+
+- Explicitly save and restore the player executable path, starting volume and
+  repeat preference without starting playback. Bound the options panel height.
+
+### Player folder scan
+
+- Add local folders recursively using a cancellable, bounded background scan;
+  skip symlinks and reparse points and report limits or inaccessible entries.
+
+### Player queue search
+
+- Filter queue paths without changing playback order; preserve the selected
+  track when an earlier entry is removed.
+
+### Optional saved player queue
+
+- Explicitly save, append or delete a player queue in app data; no media or
+  playback position is stored and nothing is automatically resumed.
+
+### Dark theme tokens
+
+- Align the shared dark canvas, surfaces, text and accent with FluentGruv dark
+  tokens, use inverse text on bright primary actions, and strengthen custom
+  focus outlines. Full light-theme, keyboard and Windows DPI validation remains.
+
+### Converter progress
+
+- Show approximate per-file progress and ETA using a bounded, cancellable
+  ffprobe duration lookup; fall back to encoded time when duration is unknown.
+
+### Hardware encoding
+
+- Add opt-in NVENC, Quick Sync and AMF encoding for H.264/HEVC MP4 and MKV.
+  Compatible hardware, drivers and ffmpeg encoders are required; real Windows
+  hardware validation is outstanding.
+
 ## 0.10.0 — Local player foundation
 
 - Add a separate local playback queue with repeat, reorder, remove and track controls.

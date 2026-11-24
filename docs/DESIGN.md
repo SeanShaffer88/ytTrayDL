@@ -474,6 +474,41 @@ shipped). The system:
 
 ## Verification matrix
 
+FluentGruv dark token alignment: **Partially verified**. Automated GUI tests
+check selected palette assignments and key text/background contrast ratios.
+The application still contains custom legacy styling; light-theme switching,
+complete keyboard and focus behavior, actual contrast in every widget, and
+interactive Windows DPI/monitor validation remain unverified. These partial
+changes do not establish full FluentGruv compliance.
+
+
+Player M3U import: **Unverified** interactively on Windows. Unit tests cover
+UTF-8 parsing, bounds, relative paths, rejected URL/share entries and queue
+capacity. File-picker behavior, encoding compatibility, drive/UNC paths and
+actual playback require Windows validation. Import does not fetch media.
+
+Player option storage: **Unverified** interactively on Windows. Unit tests
+cover bounded, versioned option files, validation and round-trip behavior; the
+player stores options only on explicit request and never autoplays when loading.
+Small-window scrolling, keyboard access, portable storage and real Windows
+lifecycle need interactive validation.
+
+Player folder scan: **Unverified** interactively on Windows. Library tests cover
+supported extensions, ordering, bounds, cancellation and Unix symlinks. Windows
+reparse-point behavior, cancellation during a scan, inaccessible folders and
+interactive queue updates require Windows validation.
+
+Player queue filtering: **Unverified** interactively on Windows. Queue filter
+matching, underlying indices and selection after removal have unit coverage;
+filtered list accessibility, keyboard navigation and rendering require Windows
+validation. Filtering changes only the view, not playback order.
+
+Optional saved player queue: **Unverified** interactively on Windows. Tests
+cover bounded versioned storage, overwrite and invalid-file handling. Storage is
+explicitly requested, keeps paths but not media, and is not auto-loaded; app data
+is retained on uninstall. GUI lifecycle, inaccessible media and portable-mode
+storage still require interactive Windows validation.
+
 Local player: **Unverified** on Windows and no real ffplay playback has been
 run in the development sandbox. An isolated Linux harness covers queue bounds,
 ordering, progression/repeat, local argv construction and cancellation of an
@@ -496,6 +531,16 @@ are not full app, installer or Windows tests. Run the opt-in media test with
 artwork, window lifecycle, cancellation, shortcut forwarding and installer
 upgrade/uninstall remain unverified. ffprobe may not expose every lyrics frame;
 remuxing may not preserve every tag or artwork. The original remains untouched.
+
+Converter percentage and ETA: **Unverified** on Windows. The optional ffprobe
+lookup and trim-aware estimate are approximate, especially with unusual
+containers or variable encoding speed. Cancellation, fallback and visual updates
+need interactive Windows testing.
+
+Hardware converter encoders: **Unverified** on real Windows hardware. Unit tests
+cover encoder selection, profile restrictions and quality-option validation;
+no claim is made that a particular GPU, driver or ffmpeg build supports these
+encoders. Software remains the default, with no silent hardware fallback.
 
 Video converter including batch, trim, crop, resize, queue editing, codec
 profiles, quality presets, encoded-time progress, rotation, audio removal and

@@ -67,8 +67,15 @@ after cropping and before resizing. Audio can be removed from video outputs.
 Crop coordinates are in source pixels, and
 ffmpeg can adjust offsets at frame edges; some encoders require even crop
 dimensions. Batch inputs can be reordered or removed before conversion. Live
-status reports the current file and encoded media time, not a percentage or an
-ETA. Hardware-accelerated presets are not available yet.
+status reports the current file and encoded media time. When ffprobe can read
+a container duration, an approximate per-file percentage and ETA are also shown;
+trim, unusual timestamps and variable encoding speed can make estimates
+inaccurate. If duration is unavailable, conversion still runs without an
+estimate. Optional NVIDIA NVENC, Intel Quick Sync and AMD AMF video encoders are
+available for H.264 or HEVC MP4/MKV profiles. They require a compatible GPU,
+driver and ffmpeg build; failures do not silently fall back to software. Hardware
+uses encoder-default quality rather than the software CRF choices. Hardware
+encoding has not been tested on real Windows hardware.
 
 The **Lyrics & tags** window opens from the panel, tray, optional installer
 shortcut, or `yttraydl.exe --tags`. Load a local MP3, M4A, FLAC, OGG or Opus
@@ -87,15 +94,32 @@ are required for tag inspection and export, and a failed or cancelled export
 may leave a partial output. Closing the window leaves the job running.
 
 The **Player** opens from the panel, tray, optional desktop shortcut, or
-`yttraydl.exe --player`. It manages a session-only queue of up to 500 local audio
-and video files, with reorder, remove, repeat, previous, next and stop. Playback
+`yttraydl.exe --player`. It manages a queue of up to 500 local audio and video files, with reorder,
+remove, repeat, previous, next and stop. Add a folder to scan for supported media
+in its subfolders; the cancellable scan skips symbolic links and Windows reparse
+points and has entry, depth and queue limits. Inaccessible entries are reported.
+You can also import UTF-8 M3U/M3U8 playlists: relative paths resolve against the
+playlist folder, while URLs, network-share entries and nested playlists are
+skipped. Import appends paths only; it never fetches media or starts playback.
+Filter the queue by path without changing
+playback order; Up and Down move entries within the full queue, including hidden
+items. In Media & playback options, you can
+explicitly save or replace one queue, append its entries later, or delete the
+saved queue. Saving records file paths in `player-queue.json` in the normal or
+portable app data folder; it does not save media or automatically resume
+playback. The queue is otherwise session-only, and app data is retained on
+uninstall. Playback
 uses a separate ffplay window: Space pauses, arrows seek, 9/0 adjust volume and
 M mutes. Closing that playback window advances the queue; closing the manager
 does not stop playback. The starting volume applies when each track starts.
+Use Save player options and Restore player options to explicitly store or
+restore the ffplay path, starting volume and repeat preference in app data.
+Restoring options never starts playback. The options section scrolls separately
+on smaller windows.
 ffplay is **not** included in the managed ffmpeg download or installer; install
 it separately, put it next to the selected ffmpeg or on PATH, or select its
-executable in the player options. Network playback and playlist files are not
-supported. The player and its Windows shortcuts have not yet been interactively
+executable in the player options. Network playback is not supported; playlist files are imported into the queue,
+not played directly. The player and its Windows shortcuts have not yet been interactively
 verified on Windows.
 
 The installer can optionally create a separate **ytTrayDL Downloads** desktop

@@ -2,6 +2,11 @@ name: Release packages
 
 on:
   workflow_dispatch:
+    inputs:
+      repair_run:
+        description: "Run ID containing checked release-packages to verify and publish an existing draft"
+        required: false
+        type: string
   push:
     tags: ['v*']
 
@@ -10,6 +15,7 @@ permissions:
 
 jobs:
   windows-release:
+    if: github.event_name != 'workflow_dispatch' || inputs.repair_run == ''
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -116,7 +122,9 @@ jobs:
           $assets = @(Get-ChildItem -LiteralPath release -File | ForEach-Object { $_.FullName })
           gh release create $env:GITHUB_REF_NAME --verify-tag --draft --title "ytTrayDL v$version" --notes-file "docs/RELEASE-$version.md" @assets
           if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed' }
-          $published = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | ConvertFrom-Json
+          $releaseUrl = gh release view $env:GITHUB_REF_NAME --json apiUrl --jq .apiUrl
+          if ($LASTEXITCODE -ne 0 -or -not $releaseUrl) { throw 'Draft release lookup failed' }
+          $published = gh api "$releaseUrl" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $published.assets.Count -ne $assets.Count) { throw 'Release asset listing failed' }
           foreach ($asset in $assets) {
             $file = Get-Item -LiteralPath $asset
@@ -126,3 +134,55 @@ jobs:
           }
           gh release edit $env:GITHUB_REF_NAME --draft=false
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
+
+  repair-draft:
+    if: github.event_name == 'workflow_dispatch' && inputs.repair_run != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify original build artifacts and publish draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.repair_run }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'Invalid run ID'; exit 1; }
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version'; exit 1; }
+          TAG="v$VERSION"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > run.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > tag.json
+          python3 -c 'import json,sys; r=json.load(open("run.json")); t=json.load(open("tag.json")); assert r["event"] == "push" and r["head_branch"] == sys.argv[1] and r["head_sha"] == t["object"]["sha"], "Run does not build the release tag"' "$TAG"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" > jobs.json
+          python3 -c 'import json; j=json.load(open("jobs.json"))["jobs"]; assert len(j)==1; s={x["name"]: x["conclusion"] for x in j[0]["steps"]}; assert all(s.get(n)=="success" for n in ("Validate tag and notes", "Run native tests and build release executable", "Verify Inno compiler engine", "Build and verify packages", "Upload checked packages as build artifacts")), "Release build checks did not pass"'
+          gh run download "$RUN_ID" --name release-packages --dir checked
+          RELEASE_URL=$(gh release view "$TAG" --json apiUrl --jq .apiUrl)
+          gh api "$RELEASE_URL" > release.json
+          python3 - "$VERSION" <<'PYCODE'
+          import hashlib, json, pathlib, sys
+          version = sys.argv[1]
+          root = pathlib.Path('checked')
+          expected = {'SHA256SUMS.txt', f'ytTrayDL-Setup-v{version}-windows-x64.exe', f'ytTrayDL-v{version}-windows-x64.zip'}
+          assert {p.name for p in root.iterdir()} == expected, 'Unexpected build artifact inventory'
+          release = json.load(open('release.json'))
+          assert release['draft'] and release['tag_name'] == f'v{version}', 'Expected the matching draft release'
+          remote = {a['name']: a for a in release['assets']}
+          assert set(remote) == expected, 'Unexpected release asset inventory'
+          for name in expected:
+              data = (root / name).read_bytes()
+              asset = remote[name]
+              assert asset['state'] == 'uploaded' and asset['size'] == len(data)
+              assert asset['digest'] == 'sha256:' + hashlib.sha256(data).hexdigest(), f'Uploaded digest mismatch: {name}'
+          sums = {}
+          for line in (root / 'SHA256SUMS.txt').read_text().splitlines():
+              digest, name = line.split('  ', 1)
+              sums[name] = digest
+          assert set(sums) == expected - {'SHA256SUMS.txt'}
+          for name, digest in sums.items():
+              assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, f'Checksum mismatch: {name}'
+          PYCODE
+          gh release edit "$TAG" --draft=false

@@ -1527,6 +1527,19 @@ pub struct App {
     field_metrics: field_metrics::Metrics,
 }
 
+/// Reopen an existing module without resetting its state; repeated requests
+/// ask the window manager to focus its viewport rather than creating another.
+fn request_module(ctx: &egui::Context, visible: &mut bool, viewport: &'static str) {
+    if *visible {
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::from_hash_of(viewport),
+            egui::ViewportCommand::Focus,
+        );
+    }
+    *visible = true;
+    ctx.request_repaint();
+}
+
 impl App {
     fn restore_new_window_geometry(&mut self, kind: WindowKind) {
         let index = kind.index();
@@ -2310,46 +2323,22 @@ impl App {
                     self.handle_detected_url(&url, true);
                 }
                 PlatformEvent::OpenDownloads => {
-                    if self.show_downloads {
-                        ctx.send_viewport_cmd_to(
-                            egui::ViewportId::from_hash_of("yttraydl-downloads"),
-                            egui::ViewportCommand::Focus,
-                        );
-                    }
-                    self.show_downloads = true;
+                    request_module(ctx, &mut self.show_downloads, "yttraydl-downloads");
                     self.show_panel = true;
                     ctx.request_repaint();
                 }
                 PlatformEvent::OpenConverter => {
-                    if self.show_converter {
-                        ctx.send_viewport_cmd_to(
-                            egui::ViewportId::from_hash_of("yttraydl-converter"),
-                            egui::ViewportCommand::Focus,
-                        );
-                    }
-                    self.show_converter = true;
+                    request_module(ctx, &mut self.show_converter, "yttraydl-converter");
                     self.show_panel = true;
                     ctx.request_repaint();
                 }
                 PlatformEvent::OpenTags => {
-                    if self.show_tags {
-                        ctx.send_viewport_cmd_to(
-                            egui::ViewportId::from_hash_of("yttraydl-tags"),
-                            egui::ViewportCommand::Focus,
-                        );
-                    }
-                    self.show_tags = true;
+                    request_module(ctx, &mut self.show_tags, "yttraydl-tags");
                     self.show_panel = true;
                     ctx.request_repaint();
                 }
                 PlatformEvent::OpenPlayer => {
-                    if self.show_player {
-                        ctx.send_viewport_cmd_to(
-                            egui::ViewportId::from_hash_of("yttraydl-player"),
-                            egui::ViewportCommand::Focus,
-                        );
-                    }
-                    self.show_player = true;
+                    request_module(ctx, &mut self.show_player, "yttraydl-player");
                     self.show_panel = true;
                     ctx.request_repaint();
                 }
@@ -3220,16 +3209,16 @@ impl App {
                     None => self.toast("Clipboard is empty or not text.", ToastKind::Info),
                 }
             } else if ev.id == id_downloads {
-                self.show_downloads = true;
+                request_module(ctx, &mut self.show_downloads, "yttraydl-downloads");
                 self.show_panel = true;
             } else if ev.id == id_converter {
-                self.show_converter = true;
+                request_module(ctx, &mut self.show_converter, "yttraydl-converter");
                 self.show_panel = true;
             } else if ev.id == id_tags {
-                self.show_tags = true;
+                request_module(ctx, &mut self.show_tags, "yttraydl-tags");
                 self.show_panel = true;
             } else if ev.id == id_player {
-                self.show_player = true;
+                request_module(ctx, &mut self.show_player, "yttraydl-player");
                 self.show_panel = true;
             } else if ev.id == id_settings {
                 // Settings is its own window (0.5.1) — opening
@@ -3520,6 +3509,41 @@ impl eframe::App for App {
                 .record("persistence", field_persist_start.elapsed());
             self.field_metrics
                 .record("update", field_update_start.elapsed());
+        }
+    }
+}
+
+#[cfg(test)]
+mod module_request_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_requests_focus_only_the_requested_existing_viewport() {
+        for name in [
+            "yttraydl-downloads",
+            "yttraydl-converter",
+            "yttraydl-tags",
+            "yttraydl-player",
+        ] {
+            let ctx = egui::Context::default();
+            let mut visible = false;
+            let first = ctx.run(egui::RawInput::default(), |ctx| {
+                request_module(ctx, &mut visible, name);
+            });
+            assert!(visible);
+            let id = egui::ViewportId::from_hash_of(name);
+            assert!(!first.viewport_output.get(&id).is_some_and(|o| o
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::Focus))));
+            let second = ctx.run(egui::RawInput::default(), |ctx| {
+                request_module(ctx, &mut visible, name);
+            });
+            assert!(visible);
+            assert!(second.viewport_output.get(&id).is_some_and(|o| o
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::Focus))));
         }
     }
 }

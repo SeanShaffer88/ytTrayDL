@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Module window focus
+
+- Repeated module requests from the main panel and tray now request focus on
+  the existing window, matching the single-instance launch-intent behavior.
+
 ## Unreleased — Main window and Rules navigation
 
 - Use a non-resizable main window sized to the supplied reference, retaining

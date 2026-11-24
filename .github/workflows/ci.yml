@@ -42,7 +42,7 @@ jobs:
         run: cargo clippy --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
       - name: Tests (full suite)
         run: |
-          cargo test --locked > /tmp/yttray-test-log 2>&1 || { python3 -c 'import pathlib; t=pathlib.Path("/tmp/yttray-test-log").read_text(errors="replace"); print("::error::" + t[-6500:].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))'; exit 1; }
+          cargo test --locked > /tmp/yttray-test-log 2>&1 || { python3 -c 'import pathlib; t=pathlib.Path("/tmp/yttray-test-log").read_text(errors="replace"); print("::error::" + t[t.find("failures:\n\n----"):][:3000].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))'; exit 1; }
       - name: Windows check
         run: cargo check --target x86_64-pc-windows-msvc --all-targets --locked
       - name: Field harness clippy (host)

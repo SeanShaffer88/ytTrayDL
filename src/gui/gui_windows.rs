@@ -11,7 +11,7 @@ use super::*;
 mod settings_pages;
 use yttraydl::platform;
 use yttraydl::settings::{
-    Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
+    AudioQuality, Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
 use yttraydl::window_geometry::{TransientWindow, WindowKind};
 use yttraydl::ytdlp::YtDlpSource;
@@ -887,6 +887,22 @@ impl App {
                 }
             }
         });
+
+        if ui
+            .button("Video converter…")
+            .on_hover_text("Open the local video converter")
+            .clicked()
+        {
+            self.show_converter = true;
+        }
+
+        if ui
+            .button("Lyrics & tags…")
+            .on_hover_text("Open the local audio tag editor")
+            .clicked()
+        {
+            self.show_tags = true;
+        }
 
         // Active downloads (compact).
         let active: Vec<(u64, String, String, f32, Option<String>, JobState)> = self

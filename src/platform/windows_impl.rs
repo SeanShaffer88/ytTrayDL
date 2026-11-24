@@ -8,7 +8,10 @@
 //!
 //! All three report through the same mpsc channel the GUI drains.
 
-use super::{Platform, PlatformEvent, PlatformSetup};
+use super::{
+    Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
+    OPEN_DOWNLOADS_MESSAGE, OPEN_TAGS_MESSAGE,
+};
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
@@ -51,7 +54,6 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "ytTrayDL";
 const MUTEX_NAME: &str = "Local\\ytTrayDL_SingleInstance_v1";
 const SHOW_EVENT_NAME: &str = "Local\\ytTrayDL_ShowYourself_v1";
-const MANUAL_URL_MESSAGE: usize = 0x59545501;
 
 static SENDER: OnceLock<Sender<PlatformEvent>> = OnceLock::new();
 static LISTENER_HWND: OnceLock<isize> = OnceLock::new();
@@ -74,7 +76,7 @@ pub struct Inner {
 // this struct's Drop, from the owning thread's process teardown.
 unsafe impl Send for Inner {}
 
-pub fn setup(show_on_launch: bool) -> PlatformSetup {
+pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
     let (tx, rx) = channel::<PlatformEvent>();
     let _ = SENDER.set(tx.clone());
 
@@ -88,7 +90,9 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
         unsafe {
             CloseHandle(mutex);
         }
-        signal_show_event();
+        if !has_launch_intent {
+            signal_show_event();
+        }
         return PlatformSetup {
             platform: Platform {
                 inner: Inner {
@@ -172,6 +176,22 @@ fn signal_show_event() {
 pub fn forward_manual_url(url: &str) -> Result<(), String> {
     let payload =
         super::manual_url_payload(url.as_bytes()).ok_or("expected a bounded HTTP(S) URL")?;
+    forward_copydata(MANUAL_URL_MESSAGE, payload.as_bytes())
+}
+
+pub fn forward_open_downloads() -> Result<(), String> {
+    forward_copydata(OPEN_DOWNLOADS_MESSAGE, b"downloads")
+}
+
+pub fn forward_open_converter() -> Result<(), String> {
+    forward_copydata(OPEN_CONVERTER_MESSAGE, b"converter")
+}
+
+pub fn forward_open_tags() -> Result<(), String> {
+    forward_copydata(OPEN_TAGS_MESSAGE, b"tags")
+}
+
+fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let class = wide("ytTrayDLMessageWindow");
@@ -186,7 +206,7 @@ pub fn forward_manual_url(url: &str) -> Result<(), String> {
         };
         if !hwnd.is_null() && window_executable_matches(hwnd, &exe) {
             let data = COPYDATASTRUCT {
-                dwData: MANUAL_URL_MESSAGE,
+                dwData: message,
                 cbData: payload.len() as u32,
                 lpData: payload.as_ptr() as *mut std::ffi::c_void,
             };
@@ -212,7 +232,7 @@ pub fn forward_manual_url(url: &str) -> Result<(), String> {
             return if sent != 0 && acknowledged == 1 {
                 Ok(())
             } else {
-                Err("the running instance did not accept the link".into())
+                Err("the running instance did not accept the request".into())
             };
         }
         if std::time::Instant::now() >= deadline {
@@ -220,7 +240,7 @@ pub fn forward_manual_url(url: &str) -> Result<(), String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    Err("the running instance's URL receiver was unavailable".into())
+    Err("the running instance's request receiver was unavailable".into())
 }
 
 fn window_executable_matches(hwnd: HWND, expected: &Path) -> bool {
@@ -304,21 +324,17 @@ unsafe extern "system" fn wnd_proc(
                 return 0;
             }
             let data = &*(lparam as *const COPYDATASTRUCT);
-            if data.dwData != MANUAL_URL_MESSAGE
-                || data.cbData == 0
+            if data.cbData == 0
                 || data.cbData as usize > super::MAX_MANUAL_URL_BYTES
                 || data.lpData.is_null()
             {
                 return 0;
             }
             let bytes = std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize);
-            let Some(url) = super::manual_url_payload(bytes) else {
+            let Some(event) = super::copydata_event(data.dwData, bytes) else {
                 return 0;
             };
-            if SENDER
-                .get()
-                .is_some_and(|tx| tx.send(PlatformEvent::ManualUrl(url)).is_ok())
-            {
+            if SENDER.get().is_some_and(|tx| tx.send(event).is_ok()) {
                 show_main_window();
                 1
             } else {

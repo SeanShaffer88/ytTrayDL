@@ -46,6 +46,46 @@ or a portable zip.
     with your default quality and folder; a small toast confirms it finished
     (and failures are always reported, never silent).
 
+The **Video converter** opens from the panel or tray, or via the optional
+installer desktop shortcut (`yttraydl.exe --converter` in portable mode). It
+converts local files to MP4, MKV or WebM using ffmpeg. Video profiles include
+H.264, HEVC, VP9 and AV1, plus selectable encoding quality. Audio-only MP3,
+M4A, FLAC and Opus profiles extract or convert the first audio stream, with
+optional lossy bitrate selection; FLAC remains lossless. HEVC and AV1
+require an ffmpeg build with the corresponding encoder; AV1 can be slow.
+For one file, select a new output filename with the matching extension. For a batch, select multiple
+files and an existing output folder; files are converted sequentially to
+`<name>.converted.<extension>`. Before starting, the batch rejects existing
+outputs and colliding names. A batch stops on the first error or cancellation;
+completed outputs are kept and a partial output may remain. Closing the
+window leaves conversion running. An optional start/end trim in seconds can be
+applied to a single file or every item in a batch. Trimming re-encodes the media
+rather than doing lossless stream-copy cutting. Optional numeric cropping is
+applied before a fit-within resize preset (480p through 4K); resizing preserves
+aspect ratio and does not upscale. Rotation (90°, 180° or 270°) is applied
+after cropping and before resizing. Audio can be removed from video outputs.
+Crop coordinates are in source pixels, and
+ffmpeg can adjust offsets at frame edges; some encoders require even crop
+dimensions. Batch inputs can be reordered or removed before conversion. Live
+status reports the current file and encoded media time, not a percentage or an
+ETA. Hardware-accelerated presets are not available yet.
+
+The **Lyrics & tags** window opens from the panel, tray, optional installer
+shortcut, or `yttraydl.exe --tags`. Load a local MP3, M4A, FLAC, OGG or Opus
+file to inspect title, artist, album, album artist, track, date, genre and
+lyrics detected by ffprobe. Embedded JPEG or PNG artwork can be exported to a
+new image file without modifying the input. Edit the
+fields or manually enter missing lyrics, then export to a new file with the same
+extension. The original and existing output files are not overwritten. Detected
+lyrics are not deliberately replaced; ffmpeg remuxing may omit or alter tags,
+lyrics or artwork it cannot represent, so verify the copy. This is not an online
+lyrics finder. ffmpeg and ffprobe are required, and a failed or cancelled export
+may leave a partial output. Closing the window leaves the job running.
+
+The installer can optionally create a separate **ytTrayDL Downloads** desktop
+shortcut. It opens the Downloads window, including when ytTrayDL is already
+running. Portable users can launch `yttraydl.exe --downloads` directly.
+
 Right-click the tray icon to pause monitoring, switch modes, open Settings,
 open the download folder, and more. Left-click toggles the control panel —
 click once to show it, click again to hide it.
@@ -85,6 +125,11 @@ click once to show it, click again to hide it.
 - **Subtitles-only and audio your way** — a preset that fetches
   just the subtitle files (`.srt`, no video or audio), and audio
   presets for MP3, M4A, Opus, FLAC, WAV or the original format.
+  Settings → Downloads → Quality offers encoder quality or 128–320 kbps
+  for MP3, M4A and Opus; this cannot improve the source quality.
+  Original and lossless audio are unaffected. yt-dlp may preserve an
+  existing matching audio format instead of re-encoding it, so the chosen
+  bitrate is a conversion target, not a guarantee.
 - **Channel watcher** — subscribe to channels or playlists and
   new uploads download themselves on an interval you choose
   (hourly by default).

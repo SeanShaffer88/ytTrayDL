@@ -252,8 +252,13 @@ pub fn build_download_args_full(
                 args.push("-x".into());
                 args.push("--audio-format".into());
                 args.push(fmt.into());
-                args.push("--audio-quality".into());
-                args.push("0".into());
+                if matches!(
+                    other,
+                    Preset::AudioMp3 | Preset::AudioM4a | Preset::AudioOpus
+                ) {
+                    args.push("--audio-quality".into());
+                    args.push(settings.audio_quality.ytdlp_value().into());
+                }
             } else {
                 // Height-capped video presets.
                 let h = other.max_height().unwrap_or(4320);
@@ -878,6 +883,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn audio_quality_only_applies_to_lossy_conversions() {
+        use crate::settings::AudioQuality;
+        for quality in AudioQuality::ALL {
+            let settings = Settings {
+                audio_quality: quality,
+                ..settings()
+            };
+            for preset in [Preset::AudioMp3, Preset::AudioM4a, Preset::AudioOpus] {
+                let args = build_download_args(&settings, preset, "url", false);
+                assert!(args
+                    .windows(2)
+                    .any(|pair| pair == ["--audio-quality", quality.ytdlp_value()]));
+            }
+            for preset in [
+                Preset::AudioOriginal,
+                Preset::AudioFlac,
+                Preset::AudioWav,
+                Preset::Best,
+                Preset::SubtitlesOnly,
+            ] {
+                let args = build_download_args(&settings, preset, "url", false);
+                assert!(!args.iter().any(|arg| arg == "--audio-quality"));
+            }
+        }
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.audio_quality, AudioQuality::Best);
+        let json = serde_json::to_string(&Settings {
+            audio_quality: AudioQuality::Kbps320,
+            ..settings()
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Settings>(&json)
+                .unwrap()
+                .audio_quality,
+            AudioQuality::Kbps320
+        );
     }
 
     #[test]

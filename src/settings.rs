@@ -78,6 +78,49 @@ pub enum DetectionScope {
     AllowListOnly,
 }
 
+/// Encoding quality for lossy audio conversions. Original audio and lossless
+/// formats do not use this setting. Higher bitrates cannot improve the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioQuality {
+    #[default]
+    Best,
+    Kbps128,
+    Kbps192,
+    Kbps256,
+    Kbps320,
+}
+
+impl AudioQuality {
+    pub const ALL: [Self; 5] = [
+        Self::Best,
+        Self::Kbps128,
+        Self::Kbps192,
+        Self::Kbps256,
+        Self::Kbps320,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Best => "Best (variable quality)",
+            Self::Kbps128 => "128 kbps",
+            Self::Kbps192 => "192 kbps",
+            Self::Kbps256 => "256 kbps",
+            Self::Kbps320 => "320 kbps",
+        }
+    }
+
+    pub fn ytdlp_value(self) -> &'static str {
+        match self {
+            Self::Best => "0",
+            Self::Kbps128 => "128K",
+            Self::Kbps192 => "192K",
+            Self::Kbps256 => "256K",
+            Self::Kbps320 => "320K",
+        }
+    }
+}
+
 /// A named quality/format choice. The preset list is deliberately
 /// short; power users can pick `Custom` and supply a raw yt-dlp
 /// format string.
@@ -335,6 +378,8 @@ pub struct Settings {
     /// yt-dlp output template (file name part only).
     pub filename_template: String,
     pub default_preset: Preset,
+    /// Encoding quality for MP3, M4A and Opus downloads.
+    pub audio_quality: AudioQuality,
     pub container: Container,
     pub custom_format: String,
     pub embed_thumbnail: bool,
@@ -419,6 +464,7 @@ impl Default for Settings {
             download_folder: default_download_folder(),
             filename_template: "%(title)s [%(id)s].%(ext)s".to_string(),
             default_preset: Preset::default(),
+            audio_quality: AudioQuality::default(),
             container: Container::default(),
             custom_format: "bv*+ba/b".to_string(),
             embed_thumbnail: true,

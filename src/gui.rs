@@ -7,10 +7,12 @@
 //! accent. Every interactive control carries a tooltip (hover text),
 //! and no essential information is tooltip-only.
 
+mod converter_window;
 #[cfg(feature = "field-validation")]
 mod field_metrics;
 mod gui_windows;
 mod settings_layout;
+mod tags_window;
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
@@ -1013,6 +1015,8 @@ pub struct TrayHandles {
     id_autostart: tray_icon::menu::MenuId,
     id_download_clipboard: tray_icon::menu::MenuId,
     id_downloads: tray_icon::menu::MenuId,
+    id_converter: tray_icon::menu::MenuId,
+    id_tags: tray_icon::menu::MenuId,
     id_open_folder: tray_icon::menu::MenuId,
     id_pause_all: tray_icon::menu::MenuId,
     id_settings: tray_icon::menu::MenuId,
@@ -1112,6 +1116,10 @@ fn tray_item_name(t: &TrayHandles, id: &tray_icon::menu::MenuId) -> &'static str
         "download from clipboard"
     } else if *id == t.id_downloads {
         "downloads"
+    } else if *id == t.id_converter {
+        "video converter"
+    } else if *id == t.id_tags {
+        "lyrics and tags"
     } else if *id == t.id_open_folder {
         "open download folder"
     } else if *id == t.id_pause_all {
@@ -1350,6 +1358,10 @@ pub struct App {
     #[cfg_attr(not(windows), allow(dead_code))]
     tray_auto_checked: Option<bool>,
     pub show_downloads: bool,
+    pub show_converter: bool,
+    pub show_tags: bool,
+    tags: tags_window::TagsState,
+    converter: converter_window::ConverterState,
     pub show_about: bool,
     pub confirm_hide_icon: bool,
     /// The "closing the window — what should happen?" dialog.
@@ -1554,6 +1566,10 @@ impl App {
             tray_monitoring_checked: None,
             tray_auto_checked: None,
             show_downloads: false,
+            show_converter: false,
+            show_tags: false,
+            tags: tags_window::TagsState::default(),
+            converter: converter_window::ConverterState::default(),
             show_about: false,
             confirm_hide_icon: false,
             confirm_close: false,
@@ -2212,7 +2228,7 @@ impl App {
 
     // ---------- per-frame processing ----------
 
-    fn process_platform_events(&mut self) {
+    fn process_platform_events(&mut self, ctx: &egui::Context) {
         while let Ok(ev) = self.platform.events.try_recv() {
             match ev {
                 PlatformEvent::ClipboardText(text) => {
@@ -2224,6 +2240,39 @@ impl App {
                 }
                 PlatformEvent::ManualUrl(url) => {
                     self.handle_detected_url(&url, true);
+                }
+                PlatformEvent::OpenDownloads => {
+                    if self.show_downloads {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of("yttraydl-downloads"),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                    self.show_downloads = true;
+                    self.show_panel = true;
+                    ctx.request_repaint();
+                }
+                PlatformEvent::OpenConverter => {
+                    if self.show_converter {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of("yttraydl-converter"),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                    self.show_converter = true;
+                    self.show_panel = true;
+                    ctx.request_repaint();
+                }
+                PlatformEvent::OpenTags => {
+                    if self.show_tags {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of("yttraydl-tags"),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                    self.show_tags = true;
+                    self.show_panel = true;
+                    ctx.request_repaint();
                 }
                 PlatformEvent::ShowRequested => {
                     self.settings.tray_icon_visible = true;
@@ -2878,6 +2927,8 @@ impl App {
         );
         let download_clipboard = MenuItem::new("Download from clipboard", true, None);
         let downloads = MenuItem::new("Downloads\u{2026}", true, None);
+        let converter = MenuItem::new("Video converter…", true, None);
+        let tags_item = MenuItem::new("Lyrics & tags…", true, None);
         let open_folder = MenuItem::new("Open download folder", true, None);
         let pause_all = MenuItem::new("Pause all downloads", true, None);
         let settings_item = MenuItem::new("Settings\u{2026}", true, None);
@@ -2898,6 +2949,8 @@ impl App {
             hide_icon.id().clone(),
             about.id().clone(),
             exit.id().clone(),
+            converter.id().clone(),
+            tags_item.id().clone(),
         );
         let _ = menu.append_items(&[
             &header,
@@ -2907,6 +2960,8 @@ impl App {
             &PredefinedMenuItem::separator(),
             &download_clipboard,
             &downloads,
+            &converter,
+            &tags_item,
             &open_folder,
             &pause_all,
             &PredefinedMenuItem::separator(),
@@ -2964,6 +3019,8 @@ impl App {
                 id_autostart: ids.2,
                 id_download_clipboard: ids.3,
                 id_downloads: ids.4,
+                id_converter: ids.11,
+                id_tags: ids.12,
                 id_open_folder: ids.5,
                 id_pause_all: ids.6,
                 id_settings: ids.7,
@@ -3040,6 +3097,8 @@ impl App {
                 item_name,
                 id_download_clipboard,
                 id_downloads,
+                id_converter,
+                id_tags,
                 id_settings,
                 id_about,
                 id_exit,
@@ -3049,6 +3108,8 @@ impl App {
                     tray_item_name(t, &ev.id),
                     t.id_download_clipboard.clone(),
                     t.id_downloads.clone(),
+                    t.id_converter.clone(),
+                    t.id_tags.clone(),
                     t.id_settings.clone(),
                     t.id_about.clone(),
                     t.id_exit.clone(),
@@ -3075,6 +3136,12 @@ impl App {
                 }
             } else if ev.id == id_downloads {
                 self.show_downloads = true;
+                self.show_panel = true;
+            } else if ev.id == id_converter {
+                self.show_converter = true;
+                self.show_panel = true;
+            } else if ev.id == id_tags {
+                self.show_tags = true;
                 self.show_panel = true;
             } else if ev.id == id_settings {
                 // Settings is its own window (0.5.1) — opening
@@ -3171,7 +3238,7 @@ impl eframe::App for App {
         }
         self.was_settings_open = self.show_settings;
         self.ensure_tray(ctx);
-        self.process_platform_events();
+        self.process_platform_events(ctx);
         self.process_info_results();
         self.process_download_events();
         if let Some(delay) = self.downloads.disk_recheck_after(Instant::now()) {
@@ -3281,6 +3348,8 @@ impl eframe::App for App {
         self.popup_ui(ctx);
         self.settings_ui(ctx);
         self.downloads_ui(ctx);
+        self.converter_ui(ctx);
+        self.tags_ui(ctx);
         self.toasts_ui(ctx);
         self.about_ui(ctx);
         self.hide_icon_confirm_ui(ctx);

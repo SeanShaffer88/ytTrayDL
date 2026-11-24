@@ -31,6 +31,64 @@ impl VideoProfile {
     }
 }
 
+/// Optional accurate re-encoding trim, in milliseconds. The end is exclusive
+/// and must follow the start. An absent end keeps the rest of the input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrimRange {
+    start_ms: u64,
+    end_ms: Option<u64>,
+}
+
+impl TrimRange {
+    /// Parse non-negative decimal seconds with up to millisecond precision.
+    /// Blank start means zero; blank end means no explicit end.
+    pub fn parse(start: &str, end: &str) -> Result<Self, String> {
+        let start_ms = if start.trim().is_empty() {
+            0
+        } else {
+            parse_seconds(start)?
+        };
+        let end_ms = if end.trim().is_empty() {
+            None
+        } else {
+            Some(parse_seconds(end)?)
+        };
+        if end_ms.is_some_and(|end| end <= start_ms) {
+            return Err("Trim end must be later than the start".into());
+        }
+        Ok(Self { start_ms, end_ms })
+    }
+}
+
+fn parse_seconds(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    let (seconds, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if seconds.is_empty()
+        || !seconds.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > 3
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+        || (value.contains('.') && fraction.is_empty())
+    {
+        return Err("Trim times must be non-negative seconds (up to 3 decimals)".into());
+    }
+    let seconds: u64 = seconds.parse().map_err(|_| "Trim time is too large")?;
+    let millis = if fraction.is_empty() {
+        0
+    } else {
+        let digits = fraction.len() as u32;
+        let fraction: u64 = fraction.parse().map_err(|_| "Invalid trim time")?;
+        fraction * 10_u64.pow(3 - digits)
+    };
+    seconds
+        .checked_mul(1000)
+        .and_then(|s| s.checked_add(millis))
+        .ok_or_else(|| "Trim time is too large".into())
+}
+
+fn seconds_arg(ms: u64) -> String {
+    format!("{}.{:03}", ms / 1000, ms % 1000)
+}
+
 /// Resolve ffmpeg in the same order used by the downloader. An explicit but
 /// invalid path is an error rather than silently running another binary.
 pub fn locate_ffmpeg(settings: &Settings, exe_dir: Option<&Path>) -> Option<PathBuf> {
@@ -66,6 +124,17 @@ pub fn build_conversion(
     output: &Path,
     profile: VideoProfile,
 ) -> Result<ProcessSpec, String> {
+    build_conversion_with_trim(ffmpeg, input, output, profile, TrimRange::default())
+}
+
+/// Build a conversion with an optional, re-encoded trim range.
+pub fn build_conversion_with_trim(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    profile: VideoProfile,
+    trim: TrimRange,
+) -> Result<ProcessSpec, String> {
     let input = input
         .canonicalize()
         .map_err(|e| format!("Cannot open input: {e}"))?;
@@ -98,9 +167,16 @@ pub fn build_conversion(
         VideoProfile::Mp4 | VideoProfile::Mkv => ("libx264", "aac"),
         VideoProfile::Webm => ("libvpx-vp9", "libopus"),
     };
-    Ok(ProcessSpec::new(ffmpeg)
+    let mut spec = ProcessSpec::new(ffmpeg)
         .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-n", "-i"])
-        .arg(input)
+        .arg(input);
+    if trim.start_ms > 0 {
+        spec = spec.arg("-ss").arg(seconds_arg(trim.start_ms));
+    }
+    if let Some(end_ms) = trim.end_ms {
+        spec = spec.arg("-t").arg(seconds_arg(end_ms - trim.start_ms));
+    }
+    Ok(spec
         .args([
             "-map", "0:v:0", "-map", "0:a:0?", "-c:v", video, "-c:a", audio,
         ])
@@ -116,6 +192,17 @@ pub fn build_batch(
     inputs: &[PathBuf],
     output_dir: &Path,
     profile: VideoProfile,
+) -> Result<Vec<ProcessSpec>, String> {
+    build_batch_with_trim(ffmpeg, inputs, output_dir, profile, TrimRange::default())
+}
+
+/// Preflight a batch with the same trim applied to every input.
+pub fn build_batch_with_trim(
+    ffmpeg: &Path,
+    inputs: &[PathBuf],
+    output_dir: &Path,
+    profile: VideoProfile,
+    trim: TrimRange,
 ) -> Result<Vec<ProcessSpec>, String> {
     if inputs.is_empty() {
         return Err("Choose at least one input file".into());
@@ -148,7 +235,9 @@ pub fn build_batch(
                 output.display()
             ));
         }
-        specs.push(build_conversion(ffmpeg, input, &output, profile)?);
+        specs.push(build_conversion_with_trim(
+            ffmpeg, input, &output, profile, trim,
+        )?);
         outputs.push(output);
     }
     Ok(specs)
@@ -189,6 +278,59 @@ pub fn run_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_range_validates_decimal_seconds() {
+        assert_eq!(TrimRange::parse("", "").unwrap(), TrimRange::default());
+        assert_eq!(
+            TrimRange::parse("1.25", "3.001").unwrap(),
+            TrimRange {
+                start_ms: 1250,
+                end_ms: Some(3001)
+            }
+        );
+        assert_eq!(TrimRange::parse("", "0.010").unwrap().end_ms, Some(10));
+        for (start, end) in [
+            ("-1", ""),
+            ("NaN", ""),
+            ("1.0001", ""),
+            ("1.", ""),
+            ("3", "3"),
+            ("4", "3"),
+            ("1", "0"),
+            ("18446744073709551615", ""),
+        ] {
+            assert!(TrimRange::parse(start, end).is_err(), "{start:?}, {end:?}");
+        }
+    }
+
+    #[test]
+    fn trim_args_are_accurate_and_applied_to_each_batch_item() {
+        let dir = std::env::temp_dir().join(format!("yttraydl-trim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.mov");
+        let b = dir.join("b.mov");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let trim = TrimRange::parse("1.125", "2.5").unwrap();
+        let specs =
+            build_batch_with_trim(Path::new("ffmpeg"), &[a, b], &dir, VideoProfile::Mp4, trim)
+                .unwrap();
+        for spec in specs {
+            assert!(spec
+                .args
+                .windows(2)
+                .any(|p| p[0] == "-ss" && p[1] == "1.125"));
+            assert!(spec
+                .args
+                .windows(2)
+                .any(|p| p[0] == "-t" && p[1] == "1.375"));
+            let input_pos = spec.args.iter().position(|p| p == "-i").unwrap();
+            let seek_pos = spec.args.iter().position(|p| p == "-ss").unwrap();
+            assert!(seek_pos > input_pos);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn paths_are_arguments_and_existing_files_are_never_overwritten() {

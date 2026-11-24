@@ -13,6 +13,8 @@ pub(super) struct ConverterState {
     input: String,
     output: String,
     profile: VideoProfile,
+    trim_start: String,
+    trim_end: String,
     status: String,
     batch_inputs: Vec<std::path::PathBuf>,
     batch_folder: String,
@@ -101,6 +103,14 @@ impl App {
                                     );
                                 }
                             });
+                        ui.label("Optional trim (seconds; applies to single and batch)");
+                        ui.horizontal(|ui| {
+                            ui.label("Start");
+                            ui.add(egui::TextEdit::singleline(&mut state.trim_start).desired_width(80.0).hint_text("0"));
+                            ui.label("End");
+                            ui.add(egui::TextEdit::singleline(&mut state.trim_end).desired_width(80.0).hint_text("end"));
+                        });
+                        ui.label("Up to 3 decimals. Empty end keeps the rest; output is re-encoded.");
                         ui.label("Output file (new file, with matching extension)");
                         ui.horizontal(|ui| {
                             ui.add(
@@ -192,6 +202,8 @@ impl App {
             let batch_inputs = state.batch_inputs.clone();
             let batch_folder = state.batch_folder.clone();
             let profile = state.profile;
+            let trim_start = state.trim_start.clone();
+            let trim_end = state.trim_end.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             let wake = ctx.clone();
             let token = self.background.child_token();
@@ -200,31 +212,35 @@ impl App {
                 let exe_dir = std::env::current_exe()
                     .ok()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()));
-                let specs = converter::locate_ffmpeg(&settings, exe_dir.as_deref())
-                    .ok_or_else(|| {
-                        "ffmpeg not found. Configure or install it in Settings".to_string()
-                    })
-                    .and_then(|bin| {
-                        if start_batch {
-                            if batch_folder.trim().is_empty() {
-                                return Err("Choose a batch output folder".into());
+                let specs = converter::TrimRange::parse(&trim_start, &trim_end).and_then(|trim| {
+                    converter::locate_ffmpeg(&settings, exe_dir.as_deref())
+                        .ok_or_else(|| {
+                            "ffmpeg not found. Configure or install it in Settings".to_string()
+                        })
+                        .and_then(|bin| {
+                            if start_batch {
+                                if batch_folder.trim().is_empty() {
+                                    return Err("Choose a batch output folder".into());
+                                }
+                                converter::build_batch_with_trim(
+                                    &bin,
+                                    &batch_inputs,
+                                    std::path::Path::new(&batch_folder),
+                                    profile,
+                                    trim,
+                                )
+                            } else {
+                                converter::build_conversion_with_trim(
+                                    &bin,
+                                    std::path::Path::new(&input),
+                                    std::path::Path::new(&output),
+                                    profile,
+                                    trim,
+                                )
+                                .map(|spec| vec![spec])
                             }
-                            converter::build_batch(
-                                &bin,
-                                &batch_inputs,
-                                std::path::Path::new(&batch_folder),
-                                profile,
-                            )
-                        } else {
-                            converter::build_conversion(
-                                &bin,
-                                std::path::Path::new(&input),
-                                std::path::Path::new(&output),
-                                profile,
-                            )
-                            .map(|spec| vec![spec])
-                        }
-                    });
+                        })
+                });
                 let result = specs.and_then(|specs| {
                     converter::run_batch(&specs, &token, |index, total| {
                         let _ = tx.send(ConverterMessage::Progress(format!(

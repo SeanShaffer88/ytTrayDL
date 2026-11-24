@@ -54,7 +54,9 @@ files and an existing output folder; files are converted sequentially to
 `<name>.converted.<extension>`. Before starting, the batch rejects existing
 outputs and colliding names. A batch stops on the first error or cancellation;
 completed outputs are kept and a partial output may remain. Closing the
-window leaves conversion running. Trimming, cropping, hardware presets and
+window leaves conversion running. An optional start/end trim in seconds can be
+applied to a single file or every item in a batch. Trimming re-encodes the media
+rather than doing lossless stream-copy cutting. Cropping, hardware presets and
 per-file percentage progress are not available yet.
 
 The installer can optionally create a separate **ytTrayDL Downloads** desktop

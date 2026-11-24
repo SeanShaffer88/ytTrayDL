@@ -1535,6 +1535,10 @@ impl App {
         }
         self.window_geometry_ready[index] = if let Some(saved) = self.window_geometries.get(kind) {
             yttraydl::platform::restore_window_geometry(kind, saved)
+        } else if matches!(kind, WindowKind::Main) {
+            // Also fit a first-run fixed panel to unusually small work areas.
+            yttraydl::platform::window_geometry(kind)
+                .is_some_and(|current| yttraydl::platform::restore_window_geometry(kind, current))
         } else {
             yttraydl::platform::window_geometry(kind).is_some()
         };

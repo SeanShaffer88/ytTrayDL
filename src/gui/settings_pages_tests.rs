@@ -917,3 +917,72 @@ fn short_radio_choices_change_only_on_selection() {
     }]);
     assert_eq!((a, b), (1, 0));
 }
+
+#[test]
+fn rules_radio_buttons_select_each_category_without_mutating_settings() {
+    let ctx = context(1.0);
+    ctx.enable_accesskit();
+    let mut section = 0;
+    let mut draw = |events| {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    rules_navigation(ui, &mut section);
+                });
+            },
+        );
+        let nodes: Vec<_> = output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| {
+                let name = node.label()?.to_string();
+                let r = node.bounds()?;
+                Some((
+                    name,
+                    egui::Rect::from_min_max(
+                        egui::pos2(r.x0 as f32, r.y0 as f32),
+                        egui::pos2(r.x1 as f32, r.y1 as f32),
+                    ),
+                ))
+            })
+            .collect();
+        (nodes, section)
+    };
+    draw(Vec::new());
+    for (expected, label) in SECTIONS[2].iter().enumerate() {
+        let (nodes, _) = draw(Vec::new());
+        let pos = nodes
+            .iter()
+            .find(|(name, _)| name == label)
+            .expect("rule radio accessible")
+            .1
+            .center();
+        draw(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let (_, selected) = draw(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(selected, expected);
+    }
+}

@@ -1026,6 +1026,45 @@ fn compact_progress(ui: &mut egui::Ui, operation: &mut ToolOperation) {
 }
 
 /// Actual Settings scaffold, shared by the native viewport and headless bounds tests.
+// Short labels keep all seven rule categories visible in two columns.
+// Full category names remain available as tooltips and accessible labels.
+fn rules_navigation(ui: &mut egui::Ui, section: &mut usize) {
+    const SHORT: [&str; 7] = [
+        "Ignored domains",
+        "Auto-download",
+        "Allowed domains",
+        "Domain quality",
+        "Channel watcher",
+        "Ignored links",
+        "Watch schedule",
+    ];
+    let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.0).max(1.0);
+    for pair in (0..SHORT.len()).step_by(2) {
+        ui.horizontal(|ui| {
+            for index in pair..(pair + 2).min(SHORT.len()) {
+                ui.scope(|ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    let response = ui.add_sized(
+                        [width, ui.spacing().interact_size.y],
+                        egui::RadioButton::new(*section == index, SHORT[index]),
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::RadioButton,
+                            ui.is_enabled(),
+                            *section == index,
+                            SECTIONS[2][index],
+                        )
+                    });
+                    if response.on_hover_text(SECTIONS[2][index]).clicked() {
+                        *section = index;
+                    }
+                });
+            }
+        });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render(
     ui: &mut egui::Ui,
@@ -1086,17 +1125,24 @@ pub(super) fn render(
     let old_section = sections[*tab];
     if !compact || *tab == 2 {
         ui.push_id("settings-section-navigation", |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Section").color(TEXT_DIM));
-                egui::ComboBox::from_id_salt("section")
-                    .selected_text(labels[sections[*tab]])
-                    .width((ui.available_width() - 16.0).max(1.0))
-                    .show_ui(ui, |ui| {
-                        for (index, label) in labels.iter().enumerate() {
-                            ui.radio_value(&mut sections[*tab], index, *label);
-                        }
-                    });
-            });
+            if *tab == 2
+                && ui.available_height()
+                    >= 300.0 * (ui.text_style_height(&egui::TextStyle::Body) / 14.0).max(1.0)
+            {
+                rules_navigation(ui, &mut sections[*tab]);
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Section").color(TEXT_DIM));
+                    egui::ComboBox::from_id_salt("section")
+                        .selected_text(labels[sections[*tab]])
+                        .width((ui.available_width() - 16.0).max(1.0))
+                        .show_ui(ui, |ui| {
+                            for (index, label) in labels.iter().enumerate() {
+                                ui.radio_value(&mut sections[*tab], index, *label);
+                            }
+                        });
+                });
+            }
         });
     }
     let all = if *tab == 2 {

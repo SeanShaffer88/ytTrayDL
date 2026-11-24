@@ -90,8 +90,8 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
             .with_title("ytTrayDL")
-            .with_inner_size([440.0, 640.0])
-            .with_min_inner_size([340.0, 420.0])
+            .with_inner_size([600.0, 730.0])
+            .with_resizable(false)
             .with_visible(false) // tray-first: the panel opens on demand
             .with_icon(icon),
         ..Default::default()

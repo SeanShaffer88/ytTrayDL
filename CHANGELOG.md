@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Main window and Rules navigation
+
+- Use a non-resizable main window sized to the supplied reference, retaining
+  saved position but not legacy sizes; small work areas can constrain it.
+- Show Rules categories as a radio-button group when space permits, with a
+  compact radio menu on smaller Settings windows.
+
 ## Unreleased — Reuse installed media tools
 
 - Setup reuses available yt-dlp and ffmpeg and downloads only missing families;

@@ -58,7 +58,7 @@ jobs:
             $ErrorActionPreference = 'Stop'
             $version = $env:APP_VERSION
             $exe = (Resolve-Path 'target/release/yttraydl.exe').Path
-            $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
+            $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion.Trim()
             if ($actualVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected application version: $actualVersion" }
             $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($exe))
             try {
@@ -88,7 +88,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
             $setup = "dist/ytTrayDL-Setup-v$version-windows-x64.exe"
             if (-not (Test-Path $setup)) { throw 'Expected installer is missing' }
-            $setupVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $setup).Path).FileVersion
+            $setupVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $setup).Path).FileVersion.Trim()
             if ($setupVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected installer version: $setupVersion" }
             Copy-Item $setup release/
             $files = Get-ChildItem release -File | Sort-Object Name

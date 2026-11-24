@@ -1,23 +1,25 @@
 # Changelog
 
-## Unreleased — Player queue management
+## 0.12.0 — Player playlist export and queue management
+
+### Player queue management
 
 - Remove duplicate queue paths on request while retaining order and selection.
 - Defer queue clearing until after row rendering to avoid stale row indices.
 
-## Unreleased — Module intent forwarding validation
+### Module intent forwarding validation
 
 - Exercise URL and all four module intents through the real Windows message
   receiver in a bounded two-process fixture, including a repeated player intent.
 
 
-## Unreleased — Modular installation checks
+### Modular installation checks
 
 - Extend installer lifecycle checks to cover requested and unrequested module
   shortcuts, their exact launch arguments, and preservation of saved player data.
 - Add cross-module and malformed launch-intent tests.
 
-## Unreleased — Player playlist export
+### Player playlist export
 
 - Export a local queue to a new UTF-8 M3U/M3U8 file without overwriting existing
   files. Reject paths that cannot safely round-trip in a local playlist.

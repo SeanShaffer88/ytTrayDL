@@ -165,6 +165,49 @@ fn parse_seconds(value: &str) -> Result<u64, String> {
         .ok_or_else(|| "Trim time is too large".into())
 }
 
+/// Explicit hardware encoders. They require a compatible GPU, driver and ffmpeg
+/// build; no automatic fallback is performed if initialization fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VideoEncoder {
+    #[default]
+    Software,
+    Nvenc,
+    Qsv,
+    Amf,
+}
+impl VideoEncoder {
+    pub const ALL: [Self; 4] = [Self::Software, Self::Nvenc, Self::Qsv, Self::Amf];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Software => "Software (default)",
+            Self::Nvenc => "NVIDIA NVENC (H.264 / HEVC)",
+            Self::Qsv => "Intel Quick Sync (H.264 / HEVC)",
+            Self::Amf => "AMD AMF (H.264 / HEVC)",
+        }
+    }
+    fn codec(self, profile: VideoProfile) -> Result<Option<&'static str>, String> {
+        if self == Self::Software {
+            return Ok(None);
+        }
+        let hevc = match profile {
+            VideoProfile::Mp4 | VideoProfile::Mkv => false,
+            VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => true,
+            _ => {
+                return Err("Hardware encoding supports only H.264 or HEVC MP4/MKV profiles".into())
+            }
+        };
+        Ok(Some(match (self, hevc) {
+            (Self::Nvenc, false) => "h264_nvenc",
+            (Self::Nvenc, true) => "hevc_nvenc",
+            (Self::Qsv, false) => "h264_qsv",
+            (Self::Qsv, true) => "hevc_qsv",
+            (Self::Amf, false) => "h264_amf",
+            (Self::Amf, true) => "hevc_amf",
+            (Self::Software, _) => unreachable!(),
+        }))
+    }
+}
+
 /// A numeric crop rectangle in source pixels, before any resize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CropRect {
@@ -315,6 +358,7 @@ pub struct ConversionOptions {
     pub crop: Option<CropRect>,
     pub resize: ResizePreset,
     pub quality: EncodingQuality,
+    pub encoder: VideoEncoder,
     pub rotation: Rotation,
     pub mute_audio: bool,
     pub audio_bitrate: AudioBitrate,
@@ -486,6 +530,10 @@ pub fn build_conversion_with_options(
     if let Some(end_ms) = trim.end_ms {
         spec = spec.arg("-t").arg(seconds_arg(end_ms - trim.start_ms));
     }
+    let hardware_codec = options.encoder.codec(profile)?;
+    if hardware_codec.is_some() && options.quality != EncodingQuality::EncoderDefault {
+        return Err("Hardware encoding requires encoder-default quality".into());
+    }
     if profile.is_audio_only() {
         if options.mute_audio {
             return Err("Audio-only output cannot remove audio".into());
@@ -507,6 +555,7 @@ pub fn build_conversion_with_options(
             VideoProfile::WebmAv1 => ("libaom-av1", "libopus"),
             _ => unreachable!(),
         };
+        let video = hardware_codec.unwrap_or(video);
         if let Some(filters) = video_filters(options) {
             spec = spec.arg("-vf").arg(filters);
         }
@@ -820,6 +869,68 @@ mod tests {
         )
         .unwrap();
         assert!(!default.args.iter().any(|arg| arg == "-crf"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hardware_encoder_requires_supported_profile_and_default_quality() {
+        let dir = std::env::temp_dir().join(format!("yttraydl-hardware-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.mp4");
+        std::fs::write(&input, b"fixture").unwrap();
+        for (encoder, h264, hevc) in [
+            (VideoEncoder::Nvenc, "h264_nvenc", "hevc_nvenc"),
+            (VideoEncoder::Qsv, "h264_qsv", "hevc_qsv"),
+            (VideoEncoder::Amf, "h264_amf", "hevc_amf"),
+        ] {
+            for (profile, codec) in [(VideoProfile::Mp4, h264), (VideoProfile::MkvHevc, hevc)] {
+                let options = ConversionOptions {
+                    encoder,
+                    ..Default::default()
+                };
+                let spec = build_conversion_with_options(
+                    Path::new("ffmpeg"),
+                    &input,
+                    &dir.join(format!("out.{}", profile.extension())),
+                    profile,
+                    options,
+                )
+                .unwrap();
+                assert!(spec
+                    .args
+                    .windows(2)
+                    .any(|p| p[0] == "-c:v" && p[1] == codec));
+                assert!(!spec.args.iter().any(|p| p == "-crf"));
+                assert!(build_conversion_with_options(
+                    Path::new("ffmpeg"),
+                    &input,
+                    &dir.join(format!("out.{}", profile.extension())),
+                    profile,
+                    ConversionOptions {
+                        quality: EncodingQuality::High,
+                        ..options
+                    }
+                )
+                .is_err());
+            }
+            for profile in [
+                VideoProfile::Webm,
+                VideoProfile::Mp4Av1,
+                VideoProfile::Mp3Audio,
+            ] {
+                assert!(build_conversion_with_options(
+                    Path::new("ffmpeg"),
+                    &input,
+                    &dir.join(format!("out.{}", profile.extension())),
+                    profile,
+                    ConversionOptions {
+                        encoder,
+                        ..Default::default()
+                    }
+                )
+                .is_err());
+            }
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

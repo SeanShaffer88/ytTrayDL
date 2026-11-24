@@ -68,7 +68,11 @@ Crop coordinates are in source pixels, and
 ffmpeg can adjust offsets at frame edges; some encoders require even crop
 dimensions. Batch inputs can be reordered or removed before conversion. Live
 status reports the current file and encoded media time, not a percentage or an
-ETA. Hardware-accelerated presets are not available yet.
+ETA. Optional NVIDIA NVENC, Intel Quick Sync and AMD AMF video encoders are
+available for H.264 or HEVC MP4/MKV profiles. They require a compatible GPU,
+driver and ffmpeg build; failures do not silently fall back to software. Hardware
+uses encoder-default quality rather than the software CRF choices. Hardware
+encoding has not been tested on real Windows hardware.
 
 The **Lyrics & tags** window opens from the panel, tray, optional installer
 shortcut, or `yttraydl.exe --tags`. Load a local MP3, M4A, FLAC, OGG or Opus

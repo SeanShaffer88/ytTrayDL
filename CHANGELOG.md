@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Hardware encoding
+
+- Add opt-in NVENC, Quick Sync and AMF encoding for H.264/HEVC MP4 and MKV.
+  Compatible hardware, drivers and ffmpeg encoders are required; real Windows
+  hardware validation is outstanding.
+
 ## 0.10.0 — Local player foundation
 
 - Add a separate local playback queue with repeat, reorder, remove and track controls.

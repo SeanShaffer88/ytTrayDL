@@ -2,7 +2,7 @@
 use super::*;
 use yttraydl::converter::{
     self, AudioBitrate, BatchEdit, BatchProgress, EncodingQuality, ResizePreset, Rotation,
-    VideoProfile,
+    VideoEncoder, VideoProfile,
 };
 use yttraydl::process;
 
@@ -17,6 +17,7 @@ pub(super) struct ConverterState {
     output: String,
     profile: VideoProfile,
     quality: EncodingQuality,
+    encoder: VideoEncoder,
     audio_bitrate: AudioBitrate,
     trim_start: String,
     trim_end: String,
@@ -136,6 +137,19 @@ impl App {
                             ui.label("Audio-only profiles ignore video options; FLAC is lossless.");
                         }
                         ui.add_enabled_ui(!state.profile.is_audio_only(), |ui| {
+                        ui.label("Video encoder");
+                        egui::ComboBox::from_id_salt("converter-encoder")
+                            .selected_text(state.encoder.label())
+                            .show_ui(ui, |ui| {
+                                for encoder in VideoEncoder::ALL {
+                                    ui.selectable_value(&mut state.encoder, encoder, encoder.label());
+                                }
+                            });
+                        if state.encoder != VideoEncoder::Software {
+                            state.quality = EncodingQuality::EncoderDefault;
+                            ui.label("Hardware requires H.264/HEVC MP4 or MKV, a compatible GPU, driver and ffmpeg build. No automatic fallback.");
+                        }
+                        ui.add_enabled_ui(state.encoder == VideoEncoder::Software, |ui| {
                         ui.label("Video encoding quality");
                         egui::ComboBox::from_id_salt("converter-quality")
                             .selected_text(state.quality.label())
@@ -144,6 +158,7 @@ impl App {
                                     ui.selectable_value(&mut state.quality, quality, quality.label());
                                 }
                             });
+                        });
                         });
                         ui.label("Audio bitrate (lossy profiles)");
                         egui::ComboBox::from_id_salt("converter-audio-bitrate")
@@ -290,6 +305,11 @@ impl App {
             let batch_folder = state.batch_folder.clone();
             let profile = state.profile;
             let quality = state.quality;
+            let encoder = if profile.is_audio_only() {
+                VideoEncoder::Software
+            } else {
+                state.encoder
+            };
             let audio_bitrate = state.audio_bitrate;
             let trim_start = state.trim_start.clone();
             let trim_end = state.trim_end.clone();
@@ -320,6 +340,7 @@ impl App {
                             crop,
                             resize,
                             quality,
+                            encoder,
                             rotation,
                             mute_audio,
                             audio_bitrate,

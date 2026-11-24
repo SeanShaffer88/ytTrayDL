@@ -497,6 +497,11 @@ artwork, window lifecycle, cancellation, shortcut forwarding and installer
 upgrade/uninstall remain unverified. ffprobe may not expose every lyrics frame;
 remuxing may not preserve every tag or artwork. The original remains untouched.
 
+Hardware converter encoders: **Unverified** on real Windows hardware. Unit tests
+cover encoder selection, profile restrictions and quality-option validation;
+no claim is made that a particular GPU, driver or ffmpeg build supports these
+encoders. Software remains the default, with no silent hardware fallback.
+
 Video converter including batch, trim, crop, resize, queue editing, codec
 profiles, quality presets, encoded-time progress, rotation, audio removal and
 audio-only profiles: **Unverified** on Windows.

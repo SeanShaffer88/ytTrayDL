@@ -37,7 +37,15 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (host)
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: |
+          set +e
+          cargo clippy --all-targets --locked -- -D warnings > clippy-output.txt 2>&1
+          status=$?
+          cat clippy-output.txt
+          if [ "$status" -ne 0 ]; then
+            python3 -c 'from pathlib import Path; s=Path("clippy-output.txt").read_text(errors="replace")[-15000:]; print("::error title=Clippy diagnostics::" + s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+          fi
+          exit "$status"
       - name: Clippy (Windows target)
         run: cargo clippy --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
       - name: Tests (full suite)

@@ -86,6 +86,18 @@ lyrics or artwork it cannot represent, so verify the copy. ffmpeg and ffprobe
 are required for tag inspection and export, and a failed or cancelled export
 may leave a partial output. Closing the window leaves the job running.
 
+The **Player** opens from the panel, tray, optional desktop shortcut, or
+`yttraydl.exe --player`. It manages a session-only queue of up to 500 local audio
+and video files, with reorder, remove, repeat, previous, next and stop. Playback
+uses a separate ffplay window: Space pauses, arrows seek, 9/0 adjust volume and
+M mutes. Closing that playback window advances the queue; closing the manager
+does not stop playback. The starting volume applies when each track starts.
+ffplay is **not** included in the managed ffmpeg download or installer; install
+it separately, put it next to the selected ffmpeg or on PATH, or select its
+executable in the player options. Network playback and playlist files are not
+supported. The player and its Windows shortcuts have not yet been interactively
+verified on Windows.
+
 The installer can optionally create a separate **ytTrayDL Downloads** desktop
 shortcut. It opens the Downloads window, including when ytTrayDL is already
 running. Portable users can launch `yttraydl.exe --downloads` directly.

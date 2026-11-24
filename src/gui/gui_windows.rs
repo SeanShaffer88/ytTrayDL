@@ -904,6 +904,14 @@ impl App {
             self.show_tags = true;
         }
 
+        if ui
+            .button("Player…")
+            .on_hover_text("Open the local player queue")
+            .clicked()
+        {
+            self.show_player = true;
+        }
+
         // Active downloads (compact).
         let active: Vec<(u64, String, String, f32, Option<String>, JobState)> = self
             .downloads

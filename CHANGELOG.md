@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 — Converter and Lyrics & Tags
+
+- Added audio download quality choices and an optional Downloads shortcut.
+- Added an independent local video/audio converter, including sequential batches,
+  trim, crop, resize, rotation, audio removal, quality and codec profiles.
+- Added local lyrics/tag editing and artwork extraction/replacement in new copies,
+  and opt-in online lyrics search. Existing files are not overwritten.
+- Added panel, tray and optional desktop shortcut access for both modules.
+
+Windows interactive behavior for the new modules and live online lyrics lookup
+remain unverified. See the release notes and verification matrix for limitations.
+
 ## 0.8.2 — Settings Without Scrolling
 
 - Replace the Settings scroll container with responsive pages, bounded section navigation and independently paginated rule lists.

@@ -1,0 +1,122 @@
+name: Release packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate tag and notes
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches.Groups[1].Value
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid application version' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") { throw 'Tag and application version must match' }
+          if (-not (Test-Path "docs/RELEASE-$version.md")) { throw 'Versioned release notes are required' }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run native tests and build release executable
+        shell: pwsh
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Native tests failed' }
+          cargo build --release --locked --bin yttraydl
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+      - name: Install Inno Setup 6.7.1
+        run: choco install innosetup --version=6.7.1 --no-progress --yes
+      - name: Verify Inno compiler engine
+        shell: pwsh
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'release-inno-probe'
+          $null = New-Item -ItemType Directory -Path $probeRoot
+          $probe = Join-Path $probeRoot 'probe.iss'
+          @'
+          [Setup]
+          AppName=Compiler Version Probe
+          AppVersion=1
+          DefaultDirName={localappdata}\ytTrayDL-Compiler-Probe
+          PrivilegesRequired=lowest
+          CreateAppDir=no
+          Uninstallable=no
+          '@ | Set-Content -LiteralPath $probe -Encoding utf8NoBOM
+          $banner = @(& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/O$probeRoot" '/Fversion-probe' $probe)
+          $code = $LASTEXITCODE
+          $banner | Write-Output
+          if ($code -ne 0 -or ($banner -join "`n") -notmatch 'Compiler engine version: Inno Setup 6\.7\.1(?:\s|$)') { throw 'Unexpected Inno compiler engine' }
+      - name: Build and verify packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:APP_VERSION
+          $exe = (Resolve-Path 'target/release/yttraydl.exe').Path
+          $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
+          if ($actualVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected application version: $actualVersion" }
+          $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($exe))
+          try {
+            $reader.BaseStream.Position = 0x3c
+            $offset = $reader.ReadInt32()
+            $reader.BaseStream.Position = $offset
+            if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw 'Application is not a Windows x64 PE' }
+          } finally { $reader.Dispose() }
+          $null = New-Item -ItemType Directory -Path release, portable
+          Copy-Item $exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt -Destination portable
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path portable).Path 'portable.txt'), '')
+          $zip = "release/ytTrayDL-v$version-windows-x64.zip"
+          Compress-Archive -Path portable/* -DestinationPath $zip
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip).Path)
+          try {
+            $expected = @('LICENSE', 'README.md', 'THIRD-PARTY-NOTICES.txt', 'portable.txt', 'yttraydl.exe') | Sort-Object
+            $actual = @($archive.Entries | ForEach-Object { $_.FullName }) | Sort-Object
+            if (Compare-Object $expected $actual) { throw "Unexpected portable inventory: $actual" }
+            $item = $archive.GetEntry('yttraydl.exe')
+            $sha = [Security.Cryptography.SHA256]::Create()
+            $stream = $item.Open()
+            try { $insideHash = [Convert]::ToHexString($sha.ComputeHash($stream)) } finally { $stream.Dispose(); $sha.Dispose() }
+            if ($insideHash -ne (Get-FileHash $exe -Algorithm SHA256).Hash) { throw 'Portable executable hash mismatch' }
+          } finally { $archive.Dispose() }
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DAppVersion=$version" installer/yttraydl.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+          $setup = "dist/ytTrayDL-Setup-v$version-windows-x64.exe"
+          if (-not (Test-Path $setup)) { throw 'Expected installer is missing' }
+          $setupVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $setup).Path).FileVersion
+          if ($setupVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected installer version: $setupVersion" }
+          Copy-Item $setup release/
+          $files = Get-ChildItem release -File | Sort-Object Name
+          if ($files.Count -ne 2) { throw 'Unexpected package inventory' }
+          $sums = @($files | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLower())  $($_.Name)" })
+          [IO.File]::WriteAllLines((Join-Path (Resolve-Path release).Path 'SHA256SUMS.txt'), $sums)
+      - name: Upload checked packages as build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: release/*
+          if-no-files-found: error
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $assets = @(Get-ChildItem -LiteralPath release -File | ForEach-Object { $_.FullName })
+          gh release create $env:GITHUB_REF_NAME --verify-tag --draft --title "ytTrayDL v$version" --notes-file "docs/RELEASE-$version.md" @assets
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed' }
+          $published = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $published.assets.Count -ne $assets.Count) { throw 'Release asset listing failed' }
+          foreach ($asset in $assets) {
+            $file = Get-Item -LiteralPath $asset
+            $remote = @($published.assets | Where-Object { $_.name -eq $file.Name })
+            $digest = "sha256:$((Get-FileHash $asset -Algorithm SHA256).Hash.ToLower())"
+            if ($remote.Count -ne 1 -or $remote[0].state -ne 'uploaded' -or $remote[0].size -ne $file.Length -or $remote[0].digest -ne $digest) { throw "Uploaded asset did not verify: $($file.Name)" }
+          }
+          gh release edit $env:GITHUB_REF_NAME --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

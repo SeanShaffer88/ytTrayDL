@@ -61,7 +61,11 @@ pub fn search_spec(curl: &Path, title: &str, artist: &str) -> Result<ProcessSpec
             "--show-error",
             "--get",
             "--user-agent",
-            "ytTrayDL/0.8.2 (https://github.com/SeanShaffer88/ytTrayDL)",
+            concat!(
+                "ytTrayDL/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/SeanShaffer88/ytTrayDL)"
+            ),
             "--max-filesize",
             "1048576",
             "--data-urlencode",

@@ -5,7 +5,7 @@ use yttraydl::tags::{self, AudioTags};
 pub(super) enum TagResult {
     Loaded {
         path: String,
-        result: Result<AudioTags, String>,
+        result: Box<Result<AudioTags, String>>,
     },
     Saved(Result<String, String>),
     ArtworkSaved(Result<String, String>),
@@ -33,7 +33,7 @@ impl App {
                         state.loaded_input = None;
                         state.status = "Input changed; load it again.".into();
                     } else {
-                        match result {
+                        match *result {
                             Ok(tags) => {
                                 state.output = tags::suggested_output(std::path::Path::new(&path))
                                     .map(|p| p.to_string_lossy().into_owned())
@@ -218,7 +218,7 @@ impl App {
                 let message = if load {
                     TagResult::Loaded {
                         path: input,
-                        result,
+                        result: Box::new(result),
                     }
                 } else if export_artwork {
                     TagResult::ArtworkSaved(result.map(|_| "Artwork exported to a new image file.".into()))

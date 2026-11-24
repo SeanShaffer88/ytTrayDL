@@ -979,20 +979,105 @@ fn write_report(file: &mut File, report: &Report) -> Result<(), Error> {
         .map_err(|error| error.to_string())
 }
 
+/// Determine which tool families are absent, without starting a process or
+/// performing network access. Existing binaries use the application's resolver
+/// precedence; presence does not establish their version or trustworthiness.
+fn missing_selection(ytdlp: bool, ffmpeg: bool) -> Option<ProvisionSelection> {
+    match (ytdlp, ffmpeg) {
+        (true, true) => None,
+        (false, true) => Some(ProvisionSelection::YtDlp),
+        (true, false) => Some(ProvisionSelection::FFmpeg),
+        (false, false) => Some(ProvisionSelection::All),
+    }
+}
+
+fn ensure_for_installer(app_dir: &Path) -> Result<Report, Error> {
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return Err("Media tool provisioning supports Windows x64 only".into());
+    }
+    let data = if app_dir.join("portable.txt").is_file() {
+        app_dir.join("ytTrayDL-data")
+    } else {
+        crate::settings::config_dir()
+    };
+    // Do not rename or overwrite a corrupt user settings file during setup.
+    let settings = match fs::read_to_string(data.join("settings.json")) {
+        Ok(text) => crate::settings::Settings::from_json(&text)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
+        Err(error) => return Err(format!("Cannot read existing settings: {error}")),
+    };
+    let root = data.join("bin");
+    let ytdlp = crate::ytdlp::locate_ytdlp_with_managed(
+        &settings,
+        Some(app_dir),
+        &managed_path_at(&root, "yt-dlp"),
+    )
+    .is_some();
+    let ffmpeg = crate::ytdlp::ffmpeg_available_with_managed(
+        &settings,
+        Some(app_dir),
+        &managed_path_at(&root, "ffmpeg"),
+    );
+    // An explicit missing ffmpeg path overrides every fallback in the app.
+    // Downloading a managed copy would not make that configuration usable.
+    if !ffmpeg && !settings.ffmpeg_path.as_os_str().is_empty() {
+        return Err(
+            "The configured ffmpeg path is missing; correct it in Settings or install offline"
+                .into(),
+        );
+    }
+    if let Some(selection) = missing_selection(ytdlp, ffmpeg) {
+        provision_at_with_progress(
+            &root,
+            selection,
+            &CancellationToken::default(),
+            1,
+            |_| {},
+            &OfficialHost,
+        )
+    } else {
+        Ok(Report {
+            schema_version: 1,
+            status: "success".into(),
+            selection: ProvisionSelection::All,
+            tools: Vec::new(),
+            error: None,
+        })
+    }
+}
+
 /// Headless installer interface. Returns before the caller initializes any UI,
 /// clipboard listener, single-instance signal, startup key or tray icon.
 pub fn run_cli(args: &[String]) -> Option<i32> {
-    if !args.iter().any(|arg| arg == "--provision-tools") {
+    let provision_mode = args.iter().any(|arg| arg == "--provision-tools");
+    let ensure_mode = args.iter().any(|arg| arg == "--ensure-tools");
+    if !provision_mode && !ensure_mode {
         return None;
     }
-    let parsed = (args.len() == 5 && args[1] == "--provision-tools" && args[3] == "--report")
-        .then(|| ProvisionSelection::parse(&args[2]))
-        .flatten();
-    let Some(selection) = parsed else {
-        eprintln!("Expected --provision-tools all|yt-dlp|ffmpeg --report <new-absolute-file>");
+    let parsed = if provision_mode
+        && !ensure_mode
+        && args.len() == 5
+        && args[1] == "--provision-tools"
+        && args[3] == "--report"
+    {
+        ProvisionSelection::parse(&args[2]).map(|selection| (Some(selection), None, &args[4]))
+    } else if ensure_mode
+        && !provision_mode
+        && args.len() == 6
+        && args[1] == "--ensure-tools"
+        && args[2] == "--app-dir"
+        && args[4] == "--report"
+        && Path::new(&args[3]).is_absolute()
+    {
+        Some((None, Some(Path::new(&args[3])), &args[5]))
+    } else {
+        None
+    };
+    let Some((selection, app_dir, report_path)) = parsed else {
+        eprintln!("Expected --provision-tools all|yt-dlp|ffmpeg --report <new-absolute-file> or --ensure-tools --app-dir <absolute-directory> --report <new-absolute-file>");
         return Some(2);
     };
-    let path = Path::new(&args[4]);
+    let path = Path::new(report_path);
     if !path.is_absolute() {
         return Some(2);
     }
@@ -1000,9 +1085,17 @@ pub fn run_cli(args: &[String]) -> Option<i32> {
     let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(path) else {
         return Some(2);
     };
-    let (report, code) = match provision(selection, &CancellationToken::default(), |_| {}) {
+    let result = match (selection, app_dir) {
+        (Some(selection), None) => provision(selection, &CancellationToken::default(), |_| {}),
+        (None, Some(app_dir)) => ensure_for_installer(app_dir),
+        _ => unreachable!(),
+    };
+    let (report, code) = match result {
         Ok(report) => (report, 0),
-        Err(error) => (Report::failure(selection, &error), 2),
+        Err(error) => (
+            Report::failure(selection.unwrap_or(ProvisionSelection::All), &error),
+            2,
+        ),
     };
     if write_report(&mut file, &report).is_err() {
         return Some(3);

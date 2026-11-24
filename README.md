@@ -255,11 +255,13 @@ Two ways to get it from the
   optional desktop shortcut and start-with-Windows, and a
   standard uninstaller. Your settings/history in
   `%APPDATA%\ytTrayDL` are kept on uninstall.
-  The **Download Tools** page selects **Download Latest Tools** by default:
-  Setup fetches the latest stable official yt-dlp and ffmpeg essentials builds,
-  verifies their release hashes, and prepares ffprobe too. About 150 MB is
-  downloaded; the tools are downloaded instead of bundled to keep Setup small
-  and resolve current versions at installation time.
+  The **Download Tools** page defaults to reusing available yt-dlp and ffmpeg
+  and downloading only missing tools. Setup checks configured paths, tools beside
+  the installed app, managed tools and PATH, using the application's lookup rules.
+  Missing tools are fetched from official releases and verified; downloading both
+  may use about 150 MB. A downloaded ffmpeg package includes ffprobe. Existing
+  tools are detected by file presence, not executed or verified by Setup, and
+  are not automatically updated. Use the app's update controls when desired.
   Choose **Skip Downloads — Install Offline** to avoid all tool-download
   traffic and automatic application launch; existing tools remain available.
 - **Portable zip** — `ytTrayDL-vX.Y.Z-windows-x64.zip`:
@@ -276,8 +278,9 @@ Optional: enable **Start with Windows** in Settings (per-user, no admin
 needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button
 (or drop `ffmpeg.exe` next to `yttraydl.exe` / on PATH yourself).
 
-For unattended Setup, downloads are required unless `/TOOLSDOWNLOAD=skip` is
-explicitly supplied. A required download or verification failure returns a
+For unattended Setup, missing tools are downloaded unless `/TOOLSDOWNLOAD=skip`
+is explicitly supplied. An invalid configured ffmpeg path must be corrected or
+Setup can be run offline; a downloaded copy would not override that setting. A required download or verification failure returns a
 nonzero installer exit before application files are installed. Interactive
 failures offer **Retry**, **Skip Tools**, and **Cancel Setup**. The progress
 indicator describes the overall operation; it does not invent a percentage.

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Reuse installed media tools
+
+- Setup reuses available yt-dlp and ffmpeg and downloads only missing families;
+  existing tools are not executed, overwritten or automatically updated.
+
 ## 0.13.0 — Window layout and Settings refresh
 
 ### Window layout refresh

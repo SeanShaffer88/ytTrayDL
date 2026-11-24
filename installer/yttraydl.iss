@@ -142,16 +142,16 @@ begin
   ToolsPage := CreateInputOptionPage(wpSelectTasks, 'Download Tools',
     'Choose how to prepare yt-dlp and ffmpeg.',
     'yt-dlp downloads media. ffmpeg merges and converts it.' + #13#10 +
-    'Setup can fetch the latest stable tools from official sources (about 150 MB).' + #13#10 +
+    'Setup reuses available tools and downloads only missing tools (up to about 150 MB).' + #13#10 +
     'Your settings, history, existing tools, and downloaded media are preserved.',
     True, False);
-  ToolsPage.Add('Download Latest Tools (Recommended)');
+  ToolsPage.Add('Use Existing Tools and Download Missing Tools (Recommended)');
   ToolsPage.Add('Skip Downloads - Install Offline (Do Not Launch Automatically)');
   ToolsPage.SelectedValueIndex := 0;
   if ToolsDownloadMode = 'skip' then
     ToolsPage.SelectedValueIndex := 1;
   ToolsProgress := CreateOutputMarqueeProgressPage('Download Tools',
-    'Downloading and verifying latest tools.');
+    'Checking existing tools and preparing missing tools.');
 end;
 
 function CanLaunchApplication: Boolean;
@@ -184,14 +184,14 @@ begin
     Started := False;
     ResultCode := -1;
     if not WizardSilent then begin
-      ToolsProgress.SetText('Downloading and verifying latest tools...',
-        'Checking official releases, downloading, verifying, and installing.' + #13#10 +
+      ToolsProgress.SetText('Checking existing tools and preparing missing tools...',
+        'Available tools are reused; missing tools are downloaded and verified.' + #13#10 +
         'This bounded operation must finish before Setup can continue or cancel.');
       ToolsProgress.Show;
       ToolsProgress.Animate;
     end;
     try
-      Started := Exec(Helper, '--provision-tools all --report "' + Report + '"',
+      Started := Exec(Helper, '--ensure-tools --app-dir "' + ExpandConstant('{app}') + '" --report "' + Report + '"',
         ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
     finally
       if not WizardSilent then
@@ -205,7 +205,7 @@ begin
     if not Started then
       Failure := 'The tool downloader could not start: ' + SysErrorMessage(ResultCode)
     else
-      Failure := 'The latest tools could not be downloaded or verified (code ' + IntToStr(ResultCode) + ').';
+      Failure := 'Tools could not be found, downloaded or verified (code ' + IntToStr(ResultCode) + ').';
     Log(Failure);
     if LoadStringFromFile(Report, ReportText) then begin
       Failure := Failure + #13#10 + Copy(String(ReportText), 1, 2000);

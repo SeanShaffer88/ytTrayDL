@@ -231,7 +231,7 @@ pub fn estimate_progress(
     }
     let fraction = (encoded_us as f64 / duration_us as f64).clamp(0.0, 1.0);
     let percent = ((fraction * 100.0) as u8).min(99);
-    let remaining = if fraction >= 0.01 && fraction < 1.0 && elapsed.as_secs() >= 1 {
+    let remaining = if (0.01..1.0).contains(&fraction) && elapsed.as_secs() >= 1 {
         let seconds = elapsed.as_secs_f64() * (1.0 - fraction) / fraction;
         (seconds.is_finite() && seconds <= 7.0 * 24.0 * 3600.0)
             .then(|| std::time::Duration::from_secs_f64(seconds))

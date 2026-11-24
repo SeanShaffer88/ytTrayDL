@@ -346,12 +346,15 @@ impl App {
                             audio_bitrate,
                         })
                     });
+                let mut probe_context = None;
                 let specs = options.and_then(|options| {
                     converter::locate_ffmpeg(&settings, exe_dir.as_deref())
                         .ok_or_else(|| {
                             "ffmpeg not found. Configure or install it in Settings".to_string()
                         })
                         .and_then(|bin| {
+                            probe_context =
+                                Some((yttraydl::tags::locate_ffprobe(&bin), options.trim));
                             if start_batch {
                                 if batch_folder.trim().is_empty() {
                                     return Err("Choose a batch output folder".into());
@@ -376,9 +379,28 @@ impl App {
                         })
                 });
                 let result = specs.and_then(|specs| {
+                    let (probe, trim) =
+                        probe_context.expect("validated conversion has probe context");
+                    let mut duration = None;
+                    let mut started = std::time::Instant::now();
                     converter::run_batch_with_progress(&specs, &token, |event| {
                         let message = match event {
                             BatchProgress::Started { index, total } => {
+                                let message = format!("Preparing file {index} of {total}…");
+                                let _ = tx.send(ConverterMessage::Progress(message));
+                                wake.request_repaint();
+                                let path = if start_batch {
+                                    &batch_inputs[index - 1]
+                                } else {
+                                    std::path::Path::new(&input)
+                                };
+                                duration = probe
+                                    .as_deref()
+                                    .and_then(|probe| {
+                                        converter::probe_duration_us(probe, path, &token)
+                                    })
+                                    .and_then(|d| converter::trimmed_duration_us(d, trim));
+                                started = std::time::Instant::now();
                                 format!("Converting file {index} of {total}…")
                             }
                             BatchProgress::EncodedTime {
@@ -387,12 +409,27 @@ impl App {
                                 microseconds,
                             } => {
                                 let seconds = microseconds / 1_000_000;
-                                format!(
+                                let mut text = format!(
                                     "File {index} of {total} · encoded {:02}:{:02}:{:02}",
                                     seconds / 3600,
                                     (seconds / 60) % 60,
                                     seconds % 60
-                                )
+                                );
+                                if let Some((percent, eta)) = duration.and_then(|d| {
+                                    converter::estimate_progress(microseconds, d, started.elapsed())
+                                }) {
+                                    text.push_str(&format!(" · ~{percent}%"));
+                                    if let Some(eta) = eta {
+                                        let seconds = eta.as_secs();
+                                        text.push_str(&format!(
+                                            " · ETA ~{:02}:{:02}:{:02}",
+                                            seconds / 3600,
+                                            (seconds / 60) % 60,
+                                            seconds % 60
+                                        ));
+                                    }
+                                }
+                                text
                             }
                         };
                         let _ = tx.send(ConverterMessage::Progress(message));

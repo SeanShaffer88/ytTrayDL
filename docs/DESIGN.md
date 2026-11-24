@@ -497,6 +497,11 @@ artwork, window lifecycle, cancellation, shortcut forwarding and installer
 upgrade/uninstall remain unverified. ffprobe may not expose every lyrics frame;
 remuxing may not preserve every tag or artwork. The original remains untouched.
 
+Converter percentage and ETA: **Unverified** on Windows. The optional ffprobe
+lookup and trim-aware estimate are approximate, especially with unusual
+containers or variable encoding speed. Cancellation, fallback and visual updates
+need interactive Windows testing.
+
 Hardware converter encoders: **Unverified** on real Windows hardware. Unit tests
 cover encoder selection, profile restrictions and quality-option validation;
 no claim is made that a particular GPU, driver or ffmpeg build supports these

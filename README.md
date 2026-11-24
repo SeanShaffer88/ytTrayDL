@@ -67,8 +67,11 @@ after cropping and before resizing. Audio can be removed from video outputs.
 Crop coordinates are in source pixels, and
 ffmpeg can adjust offsets at frame edges; some encoders require even crop
 dimensions. Batch inputs can be reordered or removed before conversion. Live
-status reports the current file and encoded media time, not a percentage or an
-ETA. Optional NVIDIA NVENC, Intel Quick Sync and AMD AMF video encoders are
+status reports the current file and encoded media time. When ffprobe can read
+a container duration, an approximate per-file percentage and ETA are also shown;
+trim, unusual timestamps and variable encoding speed can make estimates
+inaccurate. If duration is unavailable, conversion still runs without an
+estimate. Optional NVIDIA NVENC, Intel Quick Sync and AMD AMF video encoders are
 available for H.264 or HEVC MP4/MKV profiles. They require a compatible GPU,
 driver and ffmpeg build; failures do not silently fall back to software. Hardware
 uses encoder-default quality rather than the software CRF choices. Hardware

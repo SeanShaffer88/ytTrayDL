@@ -37,6 +37,26 @@ fn ffmpeg_batch_trims_two_files() {
     run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
     std::fs::copy(&first, &second).unwrap();
     let trim = TrimRange::parse("0.4", "1.4").unwrap();
+    if let Some(ffprobe) = std::env::var_os("YTTRAYDL_TEST_FFPROBE") {
+        let duration =
+            yttraydl::converter::probe_duration_us(&PathBuf::from(ffprobe), &first, &token)
+                .unwrap();
+        assert!((1_900_000..=2_100_000).contains(&duration), "{duration}");
+        assert_eq!(
+            yttraydl::converter::trimmed_duration_us(duration, trim),
+            Some(1_000_000)
+        );
+        let cancelled = CancellationToken::default();
+        cancelled.cancel();
+        assert_eq!(
+            yttraydl::converter::probe_duration_us(
+                std::path::Path::new("unused"),
+                &first,
+                &cancelled
+            ),
+            None
+        );
+    }
     let specs =
         build_batch_with_trim(&ffmpeg, &[first, second], &dir, VideoProfile::Mp4, trim).unwrap();
     let mut progress = Vec::new();

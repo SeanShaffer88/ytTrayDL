@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Converter progress
+
+- Show approximate per-file progress and ETA using a bounded, cancellable
+  ffprobe duration lookup; fall back to encoded time when duration is unknown.
+
 ## Unreleased — Hardware encoding
 
 - Add opt-in NVENC, Quick Sync and AMF encoding for H.264/HEVC MP4 and MKV.

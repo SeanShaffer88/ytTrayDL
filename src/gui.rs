@@ -3526,18 +3526,21 @@ mod module_request_tests {
             "yttraydl-player",
         ] {
             let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let id = egui::ViewportId::from_hash_of(name);
             let mut visible = false;
             let first = ctx.run(egui::RawInput::default(), |ctx| {
                 request_module(ctx, &mut visible, name);
+                ctx.show_viewport_deferred(id, egui::ViewportBuilder::default(), |_, _| {});
             });
             assert!(visible);
-            let id = egui::ViewportId::from_hash_of(name);
             assert!(!first.viewport_output.get(&id).is_some_and(|o| o
                 .commands
                 .iter()
                 .any(|c| matches!(c, egui::ViewportCommand::Focus))));
             let second = ctx.run(egui::RawInput::default(), |ctx| {
                 request_module(ctx, &mut visible, name);
+                ctx.show_viewport_deferred(id, egui::ViewportBuilder::default(), |_, _| {});
             });
             assert!(visible);
             assert!(second.viewport_output.get(&id).is_some_and(|o| o

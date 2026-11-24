@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Player folder scan
+
+- Add local folders recursively using a cancellable, bounded background scan;
+  skip symlinks and reparse points and report limits or inaccessible entries.
+
 ## Unreleased — Player queue search
 
 - Filter queue paths without changing playback order; preserve the selected

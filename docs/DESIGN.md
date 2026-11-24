@@ -482,6 +482,11 @@ interactive Windows DPI/monitor validation remain unverified. These partial
 changes do not establish full FluentGruv compliance.
 
 
+Player folder scan: **Unverified** interactively on Windows. Library tests cover
+supported extensions, ordering, bounds, cancellation and Unix symlinks. Windows
+reparse-point behavior, cancellation during a scan, inaccessible folders and
+interactive queue updates require Windows validation.
+
 Player queue filtering: **Unverified** interactively on Windows. Queue filter
 matching, underlying indices and selection after removal have unit coverage;
 filtered list accessibility, keyboard navigation and rendering require Windows

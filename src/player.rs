@@ -95,6 +95,147 @@ impl PlayQueue {
     }
 }
 
+/// A bounded scan result. `limit_reached` means a scan limit was reached;
+/// `skipped` counts unreadable entries and intentionally ignored links.
+#[derive(Debug)]
+pub struct FolderScan {
+    pub files: Vec<PathBuf>,
+    pub skipped: usize,
+    pub limit_reached: bool,
+}
+
+/// Scan a selected folder off-thread. No child symlink or Windows reparse
+/// point is followed. Traversal, results, depth and cancellation are bounded.
+pub fn scan_folder(
+    folder: &Path,
+    capacity: usize,
+    token: &CancellationToken,
+) -> Result<FolderScan, String> {
+    scan_folder_with_limits(folder, capacity.min(MAX_QUEUE), 10_000, 512, 16, token)
+}
+
+fn scan_folder_with_limits(
+    folder: &Path,
+    capacity: usize,
+    max_entries: usize,
+    max_dirs: usize,
+    max_depth: usize,
+    token: &CancellationToken,
+) -> Result<FolderScan, String> {
+    if token.is_cancelled() {
+        return Err("Folder scan cancelled".into());
+    }
+    let root = folder
+        .canonicalize()
+        .map_err(|e| format!("Cannot open folder: {e}"))?;
+    if !root.is_dir() {
+        return Err("Choose a directory".into());
+    }
+    let mut result = FolderScan {
+        files: Vec::new(),
+        skipped: 0,
+        limit_reached: false,
+    };
+    if capacity == 0 {
+        result.limit_reached = true;
+        return Ok(result);
+    }
+    let mut pending = vec![(root, 0usize)];
+    let mut entries_seen = 0usize;
+    let mut dirs_seen = 0usize;
+    while let Some((directory, depth)) = pending.pop() {
+        if token.is_cancelled() {
+            return Err("Folder scan cancelled".into());
+        }
+        if dirs_seen >= max_dirs {
+            result.limit_reached = true;
+            break;
+        }
+        dirs_seen += 1;
+        let reader = match std::fs::read_dir(&directory) {
+            Ok(reader) => reader,
+            Err(e) if depth == 0 => return Err(format!("Cannot read folder: {e}")),
+            Err(_) => {
+                result.skipped += 1;
+                continue;
+            }
+        };
+        let mut paths = Vec::new();
+        for entry in reader {
+            if token.is_cancelled() {
+                return Err("Folder scan cancelled".into());
+            }
+            if entries_seen >= max_entries {
+                result.limit_reached = true;
+                break;
+            }
+            entries_seen += 1;
+            match entry {
+                Ok(entry) => paths.push(entry.path()),
+                Err(_) => result.skipped += 1,
+            }
+        }
+        paths.sort();
+        for path in paths {
+            if token.is_cancelled() {
+                return Err("Folder scan cancelled".into());
+            }
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    result.skipped += 1;
+                    continue;
+                }
+            };
+            if is_link_or_reparse(&metadata) {
+                result.skipped += 1;
+                continue;
+            }
+            if metadata.is_dir() {
+                if depth >= max_depth || pending.len() >= max_dirs {
+                    result.limit_reached = true;
+                } else {
+                    pending.push((path, depth + 1));
+                }
+            } else if metadata.is_file() && supported_path(&path) {
+                result.files.push(path);
+                if result.files.len() >= capacity {
+                    result.limit_reached = true;
+                    break;
+                }
+            }
+        }
+        if entries_seen >= max_entries {
+            result.limit_reached = true;
+            break;
+        }
+        if result.files.len() >= capacity {
+            break;
+        }
+    }
+    if token.is_cancelled() {
+        return Err("Folder scan cancelled".into());
+    }
+    result.files.sort();
+    Ok(result)
+}
+
+fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Preserve the selected track after removing an entry before it. If the
 /// selected entry itself is removed, select its successor (or the new last).
 pub fn selection_after_remove(selected: usize, removed: usize, remaining: usize) -> usize {
@@ -332,6 +473,47 @@ mod tests {
         queue.clear();
         assert_eq!(queue.next(0, true), None);
     }
+    #[test]
+    fn folder_scan_is_bounded_sorted_and_cancellable() {
+        let dir = std::env::temp_dir().join(format!("yttray-player-scan-{}", std::process::id()));
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let nested = dir.join("nested");
+        for path in [
+            dir.join("B.mp3"),
+            dir.join("a.MP4"),
+            dir.join("ignore.txt"),
+            nested.join("c.flac"),
+        ] {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&nested, dir.join("link")).unwrap();
+        let token = CancellationToken::default();
+        let result = scan_folder(&dir, 10, &token).unwrap();
+        assert_eq!(
+            result.files,
+            [dir.join("B.mp3"), dir.join("a.MP4"), nested.join("c.flac")]
+        );
+        #[cfg(unix)]
+        assert_eq!(result.skipped, 1);
+        assert!(!result.limit_reached);
+        let capped = scan_folder(&dir, 1, &token).unwrap();
+        assert_eq!(capped.files.len(), 1);
+        assert!(capped.limit_reached);
+        let shallow = scan_folder_with_limits(&dir, 10, 100, 10, 0, &token).unwrap();
+        assert_eq!(shallow.files.len(), 2);
+        assert!(shallow.limit_reached);
+        let capped_entries = scan_folder_with_limits(&dir, 10, 1, 10, 10, &token).unwrap();
+        assert!(capped_entries.limit_reached);
+        token.cancel();
+        assert!(scan_folder(&dir, 10, &token)
+            .unwrap_err()
+            .contains("cancelled"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn filtering_keeps_original_indices_and_selection_tracks_removal() {
         let mut queue = PlayQueue::default();

@@ -12,6 +12,7 @@ enum QueueIoResult {
     Saved(Result<(), String>),
     Loaded(Result<PlayQueue, String>),
     Deleted(Result<(), String>),
+    Scanned(Result<player::FolderScan, String>),
 }
 
 #[derive(Clone, Copy)]
@@ -36,6 +37,8 @@ pub(super) struct PlayerState {
     receiver: Option<Receiver<PlayerResult>>,
     cancel: Option<CancellationToken>,
     queue_io: Option<Receiver<QueueIoResult>>,
+    scan_cancel: Option<CancellationToken>,
+    scan_cancel_requested: bool,
 }
 impl Default for PlayerState {
     fn default() -> Self {
@@ -54,6 +57,8 @@ impl Default for PlayerState {
             receiver: None,
             cancel: None,
             queue_io: None,
+            scan_cancel: None,
+            scan_cancel_requested: false,
         }
     }
 }
@@ -116,6 +121,8 @@ impl App {
             };
             if let Some(result) = result {
                 state.queue_io = None;
+                state.scan_cancel = None;
+                let scan_cancelled = std::mem::take(&mut state.scan_cancel_requested);
                 state.status = match result {
                     QueueIoResult::Saved(Ok(())) => "Queue saved to the app data folder.".into(),
                     QueueIoResult::Loaded(Ok(queue)) => {
@@ -129,6 +136,19 @@ impl App {
                     QueueIoResult::Deleted(Ok(())) => {
                         "Saved queue deleted; the current queue is unchanged.".into()
                     }
+                    QueueIoResult::Scanned(_) if scan_cancelled => {
+                        "Folder scan cancelled; no files added.".into()
+                    }
+                    QueueIoResult::Scanned(Ok(scan)) => {
+                        let added = state.queue.add(scan.files);
+                        let limit = if scan.limit_reached {
+                            " Scan or queue limit reached."
+                        } else {
+                            ""
+                        };
+                        format!("Added {added} file(s). Skipped {} links or inaccessible entries.{limit}", scan.skipped)
+                    }
+                    QueueIoResult::Scanned(Err(error)) => format!("Folder scan failed: {error}"),
                     QueueIoResult::Saved(Err(error))
                     | QueueIoResult::Loaded(Err(error))
                     | QueueIoResult::Deleted(Err(error)) => {
@@ -184,6 +204,8 @@ impl App {
         let mut up = None;
         let mut down = None;
         let mut queue_action = None;
+        let mut scan_folder = None;
+        let mut cancel_scan = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-player"),
             egui::ViewportBuilder::default().with_title("ytTrayDL — Player")
@@ -215,6 +237,7 @@ impl App {
                         if ui.add_enabled(playing && !state.stopping && next.is_some(), egui::Button::new("Next")).clicked() { skip_to = next; }
                         ui.checkbox(&mut state.repeat, "Repeat queue");
                     });
+                    if state.scan_cancel.is_some() && ui.button("Cancel folder scan").clicked() { cancel_scan = true; }
                     ui.label("Playback window: Space = pause, arrows = seek, 9/0 = volume, M = mute.")
                         .on_hover_text("Closing the playback window advances the queue. Closing this manager leaves playback running.");
                     ui.separator();
@@ -244,6 +267,10 @@ impl App {
                                 }
                             }
                         });
+                        if ui.add_enabled(state.queue.items().len() < player::MAX_QUEUE, egui::Button::new("Add folder…")).clicked() {
+                            scan_folder = pick_folder(std::path::Path::new(&state.input));
+                        }
+                        ui.label("Folder scan includes subfolders, skips links, and stops at safety or queue limits.");
                         if ui.button("Clear queue").clicked() { state.queue.clear(); state.selected = 0; }
                         ui.label("Saved queue (optional; stores file paths in app data)");
                         ui.horizontal_wrapped(|ui| {
@@ -286,6 +313,29 @@ impl App {
         }
         if let Some(index) = down.filter(|&index| state.queue.move_down(index)) {
             state.selected = index + 1;
+        }
+        if let Some(folder) = scan_folder {
+            let capacity = player::MAX_QUEUE - state.queue.items().len();
+            let token = self.background.child_token();
+            let worker_token = token.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let wake = ctx.clone();
+            state.scan_cancel = Some(token);
+            state.scan_cancel_requested = false;
+            state.queue_io = Some(rx);
+            state.status = "Scanning folder…".into();
+            self.background.spawn(move |_| {
+                let result = player::scan_folder(&folder, capacity, &worker_token);
+                let _ = tx.send(QueueIoResult::Scanned(result));
+                wake.request_repaint();
+            });
+        }
+        if cancel_scan {
+            state.scan_cancel_requested = true;
+            if let Some(token) = &state.scan_cancel {
+                token.cancel();
+            }
+            state.status = "Cancelling folder scan…".into();
         }
         if let Some(action) = queue_action {
             let queue = state.queue.clone();

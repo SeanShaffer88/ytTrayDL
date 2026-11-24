@@ -93,6 +93,8 @@ pub(super) fn row_height(row: &str) -> f32 {
         "reset" | "reset-info" | "ytdlp-clear" | "ffmpeg-clear" => 32.0,
         "ytdlp-path" | "ffmpeg-path" => 56.0,
         "ytdlp-status" | "ytdlp-update" | "cookies" => 76.0,
+        "action" => 84.0,
+        "scope" | "container" => 112.0,
         _ => 56.0,
     }
 }
@@ -140,34 +142,30 @@ fn choice<T: Copy + PartialEq>(
     if !label.is_empty() {
         ui.label(label);
     }
-    let mut index = options.iter().position(|(v, _)| v == value).unwrap_or(0);
-    let before = index;
-    ui.horizontal(|ui| {
-        if navigation_button(ui, index > 0, "◀", "Previous Choice")
-            .on_hover_text("Previous choice")
-            .clicked()
-        {
-            index -= 1;
+    let mut changed = false;
+    if options.len() <= 3 {
+        // Short groups stay visible without an extra click.
+        for &(option, text) in options {
+            changed |= ui.radio_value(value, option, text).changed();
         }
-        let width = remaining_after_button(ui, "▶");
-        ui.add_sized([width, 22.0], egui::Label::new(options[index].1).truncate())
-            .on_hover_text(format!(
-                "{} ({}/{})",
-                options[index].1,
-                index + 1,
-                options.len()
-            ));
-        if navigation_button(ui, index + 1 < options.len(), "▶", "Next Choice")
-            .on_hover_text("Next choice")
-            .clicked()
-        {
-            index += 1;
-        }
-    });
-    if index != before {
-        *value = options[index].0;
+    } else {
+        // Large groups would exceed the compact window's bounded page. Keep
+        // the current value visible and put the same radio controls in a
+        // scrollable popup rather than hiding options behind cyclic arrows.
+        let selected = options
+            .iter()
+            .find(|(option, _)| option == value)
+            .map_or("Select…", |(_, text)| *text);
+        egui::ComboBox::from_id_salt("choice")
+            .selected_text(selected)
+            .width((ui.available_width() - 16.0).max(1.0))
+            .show_ui(ui, |ui| {
+                for &(option, text) in options {
+                    changed |= ui.radio_value(value, option, text).changed();
+                }
+            });
     }
-    index != before
+    changed
 }
 fn number<N>(
     ui: &mut egui::Ui,

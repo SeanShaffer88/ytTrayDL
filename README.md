@@ -416,3 +416,7 @@ Windows machine; please don't add placeholder images.
 
 MIT — see [LICENSE](LICENSE). ytTrayDL drives yt-dlp as a separate
 program; yt-dlp is published by its authors under the Unlicense.
+
+Settings value choices use radio buttons. Short groups are visible directly;
+larger groups open in a radio-button menu. Section, page and list navigation
+remain paginated to keep the Settings window usable at compact sizes.

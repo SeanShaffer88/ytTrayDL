@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Settings choices
+
+- Replace cyclic arrows for setting values with radio button groups. Large
+  groups use a radio-button menu to fit compact Settings windows.
+
 ## 0.12.0 — Player playlist export and queue management
 
 ### Player queue management

@@ -1,5 +1,4 @@
 //! Inspect local audio and create a tagged copy without modifying the source.
-//! Lyrics lookup is deliberately not included; users supply their own text.
 use crate::process::{self, CancellationToken, ProcessLimits, ProcessSpec};
 use std::path::{Path, PathBuf};
 
@@ -14,6 +13,10 @@ pub struct AudioTags {
     pub genre: String,
     pub lyrics: String,
     pub artwork: Option<Artwork>,
+    /// All attached image stream indices, including unsupported codecs.
+    pub attached_picture_indices: Vec<u32>,
+    /// Other video streams or incomplete stream data prevent safe replacement.
+    pub artwork_replacement_unsafe: bool,
     /// True when ffprobe reports any known lyrics-like tag, including an empty one.
     pub lyrics_present: bool,
 }
@@ -157,6 +160,25 @@ fn parse_probe(json: &[u8]) -> Result<AudioTags, String> {
         artwork,
         ..Default::default()
     };
+    for stream in streams
+        .iter()
+        .filter(|s| s.get("codec_type").and_then(|v| v.as_str()) == Some("video"))
+    {
+        let index = stream
+            .get("index")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok());
+        let attached = stream
+            .get("disposition")
+            .and_then(|v| v.get("attached_pic"))
+            .and_then(|v| v.as_i64())
+            == Some(1);
+        if let (true, Some(index)) = (attached, index) {
+            result.attached_picture_indices.push(index);
+        } else {
+            result.artwork_replacement_unsafe = true;
+        }
+    }
     let mut first = true;
     for stream in streams
         .iter()
@@ -190,6 +212,20 @@ pub fn build_tagged_copy(
     edits: &AudioTags,
     existing: &AudioTags,
 ) -> Result<ProcessSpec, String> {
+    build_tagged_copy_with_artwork(ffmpeg, input, output, edits, existing, None)
+}
+
+/// Export a tagged copy and optionally replace embedded artwork with a local
+/// JPEG/PNG. Only MP3/M4A/FLAC are supported for replacement. The source and
+/// existing destinations are not modified; ffmpeg may not preserve every tag.
+pub fn build_tagged_copy_with_artwork(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    edits: &AudioTags,
+    existing: &AudioTags,
+    replacement: Option<&Path>,
+) -> Result<ProcessSpec, String> {
     let input = local_input(input)?;
     let name = output.file_name().ok_or("Choose an output file")?;
     let parent = output
@@ -212,6 +248,37 @@ pub fn build_tagged_copy(
     }
     // Vorbis/Opus comments are stream metadata, not format metadata.
     let ext = input.extension().and_then(|v| v.to_str()).unwrap_or("");
+    let replacement = if let Some(path) = replacement {
+        if !["mp3", "m4a", "flac"]
+            .iter()
+            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+        {
+            return Err("Artwork replacement is supported for MP3, M4A and FLAC only".into());
+        }
+        if existing.artwork_replacement_unsafe {
+            return Err("Cannot safely replace artwork in a file with other video streams".into());
+        }
+        let path = path
+            .canonicalize()
+            .map_err(|e| format!("Cannot open artwork: {e}"))?;
+        let metadata = path
+            .metadata()
+            .map_err(|e| format!("Cannot inspect artwork: {e}"))?;
+        if !metadata.is_file() || metadata.len() > 10 * 1024 * 1024 || metadata.len() < 8 {
+            return Err("Artwork must be a JPEG or PNG file no larger than 10 MiB".into());
+        }
+        let mut file =
+            std::fs::File::open(&path).map_err(|e| format!("Cannot read artwork: {e}"))?;
+        let mut header = [0u8; 8];
+        std::io::Read::read_exact(&mut file, &mut header)
+            .map_err(|e| format!("Cannot read artwork: {e}"))?;
+        if !header.starts_with(&[0xff, 0xd8, 0xff]) && header != *b"\x89PNG\r\n\x1a\n" {
+            return Err("Artwork must be a JPEG or PNG image".into());
+        }
+        Some(path)
+    } else {
+        None
+    };
     let metadata_flag = if ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("opus") {
         "-metadata:s:a:0"
     } else {
@@ -245,8 +312,17 @@ pub fn build_tagged_copy(
     }
     let mut spec = ProcessSpec::new(ffmpeg)
         .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-n", "-i"])
-        .arg(input)
-        .args(["-map", "0", "-map_metadata", "0", "-c", "copy"]);
+        .arg(input);
+    if let Some(path) = replacement {
+        spec = spec.arg("-i").arg(path).args(["-map", "0"]);
+        for index in &existing.attached_picture_indices {
+            spec = spec.arg("-map").arg(format!("-0:{index}"));
+        }
+        spec = spec.args(["-map", "1:v:0", "-disposition:v:0", "attached_pic"]);
+    } else {
+        spec = spec.args(["-map", "0"]);
+    }
+    spec = spec.args(["-map_metadata", "0", "-c", "copy"]);
     for (name, value) in [
         ("title", &edits.title),
         ("artist", &edits.artist),
@@ -345,6 +421,65 @@ mod tests {
             parse_probe(br#"{"streams":[{"codec_type":"audio","tags":[]}],"format":{}}"#).is_err()
         );
     }
+    #[test]
+    fn replacement_rejects_unsafe_and_invalid_inputs() {
+        let dir =
+            std::env::temp_dir().join(format!("yttraydl-art-validation-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.mp3");
+        let output = dir.join("copy.mp3");
+        let image = dir.join("cover.png");
+        std::fs::write(&input, b"source").unwrap();
+        std::fs::write(&image, b"not an image").unwrap();
+        let tags = AudioTags::default();
+        assert!(build_tagged_copy_with_artwork(
+            Path::new("ffmpeg"),
+            &input,
+            &output,
+            &tags,
+            &tags,
+            Some(&image)
+        )
+        .is_err());
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\n").unwrap();
+        let unsafe_tags = AudioTags {
+            artwork_replacement_unsafe: true,
+            ..Default::default()
+        };
+        assert!(build_tagged_copy_with_artwork(
+            Path::new("ffmpeg"),
+            &input,
+            &output,
+            &tags,
+            &unsafe_tags,
+            Some(&image)
+        )
+        .is_err());
+        let ogg = dir.join("source.ogg");
+        std::fs::write(&ogg, b"source").unwrap();
+        assert!(build_tagged_copy_with_artwork(
+            Path::new("ffmpeg"),
+            &ogg,
+            &dir.join("copy.ogg"),
+            &tags,
+            &tags,
+            Some(&image)
+        )
+        .is_err());
+        let spec = build_tagged_copy_with_artwork(
+            Path::new("ffmpeg"),
+            &input,
+            &output,
+            &tags,
+            &tags,
+            Some(&image),
+        )
+        .unwrap();
+        assert!(spec.args.iter().any(|arg| arg == "-n"));
+        assert!(spec.args.iter().any(|arg| arg == "attached_pic"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn copy_never_overwrites_and_preserves_reported_lyrics() {
         let dir = std::env::temp_dir().join(format!("yttraydl-tags-{}", std::process::id()));

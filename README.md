@@ -74,12 +74,16 @@ The **Lyrics & tags** window opens from the panel, tray, optional installer
 shortcut, or `yttraydl.exe --tags`. Load a local MP3, M4A, FLAC, OGG or Opus
 file to inspect title, artist, album, album artist, track, date, genre and
 lyrics detected by ffprobe. Embedded JPEG or PNG artwork can be exported to a
-new image file without modifying the input. Edit the
-fields or manually enter missing lyrics, then export to a new file with the same
-extension. The original and existing output files are not overwritten. Detected
+new image file without modifying the input. You can also choose a JPEG or PNG
+(up to 10 MiB) to replace embedded artwork in a new MP3, M4A or FLAC copy.
+Edit the fields or enter missing lyrics manually. An optional online search sends
+the entered title and artist to LRCLIB only when you click Search; review and
+choose a result to fill an empty lyrics field. Search needs an internet
+connection and curl; results may be inaccurate or unavailable. Export creates a
+new file with the same extension. The original and existing output files are not overwritten. Detected
 lyrics are not deliberately replaced; ffmpeg remuxing may omit or alter tags,
-lyrics or artwork it cannot represent, so verify the copy. This is not an online
-lyrics finder. ffmpeg and ffprobe are required, and a failed or cancelled export
+lyrics or artwork it cannot represent, so verify the copy. ffmpeg and ffprobe
+are required for tag inspection and export, and a failed or cancelled export
 may leave a partial output. Closing the window leaves the job running.
 
 The installer can optionally create a separate **ytTrayDL Downloads** desktop

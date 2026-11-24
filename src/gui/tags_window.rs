@@ -1,11 +1,18 @@
 //! Independent, non-destructive audio tag and manual-lyrics editor.
 use super::*;
+use yttraydl::lyrics::{self, LyricsCandidate};
 use yttraydl::tags::{self, AudioTags};
 
 pub(super) enum TagResult {
     Loaded {
         path: String,
         result: Box<Result<AudioTags, String>>,
+    },
+    Search {
+        input: String,
+        title: String,
+        artist: String,
+        result: Result<Vec<LyricsCandidate>, String>,
     },
     Saved(Result<String, String>),
     ArtworkSaved(Result<String, String>),
@@ -16,8 +23,11 @@ pub(super) struct TagsState {
     input: String,
     output: String,
     artwork_output: String,
+    replacement_artwork: String,
     loaded_input: Option<String>,
     tags: AudioTags,
+    candidates: Vec<LyricsCandidate>,
+    candidate_for: Option<(String, String, String)>,
     status: String,
     receiver: Option<Receiver<TagResult>>,
     cancel: Option<yttraydl::process::CancellationToken>,
@@ -55,12 +65,45 @@ impl App {
                                     .unwrap_or_default();
                                 state.loaded_input = Some(path);
                                 state.tags = tags;
+                                state.candidates.clear();
+                                state.candidate_for = None;
+                                state.replacement_artwork.clear();
                                 state.status = "Tags loaded. Export creates a new copy.".into();
                             }
                             Err(error) => {
                                 state.loaded_input = None;
                                 state.status = format!("Could not read tags: {error}");
                             }
+                        }
+                    }
+                    state.receiver = None;
+                    state.cancel = None;
+                }
+                Ok(TagResult::Search {
+                    input,
+                    title,
+                    artist,
+                    result,
+                }) => {
+                    state.candidates.clear();
+                    state.candidate_for = None;
+                    if input != state.input
+                        || title != state.tags.title
+                        || artist != state.tags.artist
+                    {
+                        state.status = "Input or search terms changed; search again.".into();
+                    } else {
+                        match result {
+                            Ok(candidates) => {
+                                state.status = if candidates.is_empty() {
+                                    "No plain-lyrics results found.".into()
+                                } else {
+                                    "Review results and choose lyrics to use.".into()
+                                };
+                                state.candidate_for = Some((input, title, artist));
+                                state.candidates = candidates;
+                            }
+                            Err(error) => state.status = error,
                         }
                     }
                     state.receiver = None;
@@ -93,6 +136,8 @@ impl App {
         let mut load = false;
         let mut save = false;
         let mut export_artwork = false;
+        let mut search = false;
+        let mut chosen_lyrics = None;
         let mut cancel = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-tags"),
@@ -128,11 +173,27 @@ impl App {
                             ui.label("Track number"); ui.text_edit_singleline(&mut state.tags.track);
                             ui.label("Date"); ui.text_edit_singleline(&mut state.tags.date);
                             ui.label("Genre"); ui.text_edit_singleline(&mut state.tags.genre);
-                            ui.label("Lyrics (manual entry; no online lookup yet)");
+                            ui.label("Lyrics");
                             if state.tags.lyrics_present {
                                 ui.label("Existing lyrics detected; they will not be replaced.");
                             }
                             ui.add_enabled(!state.tags.lyrics_present, egui::TextEdit::multiline(&mut state.tags.lyrics).desired_rows(6).desired_width(ui.available_width()));
+                            ui.label("Online search sends title and artist to LRCLIB when you choose Search. Results may be inaccurate; review before export.");
+                            if ui.add_enabled(!state.tags.lyrics_present, egui::Button::new("Search online for lyrics")).clicked() { search = true; }
+                            if !state.candidates.is_empty() {
+                                ui.label("Search results (choose one to fill empty lyrics):");
+                                egui::ScrollArea::vertical().id_salt("lyrics-search-results").max_height(150.0).show_rows(ui, 28.0, state.candidates.len(), |ui, rows| {
+                                    for index in rows {
+                                        let item = &state.candidates[index];
+                                        ui.horizontal(|ui| {
+                                            let name = format!("{} — {} ({})", item.artist, item.title, item.album);
+                                            ui.add_sized([(ui.available_width() - 72.0).max(20.0), 24.0], egui::Label::new(&name).truncate()).on_hover_text(&name);
+                                            if ui.add_enabled(!state.tags.lyrics_present && state.tags.lyrics.is_empty(), egui::Button::new("Use")).clicked() { chosen_lyrics = Some(index); }
+                                        });
+                                    }
+                                });
+                                if !state.tags.lyrics.is_empty() { ui.label("Clear the lyrics field before choosing a result."); }
+                            }
                             ui.label("Output copy (same extension; must not exist)");
                             ui.horizontal(|ui| {
                                 ui.add(egui::TextEdit::singleline(&mut state.output).desired_width((ui.available_width() - 90.0).max(40.0)));
@@ -143,7 +204,17 @@ impl App {
                                     }
                                 }
                             });
-                            ui.label("Other tags or artwork may be changed or omitted by ffmpeg; check the copy before relying on it.");
+                            ui.label("Optional replacement cover (JPEG/PNG, up to 10 MiB; MP3/M4A/FLAC only)");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(&mut state.replacement_artwork).desired_width((ui.available_width() - 90.0).max(40.0)).hint_text("Leave blank to keep existing artwork"));
+                                if ui.button("Browse…").clicked() {
+                                    #[cfg(windows)]
+                                    if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["jpg", "jpeg", "png"]).pick_file() {
+                                        state.replacement_artwork = path.to_string_lossy().into_owned();
+                                    }
+                                }
+                            });
+                            ui.label("A selected cover replaces all detected embedded covers in the copy, not the original. Other tags or artwork may be changed or omitted by ffmpeg; check the copy before relying on it.");
                             if ui.button("Export tagged copy").clicked() { save = true; }
                             ui.separator();
                             ui.heading("Embedded artwork");
@@ -168,11 +239,30 @@ impl App {
             },
         );
         self.show_tags = open;
+        let search_matches = state
+            .candidate_for
+            .as_ref()
+            .is_some_and(|(input, title, artist)| {
+                input == &state.input && title == &state.tags.title && artist == &state.tags.artist
+            });
+        if !search_matches {
+            state.candidates.clear();
+            state.candidate_for = None;
+        }
+        if let Some(candidate) = chosen_lyrics
+            .filter(|_| {
+                search_matches && !state.tags.lyrics_present && state.tags.lyrics.is_empty()
+            })
+            .and_then(|index| state.candidates.get(index))
+        {
+            state.tags.lyrics = candidate.lyrics.clone();
+            state.status = "Lyrics copied into the editor. Review before exporting.".into();
+        }
         if let (true, Some(token)) = (cancel, &state.cancel) {
             token.cancel();
             state.status = "Cancelling…".into();
         }
-        if load || save || export_artwork {
+        if load || save || export_artwork || search {
             let input = state.input.clone();
             let output = if export_artwork {
                 state.artwork_output.clone()
@@ -180,12 +270,21 @@ impl App {
                 state.output.clone()
             };
             let edits = state.tags.clone();
+            let replacement_artwork = state.replacement_artwork.clone();
             let settings = self.settings.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             let wake = ctx.clone();
             let token = self.background.child_token();
             state.cancel = Some(token.clone());
             self.background.spawn(move |_| {
+                if search {
+                    let title = edits.title.clone();
+                    let artist = edits.artist.clone();
+                    let result = lyrics::search(&title, &artist, &token);
+                    let _ = tx.send(TagResult::Search { input, title, artist, result });
+                    wake.request_repaint();
+                    return;
+                }
                 let exe_dir = std::env::current_exe()
                     .ok()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()));
@@ -202,7 +301,8 @@ impl App {
                         let artwork = existing.artwork.as_ref().ok_or("No supported embedded artwork found")?;
                         tags::build_artwork_export(&ffmpeg, std::path::Path::new(&input), std::path::Path::new(&output), artwork)?
                     } else {
-                        tags::build_tagged_copy(&ffmpeg, std::path::Path::new(&input), std::path::Path::new(&output), &edits, &existing)?
+                        let replacement = if replacement_artwork.trim().is_empty() { None } else { Some(std::path::Path::new(&replacement_artwork)) };
+                        tags::build_tagged_copy_with_artwork(&ffmpeg, std::path::Path::new(&input), std::path::Path::new(&output), &edits, &existing, replacement)?
                     };
                     yttraydl::process::run_capture(
                         &spec,
@@ -234,7 +334,13 @@ impl App {
                 let _ = tx.send(message);
                 wake.request_repaint();
             });
-            state.status = if load {
+            if search {
+                state.candidates.clear();
+                state.candidate_for = None;
+            }
+            state.status = if search {
+                "Searching online…"
+            } else if load {
                 "Reading tags…"
             } else if export_artwork {
                 "Exporting artwork…"

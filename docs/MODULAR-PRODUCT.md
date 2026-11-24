@@ -4,8 +4,9 @@ This document records the intended direction; most modules are not implemented y
 The Downloads, video converter and lyrics/tags windows have optional direct-launch
 desktop shortcuts; Windows runtime behavior still needs verification. The
 converter supports sequential batches, video and audio profiles, trim and
-basic transforms. Lyrics/tags supports local editing and artwork extraction;
-online lookup, artwork replacement and the player remain pending.
+basic transforms. Lyrics/tags supports local editing, opt-in online lyrics search,
+and artwork extraction or replacement in supported formats; the player remains
+pending.
 ytTrayDL remains a Windows-first tray application; the existing downloader and
 its settings continue to work while new capabilities are added incrementally.
 

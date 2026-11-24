@@ -477,7 +477,11 @@ shipped). The system:
 Lyrics and tags: **Unverified** on Windows. An isolated Linux harness passed
 unit tests and real ffmpeg/ffprobe tagged-copy tests for MP3, M4A, FLAC, OGG
 and Opus, including preservation of test lyrics and original file bytes; JPEG
-and PNG artwork were extracted byte-for-byte from MP3 test fixtures. These
+and PNG artwork were extracted byte-for-byte from MP3 test fixtures. Real
+ffmpeg/ffprobe tests also cover replacing artwork in MP3, M4A and FLAC copies,
+with and without an existing cover. Lyrics search request construction and
+response parsing have isolated unit tests; the external service is inaccessible
+from the local sandbox, so live lookup remains unverified. These
 are not full app, installer or Windows tests. Run the opt-in media test with
 `YTTRAYDL_TEST_FFMPEG` and `YTTRAYDL_TEST_FFPROBE` set. Other tag encodings,
 artwork, window lifecycle, cancellation, shortcut forwarding and installer

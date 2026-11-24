@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Module intent forwarding validation
+
+- Exercise URL and all four module intents through the real Windows message
+  receiver in a bounded two-process fixture, including a repeated player intent.
+
+
 ## Unreleased — Modular installation checks
 
 - Extend installer lifecycle checks to cover requested and unrequested module

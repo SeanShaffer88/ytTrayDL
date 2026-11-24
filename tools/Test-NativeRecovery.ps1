@@ -104,12 +104,14 @@ public static class RecoveryNative {
  $fixture=(Resolve-Path -LiteralPath $IntentFixturePath).Path
  $intentInfo=[Diagnostics.ProcessStartInfo]::new($fixture);$intentInfo.UseShellExecute=$false;$intentInfo.CreateNoWindow=$true;$intentInfo.WorkingDirectory=$root;$intentInfo.RedirectStandardOutput=$true;$intentInfo.RedirectStandardError=$true
  $probe.Dispose();$probe=[Diagnostics.Process]::Start($intentInfo);$output=$probe.StandardOutput.ReadToEndAsync();$errorOutput=$probe.StandardError.ReadToEndAsync()
- if(-not $probe.WaitForExit(10000)){$probe.Kill($true);$null=$probe.WaitForExit(3000);throw 'Exact intent fixture timed out.'}
+ if(-not $probe.WaitForExit(40000)){$probe.Kill($true);$null=$probe.WaitForExit(3000);throw 'Exact intent fixture timed out.'}
  $intent=$output.GetAwaiter().GetResult();$intent|Set-Content -LiteralPath (Join-Path $root 'intent-state.json')
  if($probe.ExitCode-ne0){throw ('Exact intent fixture failed: '+$errorOutput.GetAwaiter().GetResult())}
  $intentState=$intent|ConvertFrom-Json
  if($intentState.status-ne'Pass'-or$intentState.exactUrl-cne$url-or$intentState.senderExitCode-ne0){throw 'Invalid exact intent fixture result.'}
  $result.cases+=@{name='exact-native-url-receiver-state';status='Pass';url=$intentState.exactUrl;exitCode=$probe.ExitCode}
+ if (($intentState.modules -join ',') -cne 'downloads,converter,tags,player,player') { throw 'Module intent fixture results are incomplete.' }
+ $result.cases+=@{name='exact-native-module-receiver-state';status='Pass';modules=$intentState.modules;exitCode=$probe.ExitCode}
  $result.status='Pass'
 } catch {$result.error=$_.Exception.Message} finally {
  foreach($owned in @($probe,$secondary,$primary)){if($null-ne$owned){if(-not$owned.HasExited){$owned.Kill($true);if(-not$owned.WaitForExit(3000)){$result.error+=' Owned cleanup did not finish within deadline.'};$result.status='Failed';$result.error+=' Owned emergency cleanup was required.'};$owned.Dispose()}}

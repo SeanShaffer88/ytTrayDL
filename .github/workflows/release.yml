@@ -54,46 +54,52 @@ jobs:
       - name: Build and verify packages
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:APP_VERSION
-          $exe = (Resolve-Path 'target/release/yttraydl.exe').Path
-          $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
-          if ($actualVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected application version: $actualVersion" }
-          $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($exe))
           try {
-            $reader.BaseStream.Position = 0x3c
-            $offset = $reader.ReadInt32()
-            $reader.BaseStream.Position = $offset
-            if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw 'Application is not a Windows x64 PE' }
-          } finally { $reader.Dispose() }
-          $null = New-Item -ItemType Directory -Path release, portable
-          Copy-Item $exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt -Destination portable
-          [IO.File]::WriteAllText((Join-Path (Resolve-Path portable).Path 'portable.txt'), '')
-          $zip = "release/ytTrayDL-v$version-windows-x64.zip"
-          Compress-Archive -Path portable/* -DestinationPath $zip
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip).Path)
-          try {
-            $expected = @('LICENSE', 'README.md', 'THIRD-PARTY-NOTICES.txt', 'portable.txt', 'yttraydl.exe') | Sort-Object
-            $actual = @($archive.Entries | ForEach-Object { $_.FullName }) | Sort-Object
-            if (Compare-Object $expected $actual) { throw "Unexpected portable inventory: $actual" }
-            $item = $archive.GetEntry('yttraydl.exe')
-            $sha = [Security.Cryptography.SHA256]::Create()
-            $stream = $item.Open()
-            try { $insideHash = [Convert]::ToHexString($sha.ComputeHash($stream)) } finally { $stream.Dispose(); $sha.Dispose() }
-            if ($insideHash -ne (Get-FileHash $exe -Algorithm SHA256).Hash) { throw 'Portable executable hash mismatch' }
-          } finally { $archive.Dispose() }
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DAppVersion=$version" installer/yttraydl.iss
-          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
-          $setup = "dist/ytTrayDL-Setup-v$version-windows-x64.exe"
-          if (-not (Test-Path $setup)) { throw 'Expected installer is missing' }
-          $setupVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $setup).Path).FileVersion
-          if ($setupVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected installer version: $setupVersion" }
-          Copy-Item $setup release/
-          $files = Get-ChildItem release -File | Sort-Object Name
-          if ($files.Count -ne 2) { throw 'Unexpected package inventory' }
-          $sums = @($files | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLower())  $($_.Name)" })
-          [IO.File]::WriteAllLines((Join-Path (Resolve-Path release).Path 'SHA256SUMS.txt'), $sums)
+            $ErrorActionPreference = 'Stop'
+            $version = $env:APP_VERSION
+            $exe = (Resolve-Path 'target/release/yttraydl.exe').Path
+            $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
+            if ($actualVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected application version: $actualVersion" }
+            $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($exe))
+            try {
+              $reader.BaseStream.Position = 0x3c
+              $offset = $reader.ReadInt32()
+              $reader.BaseStream.Position = $offset
+              if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw 'Application is not a Windows x64 PE' }
+            } finally { $reader.Dispose() }
+            $null = New-Item -ItemType Directory -Path release, portable
+            Copy-Item $exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt -Destination portable
+            [IO.File]::WriteAllText((Join-Path (Resolve-Path portable).Path 'portable.txt'), '')
+            $zip = "release/ytTrayDL-v$version-windows-x64.zip"
+            Compress-Archive -Path portable/* -DestinationPath $zip
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip).Path)
+            try {
+              $expected = @('LICENSE', 'README.md', 'THIRD-PARTY-NOTICES.txt', 'portable.txt', 'yttraydl.exe') | Sort-Object
+              $actual = @($archive.Entries | ForEach-Object { $_.FullName }) | Sort-Object
+              if (Compare-Object $expected $actual) { throw "Unexpected portable inventory: $actual" }
+              $item = $archive.GetEntry('yttraydl.exe')
+              $sha = [Security.Cryptography.SHA256]::Create()
+              $stream = $item.Open()
+              try { $insideHash = [Convert]::ToHexString($sha.ComputeHash($stream)) } finally { $stream.Dispose(); $sha.Dispose() }
+              if ($insideHash -ne (Get-FileHash $exe -Algorithm SHA256).Hash) { throw 'Portable executable hash mismatch' }
+            } finally { $archive.Dispose() }
+            & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DAppVersion=$version" installer/yttraydl.iss
+            if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+            $setup = "dist/ytTrayDL-Setup-v$version-windows-x64.exe"
+            if (-not (Test-Path $setup)) { throw 'Expected installer is missing' }
+            $setupVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $setup).Path).FileVersion
+            if ($setupVersion -notmatch "^$([regex]::Escape($version))(?:\.0)?$") { throw "Unexpected installer version: $setupVersion" }
+            Copy-Item $setup release/
+            $files = Get-ChildItem release -File | Sort-Object Name
+            if ($files.Count -ne 2) { throw 'Unexpected package inventory' }
+            $sums = @($files | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLower())  $($_.Name)" })
+            [IO.File]::WriteAllLines((Join-Path (Resolve-Path release).Path 'SHA256SUMS.txt'), $sums)
+          } catch {
+            $message = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Package preflight::$message"
+            throw
+          }
       - name: Upload checked packages as build artifacts
         uses: actions/upload-artifact@v4
         with:

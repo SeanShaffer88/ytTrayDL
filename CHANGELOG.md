@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Local player foundation
+## 0.10.0 — Local player foundation
 
 - Add a separate local playback queue with repeat, reorder, remove and track controls.
 - Add panel, tray and optional desktop shortcut access. Playback requires a

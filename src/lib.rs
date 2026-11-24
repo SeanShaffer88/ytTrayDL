@@ -16,6 +16,7 @@
 
 pub mod converter;
 pub mod lyrics;
+pub mod player;
 pub mod process;
 pub mod tags;
 pub mod window_geometry;

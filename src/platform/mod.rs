@@ -38,6 +38,8 @@ pub enum PlatformEvent {
     OpenConverter,
     /// Open the local lyrics and tags editor.
     OpenTags,
+    /// Open the local player queue.
+    OpenPlayer,
 }
 
 /// Owns the platform listeners. Dropping it stops the listener
@@ -123,6 +125,18 @@ pub fn forward_open_tags() -> Result<(), String> {
     }
 }
 
+/// Deliver a direct player request to the running instance.
+pub fn forward_open_player() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_impl::forward_open_player()
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Launch intent forwarding is only supported on Windows".into())
+    }
+}
+
 /// Deliver an explicit CLI URL to the running instance, with a bounded wait.
 pub fn forward_manual_url(url: &str) -> Result<(), String> {
     #[cfg(windows)]
@@ -144,6 +158,8 @@ const OPEN_DOWNLOADS_MESSAGE: usize = 0x59545502;
 const OPEN_CONVERTER_MESSAGE: usize = 0x59545503;
 #[cfg(any(windows, test))]
 const OPEN_TAGS_MESSAGE: usize = 0x59545504;
+#[cfg(any(windows, test))]
+const OPEN_PLAYER_MESSAGE: usize = 0x59545505;
 
 #[cfg(any(windows, test))]
 fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
@@ -155,6 +171,7 @@ fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
         OPEN_DOWNLOADS_MESSAGE if bytes == b"downloads" => Some(PlatformEvent::OpenDownloads),
         OPEN_CONVERTER_MESSAGE if bytes == b"converter" => Some(PlatformEvent::OpenConverter),
         OPEN_TAGS_MESSAGE if bytes == b"tags" => Some(PlatformEvent::OpenTags),
+        OPEN_PLAYER_MESSAGE if bytes == b"player" => Some(PlatformEvent::OpenPlayer),
         _ => None,
     }
 }
@@ -517,6 +534,14 @@ mod clipboard_tests {
             copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
             OPEN_DOWNLOADS_MESSAGE,
         };
+        assert_eq!(
+            super::copydata_event(super::OPEN_PLAYER_MESSAGE, b"player"),
+            Some(PlatformEvent::OpenPlayer)
+        );
+        assert_eq!(
+            super::copydata_event(super::OPEN_PLAYER_MESSAGE, b"tags"),
+            None
+        );
         assert_eq!(
             super::copydata_event(super::OPEN_TAGS_MESSAGE, b"tags"),
             Some(PlatformEvent::OpenTags)

@@ -34,14 +34,23 @@ fn main() -> eframe::Result<()> {
     let open_downloads = args.iter().any(|arg| arg == "--downloads");
     let open_converter = args.iter().any(|arg| arg == "--converter");
     let open_tags = args.iter().any(|arg| arg == "--tags");
-    let setup =
-        platform::setup_with_launch_intent(show, open_downloads || open_converter || open_tags);
+    let open_player = args.iter().any(|arg| arg == "--player");
+    let setup = platform::setup_with_launch_intent(
+        show,
+        open_downloads || open_converter || open_tags || open_player,
+    );
     yttraydl::diag_log(&format!(
         "launch: v{} background={background} show={show} already_running={}",
         env!("CARGO_PKG_VERSION"),
         setup.already_running
     ));
     if setup.already_running {
+        if open_player {
+            if let Err(error) = platform::forward_open_player() {
+                yttraydl::diag_log(&format!("Player launch forwarding failed: {error}"));
+                platform::fatal_error_box("ytTrayDL could not open Player", &error);
+            }
+        }
         if open_tags {
             if let Err(error) = platform::forward_open_tags() {
                 yttraydl::diag_log(&format!("Tags launch forwarding failed: {error}"));
@@ -69,7 +78,8 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let open_panel = show || !background || open_downloads || open_converter || open_tags;
+    let open_panel =
+        show || !background || open_downloads || open_converter || open_tags || open_player;
     let icon = gui::app_icon_data();
     let options = eframe::NativeOptions {
         // Glow (OpenGL), pinned explicitly — see Cargo.toml for
@@ -99,6 +109,7 @@ fn main() -> eframe::Result<()> {
                 app.show_downloads = open_downloads;
                 app.show_converter = open_converter;
                 app.show_tags = open_tags;
+                app.show_player = open_player;
                 Ok(Box::new(app))
             }),
         )

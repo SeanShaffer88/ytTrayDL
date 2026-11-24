@@ -1,0 +1,235 @@
+//! Local playlist manager; ffplay provides the playback window and transport keys.
+use super::*;
+use yttraydl::player::{self, PlayQueue};
+use yttraydl::process::CancellationToken;
+
+struct PlayerResult {
+    index: usize,
+    result: Result<(), String>,
+}
+
+pub(super) struct PlayerState {
+    queue: PlayQueue,
+    input: String,
+    ffplay_path: String,
+    selected: usize,
+    active: Option<usize>,
+    volume: u8,
+    repeat: bool,
+    pending: Option<usize>,
+    stopping: bool,
+    status: String,
+    receiver: Option<Receiver<PlayerResult>>,
+    cancel: Option<CancellationToken>,
+}
+impl Default for PlayerState {
+    fn default() -> Self {
+        Self {
+            queue: PlayQueue::default(),
+            input: String::new(),
+            ffplay_path: String::new(),
+            selected: 0,
+            active: None,
+            volume: 75,
+            repeat: false,
+            pending: None,
+            stopping: false,
+            status: String::new(),
+            receiver: None,
+            cancel: None,
+        }
+    }
+}
+
+impl App {
+    fn start_player_track(&self, state: &mut PlayerState, index: usize, ctx: &egui::Context) {
+        let Some(input) = state.queue.items().get(index).cloned() else {
+            return;
+        };
+        let explicit = state.ffplay_path.clone();
+        let settings = self.settings.clone();
+        let volume = state.volume;
+        let token = self.background.child_token();
+        let worker_token = token.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake = ctx.clone();
+        state.active = Some(index);
+        state.selected = index;
+        state.stopping = false;
+        state.pending = None;
+        state.status = format!(
+            "Playing {} of {}: {}",
+            index + 1,
+            state.queue.items().len(),
+            input.display()
+        );
+        state.cancel = Some(token);
+        state.receiver = Some(rx);
+        self.background.spawn(move |_| {
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+            let ffmpeg = yttraydl::converter::locate_ffmpeg(&settings, exe_dir.as_deref());
+            let explicit = if explicit.trim().is_empty() {
+                None
+            } else {
+                Some(std::path::Path::new(&explicit))
+            };
+            let result = player::locate_ffplay(explicit, ffmpeg.as_deref())
+                .ok_or_else(|| {
+                    "ffplay not found. Select ffplay or install it next to ffmpeg or on PATH"
+                        .to_string()
+                })
+                .and_then(|bin| player::build_playback(&bin, &input, volume))
+                .and_then(|spec| player::play(&spec, &worker_token));
+            let _ = tx.send(PlayerResult { index, result });
+            wake.request_repaint();
+        });
+    }
+
+    pub(super) fn player_ui(&mut self, ctx: &egui::Context) {
+        let mut state = std::mem::take(&mut self.player);
+        let mut start_after = None;
+        if let Some(rx) = &state.receiver {
+            let event = match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(PlayerResult {
+                    index: state.active.unwrap_or(0),
+                    result: Err("Playback worker stopped unexpectedly".into()),
+                }),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(event) = event {
+                state.receiver = None;
+                state.cancel = None;
+                state.active = None;
+                match player::completion(
+                    &state.queue,
+                    event.index,
+                    state.repeat,
+                    state.stopping,
+                    state.pending.take(),
+                    event.result.is_ok(),
+                ) {
+                    player::Completion::Start(next) => start_after = Some(next),
+                    player::Completion::Stopped => state.status = "Playback stopped.".into(),
+                    player::Completion::Finished => state.status = "Queue finished.".into(),
+                    player::Completion::Failed => {
+                        state.status = format!("Playback stopped: {}", event.result.unwrap_err())
+                    }
+                }
+                state.stopping = false;
+            }
+        }
+        if let Some(index) = start_after {
+            self.start_player_track(&mut state, index, ctx);
+        }
+        if !self.show_player {
+            self.player = state;
+            return;
+        }
+        let mut open = true;
+        let mut start = false;
+        let mut stop = false;
+        let mut skip_to = None;
+        let mut remove = None;
+        let mut up = None;
+        let mut down = None;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("yttraydl-player"),
+            egui::ViewportBuilder::default().with_title("ytTrayDL — Player")
+                .with_inner_size([640.0, 520.0]).with_min_inner_size([420.0, 340.0]),
+            |ctx, _| {
+                if ctx.input(|i| i.viewport().close_requested()) { open = false; }
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.heading("Local player");
+                    ui.label("Play local audio and video with a separately installed ffplay.");
+                    if !state.status.is_empty() { ui.add(egui::Label::new(&state.status).truncate()).on_hover_text(&state.status); }
+                    let busy = state.receiver.is_some();
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_enabled(!busy && !state.queue.items().is_empty(), egui::Button::new("Play selected")).clicked() { start = true; }
+                        if ui.add_enabled(busy && !state.stopping, egui::Button::new("Stop")).clicked() { stop = true; }
+                        let prev = state.active.and_then(|i| i.checked_sub(1));
+                        if ui.add_enabled(busy && !state.stopping && prev.is_some(), egui::Button::new("Previous")).clicked() { skip_to = prev; }
+                        let next = state.active.and_then(|i| state.queue.next(i, state.repeat));
+                        if ui.add_enabled(busy && !state.stopping && next.is_some(), egui::Button::new("Next")).clicked() { skip_to = next; }
+                        ui.checkbox(&mut state.repeat, "Repeat queue");
+                    });
+                    ui.label("Playback window: Space = pause, arrows = seek, 9/0 = volume, M = mute.")
+                        .on_hover_text("Closing the playback window advances the queue. Closing this manager leaves playback running.");
+                    ui.separator();
+                    egui::CollapsingHeader::new("Media & playback options").default_open(false).show(ui, |ui| {
+                    ui.add_enabled_ui(!busy, |ui| {
+                        ui.label("ffplay executable (optional; not included in the managed ffmpeg download)");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut state.ffplay_path).desired_width((ui.available_width() - 90.0).max(40.0)).hint_text("Auto-detect next to ffmpeg or on PATH"));
+                            if ui.button("Browse…").clicked() {
+                                #[cfg(windows)]
+                                if let Some(path) = rfd::FileDialog::new().add_filter("Application", &["exe"]).pick_file() { state.ffplay_path = path.to_string_lossy().into_owned(); }
+                            }
+                        });
+                        ui.add(egui::Slider::new(&mut state.volume, 0..=100).text("Starting volume"));
+                        ui.label("Add a local audio or video file");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut state.input).desired_width((ui.available_width() - 140.0).max(40.0)));
+                            if ui.button("Add").clicked() {
+                                let added = state.queue.add([std::path::PathBuf::from(state.input.trim())]);
+                                state.status = if added == 1 { "Added to queue." } else { "Unsupported file type or queue is full." }.into();
+                            }
+                            if ui.button("Choose…").clicked() {
+                                #[cfg(windows)]
+                                if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                                    let added = state.queue.add(paths);
+                                    state.status = format!("Added {added} file(s). Unsupported types and entries beyond the limit were skipped.");
+                                }
+                            }
+                        });
+                        if ui.button("Clear queue").clicked() { state.queue.clear(); state.selected = 0; }
+                    });
+                    });
+                    ui.separator();
+                    ui.label(format!("Queue: {} / {}", state.queue.items().len(), player::MAX_QUEUE));
+                    let count = state.queue.items().len();
+                    egui::ScrollArea::vertical().id_salt("player-queue").auto_shrink([false, false]).show_rows(ui, 30.0, count, |ui, rows| {
+                        for index in rows {
+                            ui.push_id(index, |ui| ui.horizontal(|ui| {
+                                let path = state.queue.items()[index].display().to_string();
+                                let available = (ui.available_width() - 175.0).max(20.0);
+                                if ui.add_sized([available, 24.0], egui::Button::new(&path).selected(state.selected == index)).on_hover_text(&path).clicked() && !busy { state.selected = index; }
+                                if ui.add_enabled(!busy && index > 0, egui::Button::new("Up")).clicked() { up = Some(index); }
+                                if ui.add_enabled(!busy && index + 1 < count, egui::Button::new("Down")).clicked() { down = Some(index); }
+                                if ui.add_enabled(!busy, egui::Button::new("Remove")).clicked() { remove = Some(index); }
+                            }));
+                        }
+                    });
+                });
+            },
+        );
+        self.show_player = open;
+        if let Some(index) = remove {
+            state.queue.remove(index);
+            state.selected = state
+                .selected
+                .min(state.queue.items().len().saturating_sub(1));
+        }
+        if let Some(index) = up.filter(|&index| state.queue.move_up(index)) {
+            state.selected = index - 1;
+        }
+        if let Some(index) = down.filter(|&index| state.queue.move_down(index)) {
+            state.selected = index + 1;
+        }
+        if start {
+            let selected = state.selected;
+            self.start_player_track(&mut state, selected, ctx);
+        }
+        if stop || skip_to.is_some() {
+            state.pending = skip_to;
+            state.stopping = true;
+            state.status = if stop { "Stopping…" } else { "Skipping…" }.into();
+            if let Some(token) = &state.cancel {
+                token.cancel();
+            }
+        }
+        self.player = state;
+    }
+}

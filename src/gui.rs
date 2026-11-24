@@ -11,6 +11,7 @@ mod converter_window;
 #[cfg(feature = "field-validation")]
 mod field_metrics;
 mod gui_windows;
+mod player_window;
 mod settings_layout;
 mod tags_window;
 
@@ -1017,6 +1018,7 @@ pub struct TrayHandles {
     id_downloads: tray_icon::menu::MenuId,
     id_converter: tray_icon::menu::MenuId,
     id_tags: tray_icon::menu::MenuId,
+    id_player: tray_icon::menu::MenuId,
     id_open_folder: tray_icon::menu::MenuId,
     id_pause_all: tray_icon::menu::MenuId,
     id_settings: tray_icon::menu::MenuId,
@@ -1120,6 +1122,8 @@ fn tray_item_name(t: &TrayHandles, id: &tray_icon::menu::MenuId) -> &'static str
         "video converter"
     } else if *id == t.id_tags {
         "lyrics and tags"
+    } else if *id == t.id_player {
+        "player"
     } else if *id == t.id_open_folder {
         "open download folder"
     } else if *id == t.id_pause_all {
@@ -1360,6 +1364,8 @@ pub struct App {
     pub show_downloads: bool,
     pub show_converter: bool,
     pub show_tags: bool,
+    pub show_player: bool,
+    player: player_window::PlayerState,
     tags: tags_window::TagsState,
     converter: converter_window::ConverterState,
     pub show_about: bool,
@@ -1568,6 +1574,8 @@ impl App {
             show_downloads: false,
             show_converter: false,
             show_tags: false,
+            show_player: false,
+            player: player_window::PlayerState::default(),
             tags: tags_window::TagsState::default(),
             converter: converter_window::ConverterState::default(),
             show_about: false,
@@ -2274,6 +2282,17 @@ impl App {
                     self.show_panel = true;
                     ctx.request_repaint();
                 }
+                PlatformEvent::OpenPlayer => {
+                    if self.show_player {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of("yttraydl-player"),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                    self.show_player = true;
+                    self.show_panel = true;
+                    ctx.request_repaint();
+                }
                 PlatformEvent::ShowRequested => {
                     self.settings.tray_icon_visible = true;
                     self.tray_visible = true;
@@ -2929,6 +2948,7 @@ impl App {
         let downloads = MenuItem::new("Downloads\u{2026}", true, None);
         let converter = MenuItem::new("Video converter…", true, None);
         let tags_item = MenuItem::new("Lyrics & tags…", true, None);
+        let player_item = MenuItem::new("Player…", true, None);
         let open_folder = MenuItem::new("Open download folder", true, None);
         let pause_all = MenuItem::new("Pause all downloads", true, None);
         let settings_item = MenuItem::new("Settings\u{2026}", true, None);
@@ -2951,6 +2971,7 @@ impl App {
             exit.id().clone(),
             converter.id().clone(),
             tags_item.id().clone(),
+            player_item.id().clone(),
         );
         let _ = menu.append_items(&[
             &header,
@@ -2962,6 +2983,7 @@ impl App {
             &downloads,
             &converter,
             &tags_item,
+            &player_item,
             &open_folder,
             &pause_all,
             &PredefinedMenuItem::separator(),
@@ -3021,6 +3043,7 @@ impl App {
                 id_downloads: ids.4,
                 id_converter: ids.11,
                 id_tags: ids.12,
+                id_player: ids.13,
                 id_open_folder: ids.5,
                 id_pause_all: ids.6,
                 id_settings: ids.7,
@@ -3099,6 +3122,7 @@ impl App {
                 id_downloads,
                 id_converter,
                 id_tags,
+                id_player,
                 id_settings,
                 id_about,
                 id_exit,
@@ -3110,6 +3134,7 @@ impl App {
                     t.id_downloads.clone(),
                     t.id_converter.clone(),
                     t.id_tags.clone(),
+                    t.id_player.clone(),
                     t.id_settings.clone(),
                     t.id_about.clone(),
                     t.id_exit.clone(),
@@ -3142,6 +3167,9 @@ impl App {
                 self.show_panel = true;
             } else if ev.id == id_tags {
                 self.show_tags = true;
+                self.show_panel = true;
+            } else if ev.id == id_player {
+                self.show_player = true;
                 self.show_panel = true;
             } else if ev.id == id_settings {
                 // Settings is its own window (0.5.1) — opening
@@ -3350,6 +3378,7 @@ impl eframe::App for App {
         self.downloads_ui(ctx);
         self.converter_ui(ctx);
         self.tags_ui(ctx);
+        self.player_ui(ctx);
         self.toasts_ui(ctx);
         self.about_ui(ctx);
         self.hide_icon_confirm_ui(ctx);

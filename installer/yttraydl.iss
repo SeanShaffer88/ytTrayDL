@@ -8,7 +8,7 @@
 ; portable build can keep using it.
 
 #ifndef AppVersion
-  #define AppVersion "0.9.0"
+  #define AppVersion "0.10.0"
 #endif
 ; CI builds x64 only and passes /DAppVersion (the define above is the local-build fallback).
 #ifndef ExeSourceDir
@@ -63,6 +63,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "downloadsicon"; Description: "Create a desktop shortcut for Downloads"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "convertericon"; Description: "Create a desktop shortcut for Video converter"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "tagsicon"; Description: "Create a desktop shortcut for Lyrics and tags"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "playericon"; Description: "Create a desktop shortcut for Player"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "startup"; Description: "Start ytTrayDL when Windows starts (tray, no window)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
@@ -84,6 +85,8 @@ Name: "{autodesktop}\ytTrayDL Video Converter"; Filename: "{app}\{#AppExe}"; Par
 
 Name: "{autodesktop}\ytTrayDL Lyrics and Tags"; Filename: "{app}\{#AppExe}"; Parameters: "--tags"; Tasks: tagsicon
 
+Name: "{autodesktop}\ytTrayDL Player"; Filename: "{app}\{#AppExe}"; Parameters: "--player"; Tasks: playericon
+
 [Registry]
 ; Same value ytTrayDL's own "Start with Windows" writes, with the
 ; --background flag so autostart goes straight to the tray.
@@ -104,6 +107,7 @@ Type: files; Name: "{autodesktop}\ytTrayDL.lnk"
 Type: files; Name: "{autodesktop}\ytTrayDL Downloads.lnk"
 Type: files; Name: "{autodesktop}\ytTrayDL Video Converter.lnk"
 Type: files; Name: "{autodesktop}\ytTrayDL Lyrics and Tags.lnk"
+Type: files; Name: "{autodesktop}\ytTrayDL Player.lnk"
 
 [Code]
 var

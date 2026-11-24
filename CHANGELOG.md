@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0 — Local player foundation
+
+- Add a separate local playback queue with repeat, reorder, remove and track controls.
+- Add panel, tray and optional desktop shortcut access. Playback requires a
+  separately installed ffplay and Windows interactive behavior is unverified.
+
 ## 0.9.0 — Converter and Lyrics & Tags
 
 - Added audio download quality choices and an optional Downloads shortcut.

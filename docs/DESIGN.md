@@ -474,6 +474,15 @@ shipped). The system:
 
 ## Verification matrix
 
+Local player: **Unverified** on Windows and no real ffplay playback has been
+run in the development sandbox. An isolated Linux harness covers queue bounds,
+ordering, progression/repeat, local argv construction and cancellation of an
+owned fixture process independently of other jobs. These are not full app,
+installer or GUI tests. Actual audio/video playback, ffplay keyboard controls,
+Windows window lifecycle, tray/shortcut launch and high-DPI accessibility need
+real Windows validation. The managed ffmpeg download does not include ffplay.
+
+
 Lyrics and tags: **Unverified** on Windows. An isolated Linux harness passed
 unit tests and real ffmpeg/ffprobe tagged-copy tests for MP3, M4A, FLAC, OGG
 and Opus, including preservation of test lyrics and original file bytes; JPEG

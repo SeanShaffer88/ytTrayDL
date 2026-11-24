@@ -342,7 +342,7 @@ mod tests {
         ]);
         assert_eq!(queue.matching_indices("  áLBUM  "), [0, 2]);
         assert_eq!(queue.matching_indices("second"), [1]);
-        assert_eq!(queue.matching_indices("missing"), []);
+        assert!(queue.matching_indices("missing").is_empty());
         assert_eq!(queue.matching_indices(" "), [0, 1, 2]);
         assert_eq!(queue.next(0, false), Some(1));
         assert!(queue.move_down(0));

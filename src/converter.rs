@@ -13,10 +13,14 @@ pub enum VideoProfile {
     MkvHevc,
     Mp4Av1,
     WebmAv1,
+    Mp3Audio,
+    M4aAudio,
+    FlacAudio,
+    OpusAudio,
 }
 
 impl VideoProfile {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 11] = [
         Self::Mp4,
         Self::Mkv,
         Self::Webm,
@@ -24,6 +28,10 @@ impl VideoProfile {
         Self::MkvHevc,
         Self::Mp4Av1,
         Self::WebmAv1,
+        Self::Mp3Audio,
+        Self::M4aAudio,
+        Self::FlacAudio,
+        Self::OpusAudio,
     ];
 
     pub fn label(self) -> &'static str {
@@ -35,7 +43,18 @@ impl VideoProfile {
             Self::MkvHevc => "MKV (HEVC + AAC)",
             Self::Mp4Av1 => "MP4 (AV1 + AAC)",
             Self::WebmAv1 => "WebM (AV1 + Opus)",
+            Self::Mp3Audio => "Audio only: MP3",
+            Self::M4aAudio => "Audio only: M4A (AAC)",
+            Self::FlacAudio => "Audio only: FLAC",
+            Self::OpusAudio => "Audio only: Opus",
         }
+    }
+
+    pub fn is_audio_only(self) -> bool {
+        matches!(
+            self,
+            Self::Mp3Audio | Self::M4aAudio | Self::FlacAudio | Self::OpusAudio
+        )
     }
 
     pub fn extension(self) -> &'static str {
@@ -43,6 +62,10 @@ impl VideoProfile {
             Self::Mp4 | Self::Mp4Hevc | Self::Mp4Av1 => "mp4",
             Self::Mkv | Self::MkvHevc => "mkv",
             Self::Webm | Self::WebmAv1 => "webm",
+            Self::Mp3Audio => "mp3",
+            Self::M4aAudio => "m4a",
+            Self::FlacAudio => "flac",
+            Self::OpusAudio => "opus",
         }
     }
 }
@@ -222,12 +245,79 @@ impl ResizePreset {
     }
 }
 
+/// Optional bitrate for lossy audio output; FLAC remains lossless.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AudioBitrate {
+    #[default]
+    EncoderDefault,
+    K128,
+    K192,
+    K256,
+    K320,
+}
+impl AudioBitrate {
+    pub const ALL: [Self; 5] = [
+        Self::EncoderDefault,
+        Self::K128,
+        Self::K192,
+        Self::K256,
+        Self::K320,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EncoderDefault => "Encoder default",
+            Self::K128 => "128 kbps",
+            Self::K192 => "192 kbps",
+            Self::K256 => "256 kbps",
+            Self::K320 => "320 kbps",
+        }
+    }
+    fn argument(self) -> Option<&'static str> {
+        match self {
+            Self::EncoderDefault => None,
+            Self::K128 => Some("128k"),
+            Self::K192 => Some("192k"),
+            Self::K256 => Some("256k"),
+            Self::K320 => Some("320k"),
+        }
+    }
+}
+
+/// Rotate the decoded frame after cropping and before resizing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rotation {
+    #[default]
+    None,
+    Clockwise,
+    HalfTurn,
+    CounterClockwise,
+}
+impl Rotation {
+    pub const ALL: [Self; 4] = [
+        Self::None,
+        Self::Clockwise,
+        Self::HalfTurn,
+        Self::CounterClockwise,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "No rotation",
+            Self::Clockwise => "90° clockwise",
+            Self::HalfTurn => "180°",
+            Self::CounterClockwise => "90° counterclockwise",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConversionOptions {
     pub trim: TrimRange,
     pub crop: Option<CropRect>,
     pub resize: ResizePreset,
     pub quality: EncodingQuality,
+    pub rotation: Rotation,
+    pub mute_audio: bool,
+    pub audio_bitrate: AudioBitrate,
 }
 
 fn video_filters(options: ConversionOptions) -> Option<String> {
@@ -237,6 +327,12 @@ fn video_filters(options: ConversionOptions) -> Option<String> {
             "crop={}:{}:{}:{}:exact=1",
             crop.width, crop.height, crop.x, crop.y
         ));
+    }
+    match options.rotation {
+        Rotation::None => {}
+        Rotation::Clockwise => filters.push("transpose=clock".into()),
+        Rotation::HalfTurn => filters.push("hflip,vflip".into()),
+        Rotation::CounterClockwise => filters.push("transpose=cclock".into()),
     }
     if let Some((width, height)) = options.resize.dimensions() {
         // Quotes are parsed by ffmpeg's filter parser, not a shell. The min
@@ -371,13 +467,6 @@ pub fn build_conversion_with_options(
             profile.extension()
         ));
     }
-    let (video, audio) = match profile {
-        VideoProfile::Mp4 | VideoProfile::Mkv => ("libx264", "aac"),
-        VideoProfile::Webm => ("libvpx-vp9", "libopus"),
-        VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => ("libx265", "aac"),
-        VideoProfile::Mp4Av1 => ("libaom-av1", "aac"),
-        VideoProfile::WebmAv1 => ("libaom-av1", "libopus"),
-    };
     let mut spec = ProcessSpec::new(ffmpeg)
         .args([
             "-nostdin",
@@ -397,24 +486,54 @@ pub fn build_conversion_with_options(
     if let Some(end_ms) = trim.end_ms {
         spec = spec.arg("-t").arg(seconds_arg(end_ms - trim.start_ms));
     }
-    if let Some(filters) = video_filters(options) {
-        spec = spec.arg("-vf").arg(filters);
-    }
-    spec = spec.args([
-        "-map", "0:v:0", "-map", "0:a:0?", "-c:v", video, "-c:a", audio,
-    ]);
-    if let Some(crf) = options.quality.crf(profile) {
-        spec = spec.args(["-crf", crf]);
-        if matches!(
-            profile,
-            VideoProfile::Webm | VideoProfile::Mp4Av1 | VideoProfile::WebmAv1
-        ) {
-            spec = spec.args(["-b:v", "0"]);
+    if profile.is_audio_only() {
+        if options.mute_audio {
+            return Err("Audio-only output cannot remove audio".into());
+        }
+        let audio = match profile {
+            VideoProfile::Mp3Audio => "libmp3lame",
+            VideoProfile::M4aAudio => "aac",
+            VideoProfile::FlacAudio => "flac",
+            VideoProfile::OpusAudio => "libopus",
+            _ => unreachable!(),
+        };
+        spec = spec.args(["-map", "0:a:0", "-vn", "-c:a", audio]);
+    } else {
+        let (video, audio) = match profile {
+            VideoProfile::Mp4 | VideoProfile::Mkv => ("libx264", "aac"),
+            VideoProfile::Webm => ("libvpx-vp9", "libopus"),
+            VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => ("libx265", "aac"),
+            VideoProfile::Mp4Av1 => ("libaom-av1", "aac"),
+            VideoProfile::WebmAv1 => ("libaom-av1", "libopus"),
+            _ => unreachable!(),
+        };
+        if let Some(filters) = video_filters(options) {
+            spec = spec.arg("-vf").arg(filters);
+        }
+        spec = spec.args(["-map", "0:v:0", "-c:v", video]);
+        if options.mute_audio {
+            spec = spec.arg("-an");
+        } else {
+            spec = spec.args(["-map", "0:a:0?", "-c:a", audio]);
+        }
+        if let Some(crf) = options.quality.crf(profile) {
+            spec = spec.args(["-crf", crf]);
+            if matches!(
+                profile,
+                VideoProfile::Webm | VideoProfile::Mp4Av1 | VideoProfile::WebmAv1
+            ) {
+                spec = spec.args(["-b:v", "0"]);
+            }
+        }
+        // MP4 HEVC needs this tag for broader player compatibility.
+        if profile == VideoProfile::Mp4Hevc {
+            spec = spec.args(["-tag:v", "hvc1"]);
         }
     }
-    // MP4 HEVC needs this tag for broader player compatibility.
-    if profile == VideoProfile::Mp4Hevc {
-        spec = spec.args(["-tag:v", "hvc1"]);
+    if !options.mute_audio && profile != VideoProfile::FlacAudio {
+        if let Some(bitrate) = options.audio_bitrate.argument() {
+            spec = spec.args(["-b:a", bitrate]);
+        }
     }
     Ok(spec.arg(output))
 }
@@ -647,11 +766,28 @@ mod tests {
                 options,
             )
             .unwrap();
+            if profile.is_audio_only() {
+                let audio = match profile {
+                    VideoProfile::Mp3Audio => "libmp3lame",
+                    VideoProfile::M4aAudio => "aac",
+                    VideoProfile::FlacAudio => "flac",
+                    VideoProfile::OpusAudio => "libopus",
+                    _ => unreachable!(),
+                };
+                assert!(spec
+                    .args
+                    .windows(2)
+                    .any(|p| p[0] == "-c:a" && p[1] == audio));
+                assert!(spec.args.iter().any(|p| p == "-vn"));
+                assert!(!spec.args.iter().any(|p| p == "-crf" || p == "-vf"));
+                continue;
+            }
             let video = match profile {
                 VideoProfile::Mp4 | VideoProfile::Mkv => "libx264",
                 VideoProfile::Webm => "libvpx-vp9",
                 VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => "libx265",
                 VideoProfile::Mp4Av1 | VideoProfile::WebmAv1 => "libaom-av1",
+                _ => unreachable!(),
             };
             assert!(spec
                 .args
@@ -718,6 +854,80 @@ mod tests {
             .unwrap(),
             "crop=640:360:10:20:exact=1"
         );
+    }
+
+    #[test]
+    fn audio_bitrate_respects_mute_and_lossless() {
+        let dir =
+            std::env::temp_dir().join(format!("yttraydl-audio-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.mkv");
+        std::fs::write(&input, b"fixture").unwrap();
+        for (profile, muted, expected) in [
+            (VideoProfile::Mp3Audio, false, true),
+            (VideoProfile::Mp4, false, true),
+            (VideoProfile::Mp4, true, false),
+            (VideoProfile::FlacAudio, false, false),
+        ] {
+            let options = ConversionOptions {
+                mute_audio: muted,
+                audio_bitrate: AudioBitrate::K192,
+                ..Default::default()
+            };
+            let spec = build_conversion_with_options(
+                Path::new("ffmpeg"),
+                &input,
+                &dir.join(format!("output.{}", profile.extension())),
+                profile,
+                options,
+            )
+            .unwrap();
+            assert_eq!(
+                spec.args
+                    .windows(2)
+                    .any(|p| p[0] == "-b:a" && p[1] == "192k"),
+                expected
+            );
+        }
+        assert!(build_conversion_with_options(
+            Path::new("ffmpeg"),
+            &input,
+            &dir.join("x.mp3"),
+            VideoProfile::Mp3Audio,
+            ConversionOptions {
+                mute_audio: true,
+                ..Default::default()
+            }
+        )
+        .is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rotation_runs_between_crop_and_resize() {
+        let crop = CropRect::parse("640", "360", "10", "20").unwrap();
+        let options = ConversionOptions {
+            crop,
+            rotation: Rotation::Clockwise,
+            resize: ResizePreset::P720,
+            ..Default::default()
+        };
+        assert!(video_filters(options)
+            .unwrap()
+            .starts_with("crop=640:360:10:20:exact=1,transpose=clock,scale="));
+        for (rotation, expected) in [
+            (Rotation::HalfTurn, "hflip,vflip"),
+            (Rotation::CounterClockwise, "transpose=cclock"),
+        ] {
+            assert_eq!(
+                video_filters(ConversionOptions {
+                    rotation,
+                    ..Default::default()
+                })
+                .as_deref(),
+                Some(expected)
+            );
+        }
     }
 
     #[test]

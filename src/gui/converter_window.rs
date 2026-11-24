@@ -1,7 +1,8 @@
 //! Independent local video-converter viewport.
 use super::*;
 use yttraydl::converter::{
-    self, BatchEdit, BatchProgress, EncodingQuality, ResizePreset, VideoProfile,
+    self, AudioBitrate, BatchEdit, BatchProgress, EncodingQuality, ResizePreset, Rotation,
+    VideoProfile,
 };
 use yttraydl::process;
 
@@ -16,6 +17,7 @@ pub(super) struct ConverterState {
     output: String,
     profile: VideoProfile,
     quality: EncodingQuality,
+    audio_bitrate: AudioBitrate,
     trim_start: String,
     trim_end: String,
     crop_width: String,
@@ -23,6 +25,8 @@ pub(super) struct ConverterState {
     crop_x: String,
     crop_y: String,
     resize: ResizePreset,
+    rotation: Rotation,
+    mute_audio: bool,
     status: String,
     batch_inputs: Vec<std::path::PathBuf>,
     batch_folder: String,
@@ -128,12 +132,25 @@ impl App {
                                     );
                                 }
                             });
-                        ui.label("Encoding quality");
+                        if state.profile.is_audio_only() {
+                            ui.label("Audio-only profiles ignore video options; FLAC is lossless.");
+                        }
+                        ui.add_enabled_ui(!state.profile.is_audio_only(), |ui| {
+                        ui.label("Video encoding quality");
                         egui::ComboBox::from_id_salt("converter-quality")
                             .selected_text(state.quality.label())
                             .show_ui(ui, |ui| {
                                 for quality in EncodingQuality::ALL {
                                     ui.selectable_value(&mut state.quality, quality, quality.label());
+                                }
+                            });
+                        });
+                        ui.label("Audio bitrate (lossy profiles)");
+                        egui::ComboBox::from_id_salt("converter-audio-bitrate")
+                            .selected_text(state.audio_bitrate.label())
+                            .show_ui(ui, |ui| {
+                                for bitrate in AudioBitrate::ALL {
+                                    ui.selectable_value(&mut state.audio_bitrate, bitrate, bitrate.label());
                                 }
                             });
                         ui.label("HEVC and AV1 need ffmpeg with the corresponding encoder; AV1 can be slow.");
@@ -145,6 +162,7 @@ impl App {
                             ui.add(egui::TextEdit::singleline(&mut state.trim_end).desired_width(80.0).hint_text("end"));
                         });
                         ui.label("Up to 3 decimals. Empty end keeps the rest; output is re-encoded.");
+                        ui.add_enabled_ui(!state.profile.is_audio_only(), |ui| {
                         ui.label("Optional crop (pixels before resize; applies to every file)");
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Width");
@@ -157,6 +175,15 @@ impl App {
                             ui.add(egui::TextEdit::singleline(&mut state.crop_y).desired_width(62.0).hint_text("0"));
                         });
                         ui.label("Leave crop blank to keep the frame. Use even dimensions; ffmpeg may adjust edge offsets.");
+                        ui.label("Rotation (after crop, before resize)");
+                        egui::ComboBox::from_id_salt("converter-rotation")
+                            .selected_text(state.rotation.label())
+                            .show_ui(ui, |ui| {
+                                for rotation in Rotation::ALL {
+                                    ui.selectable_value(&mut state.rotation, rotation, rotation.label());
+                                }
+                            });
+                        ui.checkbox(&mut state.mute_audio, "Remove audio from output");
                         ui.label("Resize (never upscale)");
                         egui::ComboBox::from_id_salt("converter-resize")
                             .selected_text(state.resize.label())
@@ -165,6 +192,7 @@ impl App {
                                     ui.selectable_value(&mut state.resize, preset, preset.label());
                                 }
                             });
+                        });
                         ui.label("Output file (new file, with matching extension)");
                         ui.horizontal(|ui| {
                             ui.add(
@@ -262,6 +290,7 @@ impl App {
             let batch_folder = state.batch_folder.clone();
             let profile = state.profile;
             let quality = state.quality;
+            let audio_bitrate = state.audio_bitrate;
             let trim_start = state.trim_start.clone();
             let trim_end = state.trim_end.clone();
             let crop_width = state.crop_width.clone();
@@ -269,6 +298,8 @@ impl App {
             let crop_x = state.crop_x.clone();
             let crop_y = state.crop_y.clone();
             let resize = state.resize;
+            let rotation = state.rotation;
+            let mute_audio = state.mute_audio && !profile.is_audio_only();
             let (tx, rx) = std::sync::mpsc::channel();
             let wake = ctx.clone();
             let token = self.background.child_token();
@@ -279,14 +310,20 @@ impl App {
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()));
                 let options =
                     converter::TrimRange::parse(&trim_start, &trim_end).and_then(|trim| {
-                        converter::CropRect::parse(&crop_width, &crop_height, &crop_x, &crop_y).map(
-                            |crop| converter::ConversionOptions {
-                                trim,
-                                crop,
-                                resize,
-                                quality,
-                            },
-                        )
+                        let crop = if profile.is_audio_only() {
+                            Ok(None)
+                        } else {
+                            converter::CropRect::parse(&crop_width, &crop_height, &crop_x, &crop_y)
+                        };
+                        crop.map(|crop| converter::ConversionOptions {
+                            trim,
+                            crop,
+                            resize,
+                            quality,
+                            rotation,
+                            mute_audio,
+                            audio_bitrate,
+                        })
                     });
                 let specs = options.and_then(|options| {
                     converter::locate_ffmpeg(&settings, exe_dir.as_deref())

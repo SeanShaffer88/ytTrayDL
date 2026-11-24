@@ -54,6 +54,10 @@ fn audio_tagged_copies_preserve_source_and_existing_lyrics() {
                 title: "New title".into(),
                 artist: "New artist".into(),
                 album: "New album".into(),
+                album_artist: "Album artist".into(),
+                track: "2/10".into(),
+                date: "2024".into(),
+                genre: "Rock".into(),
                 lyrics: "New lyrics".into(),
                 ..Default::default()
             };
@@ -64,6 +68,10 @@ fn audio_tagged_copies_preserve_source_and_existing_lyrics() {
             assert_eq!(result.title, "New title", "{ext}");
             assert_eq!(result.artist, "New artist", "{ext}");
             assert_eq!(result.album, "New album", "{ext}");
+            assert_eq!(result.album_artist, "Album artist", "{ext}");
+            assert_eq!(result.track, "2/10", "{ext}");
+            assert_eq!(result.date, "2024", "{ext}");
+            assert_eq!(result.genre, "Rock", "{ext}");
             assert_eq!(
                 result.lyrics,
                 if existing_lyrics {
@@ -74,6 +82,88 @@ fn audio_tagged_copies_preserve_source_and_existing_lyrics() {
                 "{ext}"
             );
         }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn embedded_artwork_can_be_exported_without_overwriting() {
+    use yttraydl::tags::build_artwork_export;
+    let (Some(ffmpeg), Some(ffprobe)) = (
+        std::env::var_os("YTTRAYDL_TEST_FFMPEG").map(PathBuf::from),
+        std::env::var_os("YTTRAYDL_TEST_FFPROBE").map(PathBuf::from),
+    ) else {
+        eprintln!("Skipping artwork integration: ffmpeg/ffprobe not configured");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("yttraydl-art-media-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let token = CancellationToken::default();
+    for (ext, codec) in [("jpg", "mjpeg"), ("png", "png")] {
+        let image = dir.join(format!("cover.{ext}"));
+        let input = dir.join(format!("song-{ext}.mp3"));
+        let output = dir.join(format!("extracted.{ext}"));
+        let fixture = ProcessSpec::new(&ffmpeg)
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=32x32",
+                "-frames:v",
+                "1",
+                "-c:v",
+                codec,
+                "-threads",
+                "1",
+                "-update",
+                "1",
+                "-n",
+            ])
+            .arg(&image);
+        run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+        let fixture = ProcessSpec::new(&ffmpeg)
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=0.1",
+                "-i",
+            ])
+            .arg(&image)
+            .args([
+                "-map",
+                "0:a",
+                "-map",
+                "1:v",
+                "-c:a",
+                "libmp3lame",
+                "-c:v",
+                "copy",
+                "-disposition:v",
+                "attached_pic",
+                "-n",
+            ])
+            .arg(&input);
+        run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+        let input_bytes = std::fs::read(&input).unwrap();
+        let tags = inspect(&ffprobe, &input, &token).unwrap();
+        let artwork = tags.artwork.unwrap();
+        assert_eq!(artwork.extension, ext);
+        assert!(build_artwork_export(&ffmpeg, &input, &dir.join("bad.mp3"), &artwork).is_err());
+        let spec = build_artwork_export(&ffmpeg, &input, &output, &artwork).unwrap();
+        run_capture(&spec, ProcessLimits::default(), &token).unwrap();
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            std::fs::read(&output).unwrap()
+        );
+        assert_eq!(std::fs::read(&input).unwrap(), input_bytes);
+        assert!(build_artwork_export(&ffmpeg, &input, &output, &artwork).is_err());
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

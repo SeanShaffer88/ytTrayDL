@@ -49,7 +49,9 @@ or a portable zip.
 The **Video converter** opens from the panel or tray, or via the optional
 installer desktop shortcut (`yttraydl.exe --converter` in portable mode). It
 converts local files to MP4, MKV or WebM using ffmpeg. Video profiles include
-H.264, HEVC, VP9 and AV1, plus selectable encoding quality. HEVC and AV1
+H.264, HEVC, VP9 and AV1, plus selectable encoding quality. Audio-only MP3,
+M4A, FLAC and Opus profiles extract or convert the first audio stream, with
+optional lossy bitrate selection; FLAC remains lossless. HEVC and AV1
 require an ffmpeg build with the corresponding encoder; AV1 can be slow.
 For one file, select a new output filename with the matching extension. For a batch, select multiple
 files and an existing output folder; files are converted sequentially to
@@ -60,7 +62,9 @@ window leaves conversion running. An optional start/end trim in seconds can be
 applied to a single file or every item in a batch. Trimming re-encodes the media
 rather than doing lossless stream-copy cutting. Optional numeric cropping is
 applied before a fit-within resize preset (480p through 4K); resizing preserves
-aspect ratio and does not upscale. Crop coordinates are in source pixels, and
+aspect ratio and does not upscale. Rotation (90°, 180° or 270°) is applied
+after cropping and before resizing. Audio can be removed from video outputs.
+Crop coordinates are in source pixels, and
 ffmpeg can adjust offsets at frame edges; some encoders require even crop
 dimensions. Batch inputs can be reordered or removed before conversion. Live
 status reports the current file and encoded media time, not a percentage or an
@@ -68,7 +72,9 @@ ETA. Hardware-accelerated presets are not available yet.
 
 The **Lyrics & tags** window opens from the panel, tray, optional installer
 shortcut, or `yttraydl.exe --tags`. Load a local MP3, M4A, FLAC, OGG or Opus
-file to inspect title, artist, album and lyrics detected by ffprobe. Edit the
+file to inspect title, artist, album, album artist, track, date, genre and
+lyrics detected by ffprobe. Embedded JPEG or PNG artwork can be exported to a
+new image file without modifying the input. Edit the
 fields or manually enter missing lyrics, then export to a new file with the same
 extension. The original and existing output files are not overwritten. Detected
 lyrics are not deliberately replaced; ffmpeg remuxing may omit or alter tags,

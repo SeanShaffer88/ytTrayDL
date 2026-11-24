@@ -186,3 +186,123 @@ fn ffmpeg_modern_codec_profiles_encode() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn ffmpeg_rotates_and_can_remove_audio() {
+    use yttraydl::converter::{build_conversion_with_options, ConversionOptions, Rotation};
+    let Some(ffmpeg) = std::env::var_os("YTTRAYDL_TEST_FFMPEG").map(PathBuf::from) else {
+        eprintln!("Skipping ffmpeg integration: YTTRAYDL_TEST_FFMPEG is not set");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("yttraydl-media-rotate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("source.mkv");
+    let output = dir.join("rotated.mp4");
+    let token = CancellationToken::default();
+    let fixture = ProcessSpec::new(&ffmpeg)
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=96x64:rate=5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=duration=1",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-n",
+        ])
+        .arg(&input);
+    run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+    let spec = build_conversion_with_options(
+        &ffmpeg,
+        &input,
+        &output,
+        VideoProfile::Mp4,
+        ConversionOptions {
+            rotation: Rotation::Clockwise,
+            mute_audio: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    run_batch(&[spec], &token, |_, _| ()).unwrap();
+    let inspect = ProcessSpec::new(&ffmpeg)
+        .args(["-nostdin", "-hide_banner", "-i"])
+        .arg(&output)
+        .args(["-vf", "showinfo", "-frames:v", "1", "-f", "null", "-"]);
+    let result = run_capture(&inspect, ProcessLimits::default(), &token).unwrap();
+    let info = String::from_utf8_lossy(&result.stderr);
+    assert!(info.contains("s:64x96"), "{info}");
+    assert!(!info.contains("Audio:"), "{info}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ffmpeg_extracts_audio_profiles_from_video() {
+    use yttraydl::converter::{build_conversion_with_options, AudioBitrate, ConversionOptions};
+    let Some(ffmpeg) = std::env::var_os("YTTRAYDL_TEST_FFMPEG").map(PathBuf::from) else {
+        eprintln!("Skipping ffmpeg integration: YTTRAYDL_TEST_FFMPEG is not set");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("yttraydl-media-audio-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("source.mkv");
+    let token = CancellationToken::default();
+    let fixture = ProcessSpec::new(&ffmpeg)
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=64x64:rate=5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=duration=1",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-n",
+        ])
+        .arg(&input);
+    run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+    for (profile, codec) in [
+        (VideoProfile::Mp3Audio, "mp3"),
+        (VideoProfile::M4aAudio, "aac"),
+        (VideoProfile::FlacAudio, "flac"),
+        (VideoProfile::OpusAudio, "opus"),
+    ] {
+        let output = dir.join(format!("output.{}", profile.extension()));
+        let options = ConversionOptions {
+            audio_bitrate: AudioBitrate::K192,
+            trim: TrimRange::parse("0.1", "0.8").unwrap(),
+            ..Default::default()
+        };
+        let spec =
+            build_conversion_with_options(&ffmpeg, &input, &output, profile, options).unwrap();
+        run_batch(&[spec], &token, |_, _| ()).unwrap();
+        let inspect = ProcessSpec::new(&ffmpeg)
+            .args(["-nostdin", "-hide_banner", "-i"])
+            .arg(&output)
+            .args(["-f", "null", "-"]);
+        let result = run_capture(&inspect, ProcessLimits::default(), &token).unwrap();
+        let info = String::from_utf8_lossy(&result.stderr);
+        assert!(info.contains(&format!("Audio: {codec}")), "{info}");
+        assert!(!info.contains("Video:"), "{info}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

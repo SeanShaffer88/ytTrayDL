@@ -476,7 +476,8 @@ shipped). The system:
 
 Lyrics and tags: **Unverified** on Windows. An isolated Linux harness passed
 unit tests and real ffmpeg/ffprobe tagged-copy tests for MP3, M4A, FLAC, OGG
-and Opus, including preservation of test lyrics and original file bytes. These
+and Opus, including preservation of test lyrics and original file bytes; JPEG
+and PNG artwork were extracted byte-for-byte from MP3 test fixtures. These
 are not full app, installer or Windows tests. Run the opt-in media test with
 `YTTRAYDL_TEST_FFMPEG` and `YTTRAYDL_TEST_FFPROBE` set. Other tag encodings,
 artwork, window lifecycle, cancellation, shortcut forwarding and installer
@@ -484,11 +485,12 @@ upgrade/uninstall remain unverified. ffprobe may not expose every lyrics frame;
 remuxing may not preserve every tag or artwork. The original remains untouched.
 
 Video converter including batch, trim, crop, resize, queue editing, codec
-profiles, quality presets and encoded-time progress: **Unverified** on Windows.
+profiles, quality presets, encoded-time progress, rotation, audio removal and
+audio-only profiles: **Unverified** on Windows.
 Argument/path, trim, crop, resize and batch worker tests were added. An isolated
 Linux harness using the real converter and owned-process modules passed unit,
 batch and opt-in ffmpeg integration tests including trim, crop, resize, progress,
-HEVC and AV1; it is not the full application suite. The integration tests can
+HEVC, AV1, audio extraction and rotation; it is not the full application suite. The integration tests can
 also be run with `YTTRAYDL_TEST_FFMPEG` set when running `cargo test --locked`;
 set `YTTRAYDL_TEST_FFMPEG_ADVANCED` as well for HEVC and AV1. Real Windows
 conversion, cancellation, window lifecycle, tray launch, direct launch,

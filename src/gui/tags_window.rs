@@ -8,12 +8,14 @@ pub(super) enum TagResult {
         result: Result<AudioTags, String>,
     },
     Saved(Result<String, String>),
+    ArtworkSaved(Result<String, String>),
 }
 
 #[derive(Default)]
 pub(super) struct TagsState {
     input: String,
     output: String,
+    artwork_output: String,
     loaded_input: Option<String>,
     tags: AudioTags,
     status: String,
@@ -36,6 +38,21 @@ impl App {
                                 state.output = tags::suggested_output(std::path::Path::new(&path))
                                     .map(|p| p.to_string_lossy().into_owned())
                                     .unwrap_or_default();
+                                state.artwork_output = tags
+                                    .artwork
+                                    .as_ref()
+                                    .and_then(|artwork| {
+                                        let path = std::path::Path::new(&path);
+                                        let mut name = path.file_stem()?.to_os_string();
+                                        name.push(".cover.");
+                                        name.push(artwork.extension);
+                                        Some(
+                                            path.with_file_name(name)
+                                                .to_string_lossy()
+                                                .into_owned(),
+                                        )
+                                    })
+                                    .unwrap_or_default();
                                 state.loaded_input = Some(path);
                                 state.tags = tags;
                                 state.status = "Tags loaded. Export creates a new copy.".into();
@@ -49,7 +66,7 @@ impl App {
                     state.receiver = None;
                     state.cancel = None;
                 }
-                Ok(TagResult::Saved(result)) => {
+                Ok(TagResult::Saved(result) | TagResult::ArtworkSaved(result)) => {
                     state.status = match result {
                         Ok(message) => message,
                         Err(error) => {
@@ -75,6 +92,7 @@ impl App {
         let mut open = true;
         let mut load = false;
         let mut save = false;
+        let mut export_artwork = false;
         let mut cancel = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-tags"),
@@ -106,6 +124,10 @@ impl App {
                             ui.label("Title"); ui.text_edit_singleline(&mut state.tags.title);
                             ui.label("Artist"); ui.text_edit_singleline(&mut state.tags.artist);
                             ui.label("Album"); ui.text_edit_singleline(&mut state.tags.album);
+                            ui.label("Album artist"); ui.text_edit_singleline(&mut state.tags.album_artist);
+                            ui.label("Track number"); ui.text_edit_singleline(&mut state.tags.track);
+                            ui.label("Date"); ui.text_edit_singleline(&mut state.tags.date);
+                            ui.label("Genre"); ui.text_edit_singleline(&mut state.tags.genre);
                             ui.label("Lyrics (manual entry; no online lookup yet)");
                             if state.tags.lyrics_present {
                                 ui.label("Existing lyrics detected; they will not be replaced.");
@@ -123,6 +145,23 @@ impl App {
                             });
                             ui.label("Other tags or artwork may be changed or omitted by ffmpeg; check the copy before relying on it.");
                             if ui.button("Export tagged copy").clicked() { save = true; }
+                            ui.separator();
+                            ui.heading("Embedded artwork");
+                            if let Some(artwork) = &state.tags.artwork {
+                                ui.label(format!("Embedded {} artwork detected. Export the original image to a new file.", artwork.extension.to_uppercase()));
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::TextEdit::singleline(&mut state.artwork_output).desired_width((ui.available_width() - 90.0).max(40.0)));
+                                    if ui.button("Browse…").clicked() {
+                                        #[cfg(windows)]
+                                        if let Some(path) = rfd::FileDialog::new().add_filter("Image", &[artwork.extension]).save_file() {
+                                            state.artwork_output = path.to_string_lossy().into_owned();
+                                        }
+                                    }
+                                });
+                                if ui.button("Export artwork").clicked() { export_artwork = true; }
+                            } else {
+                                ui.label("No supported embedded JPEG or PNG artwork detected.");
+                            }
                         });
                     });
                 });
@@ -133,9 +172,13 @@ impl App {
             token.cancel();
             state.status = "Cancelling…".into();
         }
-        if load || save {
+        if load || save || export_artwork {
             let input = state.input.clone();
-            let output = state.output.clone();
+            let output = if export_artwork {
+                state.artwork_output.clone()
+            } else {
+                state.output.clone()
+            };
             let edits = state.tags.clone();
             let settings = self.settings.clone();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -155,13 +198,12 @@ impl App {
                     if load {
                         return Ok(existing);
                     }
-                    let spec = tags::build_tagged_copy(
-                        &ffmpeg,
-                        std::path::Path::new(&input),
-                        std::path::Path::new(&output),
-                        &edits,
-                        &existing,
-                    )?;
+                    let spec = if export_artwork {
+                        let artwork = existing.artwork.as_ref().ok_or("No supported embedded artwork found")?;
+                        tags::build_artwork_export(&ffmpeg, std::path::Path::new(&input), std::path::Path::new(&output), artwork)?
+                    } else {
+                        tags::build_tagged_copy(&ffmpeg, std::path::Path::new(&input), std::path::Path::new(&output), &edits, &existing)?
+                    };
                     yttraydl::process::run_capture(
                         &spec,
                         yttraydl::process::ProcessLimits {
@@ -178,6 +220,8 @@ impl App {
                         path: input,
                         result,
                     }
+                } else if export_artwork {
+                    TagResult::ArtworkSaved(result.map(|_| "Artwork exported to a new image file.".into()))
                 } else {
                     TagResult::Saved(result.map(|existing| {
                         if existing.lyrics_present {
@@ -192,6 +236,8 @@ impl App {
             });
             state.status = if load {
                 "Reading tags…"
+            } else if export_artwork {
+                "Exporting artwork…"
             } else {
                 "Exporting copy…"
             }

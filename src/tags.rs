@@ -8,9 +8,21 @@ pub struct AudioTags {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub album_artist: String,
+    pub track: String,
+    pub date: String,
+    pub genre: String,
     pub lyrics: String,
+    pub artwork: Option<Artwork>,
     /// True when ffprobe reports any known lyrics-like tag, including an empty one.
     pub lyrics_present: bool,
+}
+
+/// First supported embedded JPEG or PNG image stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artwork {
+    pub stream_index: u32,
+    pub extension: &'static str,
 }
 
 /// Locate ffprobe next to the selected ffmpeg, then on PATH.
@@ -56,7 +68,7 @@ pub fn inspect(
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type:stream_tags:format_tags",
+            "stream=index,codec_type,codec_name:stream_disposition=attached_pic:stream_tags:format_tags",
             "-of",
             "json",
             "-i",
@@ -106,6 +118,10 @@ fn parse_probe(json: &[u8]) -> Result<AudioTags, String> {
                 "title" if common => result.title = text.to_owned(),
                 "artist" if common => result.artist = text.to_owned(),
                 "album" if common => result.album = text.to_owned(),
+                "album_artist" if common => result.album_artist = text.to_owned(),
+                "track" if common => result.track = text.to_owned(),
+                "date" if common => result.date = text.to_owned(),
+                "genre" if common => result.genre = text.to_owned(),
                 _ if key.contains("lyrics")
                     || key.starts_with("uslt")
                     || key.starts_with("sylt") =>
@@ -120,7 +136,27 @@ fn parse_probe(json: &[u8]) -> Result<AudioTags, String> {
         }
         Ok(())
     }
-    let mut result = AudioTags::default();
+    let artwork = streams.iter().find_map(|stream| {
+        if stream.get("codec_type")?.as_str()? != "video"
+            || stream.get("disposition")?.get("attached_pic")?.as_i64()? != 1
+        {
+            return None;
+        }
+        let extension = match stream.get("codec_name")?.as_str()? {
+            "mjpeg" => "jpg",
+            "png" => "png",
+            _ => return None,
+        };
+        let stream_index = u32::try_from(stream.get("index")?.as_u64()?).ok()?;
+        Some(Artwork {
+            stream_index,
+            extension,
+        })
+    });
+    let mut result = AudioTags {
+        artwork,
+        ..Default::default()
+    };
     let mut first = true;
     for stream in streams
         .iter()
@@ -190,6 +226,10 @@ pub fn build_tagged_copy(
         edits.title.as_str(),
         edits.artist.as_str(),
         edits.album.as_str(),
+        edits.album_artist.as_str(),
+        edits.track.as_str(),
+        edits.date.as_str(),
+        edits.genre.as_str(),
         added_lyrics,
     ];
     if fields.iter().any(|v| v.contains('\0')) {
@@ -211,6 +251,10 @@ pub fn build_tagged_copy(
         ("title", &edits.title),
         ("artist", &edits.artist),
         ("album", &edits.album),
+        ("album_artist", &edits.album_artist),
+        ("track", &edits.track),
+        ("date", &edits.date),
+        ("genre", &edits.genre),
     ] {
         spec = spec.arg(metadata_flag).arg(format!("{name}={value}"));
     }
@@ -220,6 +264,56 @@ pub fn build_tagged_copy(
             .arg(format!("lyrics={added_lyrics}"));
     }
     Ok(spec.arg(output))
+}
+
+/// Extract an embedded JPEG or PNG to a new image without transcoding it.
+/// The caller must probe the input immediately before constructing this command.
+pub fn build_artwork_export(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    artwork: &Artwork,
+) -> Result<ProcessSpec, String> {
+    let input = local_input(input)?;
+    let name = output.file_name().ok_or("Choose an image output file")?;
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()
+        .map_err(|e| format!("Cannot open output folder: {e}"))?;
+    let output = parent.join(name);
+    if std::fs::symlink_metadata(&output).is_ok() {
+        return Err("Image output already exists".into());
+    }
+    let ext = output.extension().and_then(|v| v.to_str()).unwrap_or("");
+    let valid_ext = match artwork.extension {
+        "jpg" => ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"),
+        "png" => ext.eq_ignore_ascii_case("png"),
+        _ => false,
+    };
+    if !valid_ext {
+        return Err(format!(
+            "Image output must match the embedded .{} format",
+            artwork.extension
+        ));
+    }
+    Ok(ProcessSpec::new(ffmpeg)
+        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-n", "-i"])
+        .arg(input)
+        .arg("-map")
+        .arg(format!("0:{}", artwork.stream_index))
+        .args([
+            "-frames:v",
+            "1",
+            "-c:v",
+            "copy",
+            "-f",
+            "image2",
+            "-update",
+            "1",
+        ])
+        .arg(output))
 }
 
 #[cfg(test)]
@@ -234,6 +328,16 @@ mod tests {
         assert_eq!(tags.lyrics, "old");
         assert!(parse_probe(br#"{"streams":[{"codec_type":"video"}],"format":{}}"#).is_err());
         assert!(parse_probe(b"{} ").is_err());
+        let cover = parse_probe(br#"{"streams":[{"codec_type":"audio"},{"codec_type":"video","index":3,"codec_name":"png","disposition":{"attached_pic":1}}],"format":{}}"#).unwrap();
+        assert_eq!(
+            cover.artwork,
+            Some(Artwork {
+                stream_index: 3,
+                extension: "png"
+            })
+        );
+        let not_cover = parse_probe(br#"{"streams":[{"codec_type":"audio"},{"codec_type":"video","index":3,"codec_name":"png","disposition":{"attached_pic":0}}],"format":{}}"#).unwrap();
+        assert_eq!(not_cover.artwork, None);
         let stream = parse_probe(br#"{"streams":[{"codec_type":"audio","tags":{"TITLE":"Stream title","LYRICS":"old"}}],"format":{}}"#).unwrap();
         assert_eq!(stream.title, "Stream title");
         assert!(stream.lyrics_present);

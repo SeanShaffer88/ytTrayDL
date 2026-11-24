@@ -418,5 +418,5 @@ MIT — see [LICENSE](LICENSE). ytTrayDL drives yt-dlp as a separate
 program; yt-dlp is published by its authors under the Unlicense.
 
 Settings value choices use radio buttons. Short groups are visible directly;
-larger groups open in a radio-button menu. Section, page and list navigation
-remain paginated to keep the Settings window usable at compact sizes.
+larger groups open in a radio-button menu. Settings sections can be selected directly from the section menu. Pages and
+long lists remain paginated to keep Settings usable at compact sizes.

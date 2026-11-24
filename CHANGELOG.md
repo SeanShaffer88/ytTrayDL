@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Window layout refresh
+
+- Refresh the main panel with a narrower default layout, a distinct status
+  band, grouped link and engine cards, stacked controls and full-width module
+  navigation. The body scrolls at compact sizes; footer actions stay fixed.
+- Add direct radio-menu section navigation and section dividers in Settings.
+
 ## Unreleased — Settings choices
 
 - Replace cyclic arrows for setting values with radio button groups. Large

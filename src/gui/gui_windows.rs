@@ -501,7 +501,16 @@ impl App {
         const BAND_H: f32 = 96.0;
         let band_rect =
             egui::Rect::from_min_max(full.min, egui::pos2(full.max.x, full.min.y + BAND_H));
-        paint_vertical_gradient(ui.painter(), band_rect, 0.0, BAND_TOP, BAND_BOTTOM);
+        let title_rect = egui::Rect::from_min_max(
+            band_rect.min,
+            egui::pos2(band_rect.right(), band_rect.top() + 56.0),
+        );
+        paint_vertical_gradient(ui.painter(), title_rect, 0.0, BAND_TOP, BAND_BOTTOM);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(title_rect.left_bottom(), band_rect.right_bottom()),
+            0.0,
+            WELL,
+        );
         ui.painter().line_segment(
             [band_rect.left_bottom(), band_rect.right_bottom()],
             egui::Stroke::new(1.0_f32, BAND_EDGE),
@@ -553,7 +562,7 @@ impl App {
                 }
             });
         });
-        band.add_space(8.0);
+        band.add_space(4.0);
         // Status pill (0.5.0), sitting in the band (0.6.0):
         // dot + state + mode, in a rounded pill instead of a
         // line of loose labels.
@@ -605,42 +614,45 @@ impl App {
     fn panel_body(&mut self, ui: &mut egui::Ui) {
         // Manual URL entry.
         ui.add_space(12.0);
-        ui.label(section_heading("Download a link"));
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            // Reserve the button FIRST (0.5.1). The 0.5.0 budget
-            // (available − 112) ran the row past the panel's
-            // right edge in the field: egui's TextEdit outer
-            // width is its desired_width PLUS its frame margin
-            // (2×8px \u2014 vendored egui 0.33.3 TextEdit
-            // builder), which the budget never subtracted, and
-            // the button's min_size was treated as its exact
-            // width. Now the button has a fixed size and the
-            // field gets what remains after button + spacing +
-            // the field's own margin.
-            let btn_w = 108.0;
-            let field_w =
-                (ui.available_width() - btn_w - ui.spacing().item_spacing.x - 16.0).max(80.0);
-            let resp = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.manual_url)
-                        .hint_text("Paste a video URL…")
-                        .desired_width(field_w),
-                )
-                .on_hover_text("Type or paste a URL, then press Enter or Download");
-            // Accent focus ring + deep-red outer glow (0.6.0).
-            paint_focus_ring_for_field(ui, &resp);
-            let go = ui
-                .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
-                .on_hover_text("Open the download popup for this link")
-                .clicked();
-            if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
-                && !self.manual_url.trim().is_empty()
-            {
-                let url = self.manual_url.trim().to_string();
-                self.manual_url.clear();
-                self.handle_detected_url(&url, true);
-            }
+        premium_card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(section_heading("Download a link"));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                // Reserve the button FIRST (0.5.1). The 0.5.0 budget
+                // (available − 112) ran the row past the panel's
+                // right edge in the field: egui's TextEdit outer
+                // width is its desired_width PLUS its frame margin
+                // (2×8px \u2014 vendored egui 0.33.3 TextEdit
+                // builder), which the budget never subtracted, and
+                // the button's min_size was treated as its exact
+                // width. Now the button has a fixed size and the
+                // field gets what remains after button + spacing +
+                // the field's own margin.
+                let btn_w = 108.0;
+                let field_w =
+                    (ui.available_width() - btn_w - ui.spacing().item_spacing.x - 16.0).max(80.0);
+                let resp = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.manual_url)
+                            .hint_text("Paste a video URL…")
+                            .desired_width(field_w),
+                    )
+                    .on_hover_text("Type or paste a URL, then press Enter or Download");
+                // Accent focus ring + deep-red outer glow (0.6.0).
+                paint_focus_ring_for_field(ui, &resp);
+                let go = ui
+                    .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
+                    .on_hover_text("Open the download popup for this link")
+                    .clicked();
+                if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                    && !self.manual_url.trim().is_empty()
+                {
+                    let url = self.manual_url.trim().to_string();
+                    self.manual_url.clear();
+                    self.handle_detected_url(&url, true);
+                }
+            });
         });
 
         self.tool_progress_ui(ui);
@@ -692,9 +704,10 @@ impl App {
         // (ffmpeg missing / yt-dlp missing) keep their 0.5.0
         // content inside the same well.
         ui.add_space(10.0);
-        ui.label(section_heading("Engine"));
-        ui.add_space(4.0);
         premium_well(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(section_heading("Engines"));
+            ui.add_space(4.0);
             if !self.tool_status_ready {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -815,81 +828,74 @@ impl App {
             }
         });
 
-        // Quick controls — painter-drawn switches (0.6.0,
-        // replacing the checkboxes, per the premium mockup).
-        ui.horizontal(|ui| {
-            let mut monitoring = self.settings.monitoring_enabled;
-            if switch(ui, &mut monitoring)
-                .on_hover_text("Watch the clipboard for supported links")
-                .changed()
-            {
-                self.settings.monitoring_enabled = monitoring;
-                self.settings_dirty = true;
-            }
-            ui.label("Monitoring")
-                .on_hover_text("Watch the clipboard for supported links");
-            ui.add_space(24.0);
-            let mut auto = self.settings.default_action == DefaultAction::AutoDownload;
-            if switch(ui, &mut auto)
-                .on_hover_text("Skip the popup and download with your default preset")
-                .changed()
-            {
-                self.settings.default_action = if auto {
-                    DefaultAction::AutoDownload
-                } else {
-                    DefaultAction::Prompt
-                };
-                self.settings_dirty = true;
-            }
-            ui.label("Auto-download")
-                .on_hover_text("Skip the popup and download with your default preset");
-        });
-        ui.horizontal(|ui| {
-            // Explicit equal shares (0.5.1): at the panel's
-            // 340px minimum width the three natural-width
-            // buttons sum wider than the row, and egui paints
-            // the excess past the right edge instead of
-            // shrinking them (v0.5.0 field captures). Each
-            // button now gets a fixed third of the row and
-            // truncates its label inside that share. 0.6.0:
-            // drawn line icons instead of the ⚙/⬇/📂 glyphs.
-            let share = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
-            let btn_size = egui::vec2(share, 34.0);
-            if icon_text_button(ui, IconKind::Gear, "Settings…", btn_size)
-                .on_hover_text("Show/hide the Settings window")
-                .clicked()
-            {
-                // A toggle (SEAN, 0.2.2): the button opens the
-                // Settings window and closes it again (0.5.1:
-                // its own window, not a slide-out drawer).
-                self.show_settings = !self.show_settings;
-            }
-            let active = self.downloads.active_count();
-            let label = if active > 0 {
-                format!("Downloads ({active} active)…")
-            } else {
-                "Downloads…".to_string()
-            };
-            if icon_text_button(ui, IconKind::Download, &label, btn_size)
-                .on_hover_text("Active downloads and history")
-                .clicked()
-            {
-                self.show_downloads = true;
-            }
-            if icon_text_button(ui, IconKind::Folder, "Download folder", btn_size)
-                .on_hover_text("Open the download folder in Explorer")
-                .clicked()
-            {
-                let folder = self.settings.download_folder.clone();
-                let _ = std::fs::create_dir_all(&folder);
-                if let Err(e) = platform::open_path(&folder) {
-                    self.toast(format!("Could not open folder: {e}"), ToastKind::Error);
+        // Stacked quick controls and full-width navigation keep labels readable
+        // in the narrow layout while the body remains scrollable on small screens.
+        premium_card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let mut monitoring = self.settings.monitoring_enabled;
+                if switch(ui, &mut monitoring)
+                    .on_hover_text("Watch the clipboard for supported links")
+                    .changed()
+                {
+                    self.settings.monitoring_enabled = monitoring;
+                    self.settings_dirty = true;
                 }
-            }
+                ui.label("Monitoring");
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                let mut auto = self.settings.default_action == DefaultAction::AutoDownload;
+                if switch(ui, &mut auto)
+                    .on_hover_text("Skip the popup and download with your default preset")
+                    .changed()
+                {
+                    self.settings.default_action = if auto {
+                        DefaultAction::AutoDownload
+                    } else {
+                        DefaultAction::Prompt
+                    };
+                    self.settings_dirty = true;
+                }
+                ui.label("Auto-download");
+            });
         });
+        let width = ui.available_width();
+        let btn_size = egui::vec2(width, 34.0);
+        if icon_text_button(ui, IconKind::Gear, "Settings…", btn_size)
+            .on_hover_text("Show/hide the Settings window")
+            .clicked()
+        {
+            self.show_settings = !self.show_settings;
+        }
+        let active = self.downloads.active_count();
+        let label = if active > 0 {
+            format!("Downloads ({active} active)…")
+        } else {
+            "Downloads…".to_string()
+        };
+        if icon_text_button(ui, IconKind::Download, &label, btn_size)
+            .on_hover_text("Active downloads and history")
+            .clicked()
+        {
+            self.show_downloads = true;
+        }
+        if icon_text_button(ui, IconKind::Folder, "Download folder", btn_size)
+            .on_hover_text("Open the download folder in Explorer")
+            .clicked()
+        {
+            let folder = self.settings.download_folder.clone();
+            let _ = std::fs::create_dir_all(&folder);
+            if let Err(e) = platform::open_path(&folder) {
+                self.toast(format!("Could not open folder: {e}"), ToastKind::Error);
+            }
+        }
 
         if ui
-            .button("Video converter…")
+            .add_sized(
+                [ui.available_width(), 34.0],
+                egui::Button::new("Video converter…"),
+            )
             .on_hover_text("Open the local video converter")
             .clicked()
         {
@@ -897,7 +903,10 @@ impl App {
         }
 
         if ui
-            .button("Lyrics & tags…")
+            .add_sized(
+                [ui.available_width(), 34.0],
+                egui::Button::new("Lyrics & tags…"),
+            )
             .on_hover_text("Open the local audio tag editor")
             .clicked()
         {
@@ -905,7 +914,7 @@ impl App {
         }
 
         if ui
-            .button("Player…")
+            .add_sized([ui.available_width(), 34.0], egui::Button::new("Player…"))
             .on_hover_text("Open the local player queue")
             .clicked()
         {
@@ -1191,19 +1200,10 @@ impl App {
             egui::Stroke::new(1.0_f32, STROKE_DARK),
         );
         ui.horizontal(|ui| {
-            // Explicit sizes (0.5.1): Exit used to be placed by
-            // a nested right-to-left layout and landed on the
-            // panel's extreme right edge, clipped at every
-            // width (field captures). Both buttons now have
-            // fixed sizes, labels truncate inside them, and the
-            // gap between them is computed from the row's width.
-            let hide_size = egui::vec2(134.0, 30.0);
-            let exit_size = egui::vec2(124.0, 30.0);
-            let gap = (ui.available_width()
-                - hide_size.x
-                - exit_size.x
-                - 2.0 * ui.spacing().item_spacing.x)
-                .max(0.0);
+            // Equal-width footer actions remain reachable at the minimum width.
+            let share = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.0).max(1.0);
+            let hide_size = egui::vec2(share, 30.0);
+            let exit_size = egui::vec2(share, 30.0);
             if ui
                 .add_sized(
                     hide_size,
@@ -1214,7 +1214,6 @@ impl App {
             {
                 self.confirm_hide_icon = true;
             }
-            ui.add_space(gap);
             if ui
                 .add_sized(
                     exit_size,

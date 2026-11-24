@@ -1087,28 +1087,15 @@ pub(super) fn render(
     if !compact || *tab == 2 {
         ui.push_id("settings-section-navigation", |ui| {
             ui.horizontal(|ui| {
-                if navigation_button(ui, sections[*tab] > 0, "◀", "Previous Section")
-                    .on_hover_text("Previous section")
-                    .clicked()
-                {
-                    sections[*tab] -= 1;
-                }
-                ui.add_sized(
-                    [remaining_after_button(ui, "▶"), 24.0],
-                    egui::Label::new(format!(
-                        "{} ({}/{})",
-                        labels[sections[*tab]],
-                        sections[*tab] + 1,
-                        labels.len()
-                    ))
-                    .truncate(),
-                );
-                if navigation_button(ui, sections[*tab] + 1 < labels.len(), "▶", "Next Section")
-                    .on_hover_text("Next section")
-                    .clicked()
-                {
-                    sections[*tab] += 1;
-                }
+                ui.label(egui::RichText::new("Section").color(TEXT_DIM));
+                egui::ComboBox::from_id_salt("section")
+                    .selected_text(labels[sections[*tab]])
+                    .width((ui.available_width() - 16.0).max(1.0))
+                    .show_ui(ui, |ui| {
+                        for (index, label) in labels.iter().enumerate() {
+                            ui.radio_value(&mut sections[*tab], index, *label);
+                        }
+                    });
             });
         });
     }
@@ -1192,11 +1179,21 @@ pub(super) fn render(
                     for index in plan[page].clone() {
                         let (section, row) = all[index];
                         if index == plan[page].start || all[index - 1].0 != section {
-                            ui.label(
-                                egui::RichText::new(labels[section])
-                                    .strong()
-                                    .color(TEXT_DIM),
-                            );
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(labels[section])
+                                        .strong()
+                                        .color(TEXT_DIM),
+                                );
+                                let (line, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width().max(0.0), 1.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().line_segment(
+                                    [line.left_center(), line.right_center()],
+                                    egui::Stroke::new(1.0, HAIRLINE),
+                                );
+                            });
                         }
                         let rendered = ui.scope_builder(
                             egui::UiBuilder::new().id((

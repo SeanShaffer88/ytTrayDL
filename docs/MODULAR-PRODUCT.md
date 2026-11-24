@@ -65,3 +65,23 @@ For every module, test library logic and cold-start/running-instance intent
 routing, window lifecycle and shortcut creation/removal. Exercise actual UI,
 tray, shortcuts, job behavior and multiple DPI settings on Windows before
 claiming runtime verification. Follow the full repository gate in `AGENTS.md`.
+
+## Completion status and remaining validation
+
+- **Implemented:** downloader, converter, lyrics/tags and local player windows;
+  each has panel, tray and direct-launch entry points. Module operations have
+  separate state and use owned background workers. Repeated open requests ask
+  the existing module viewport for focus rather than creating another window.
+- **Hosted checks:** installer shortcut metadata and native two-process module
+  intent delivery are covered in Windows CI; headless egui tests cover focus
+  command routing. These checks do not establish actual foreground activation.
+- **Still unverified:** interactive cold and repeated shortcut launches, tray
+  and module window lifecycle, concurrent real jobs, ffplay playback, accessibility
+  and keyboard navigation, and physical mixed-DPI behavior on Windows 10/11.
+- **Not complete:** full FluentGruv compliance and the light theme. Online player
+  integration remains a future direction requiring separate service, privacy and
+  dependency decisions; it is not implemented.
+
+Roadmap completion requires closing these gaps with real Windows evidence and
+any resulting fixes. Automated results alone must not be presented as interactive
+verification.

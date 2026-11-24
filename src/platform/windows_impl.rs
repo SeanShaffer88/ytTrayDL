@@ -749,11 +749,26 @@ pub fn restore_window_geometry(
         return false;
     };
     let mut restored = value.at_dpi(current.dpi);
-    if matches!(kind, crate::window_geometry::WindowKind::About) {
-        restored.width = current.width;
-        restored.height = current.height;
-    }
     let inset = ((12 * restored.dpi + 48) / 96) as i32;
+    if matches!(
+        kind,
+        crate::window_geometry::WindowKind::Main | crate::window_geometry::WindowKind::About
+    ) {
+        // Ignore legacy saved sizes for fixed-size windows. On a small work
+        // area, shrink only as necessary to keep the native window reachable.
+        restored.width = current.width.min(
+            work[2]
+                .saturating_sub(work[0])
+                .saturating_sub(inset * 2)
+                .max(64),
+        );
+        restored.height = current.height.min(
+            work[3]
+                .saturating_sub(work[1])
+                .saturating_sub(inset * 2)
+                .max(64),
+        );
+    }
     set_normal_geometry(hwnd, restored.clamped(work, inset), true)
 }
 

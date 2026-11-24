@@ -8,7 +8,13 @@ is technically possible but deliberately not selected.
 
 ## Installer Contract
 
-The Download Tools page defaults to download. Explicit offline selection or
+The Download Tools page defaults to reusing existing tools and downloading only
+missing families. The helper uses the app's configured paths, installation
+folder, managed tools and PATH precedence. It checks file presence without
+running or verifying existing executables; existing versions are not updated.
+A missing explicit ffmpeg path must be corrected or Setup run offline, because
+the app's explicit setting overrides managed copies. If an existing ffmpeg lacks
+ffprobe, Setup does not download it separately. Explicit offline selection or
 `/TOOLSDOWNLOAD=skip` skips provider execution and disables post-install launch.
 Required silent downloads fail setup before file/registration changes when the
 provider cannot finish. An invalid mode is refused. Interactive failures offer
@@ -18,7 +24,7 @@ waits for it and shows indeterminate overall progress, without fabricated stages
 
 `PrepareToInstall` extracts the exact candidate under Setup's private temporary
 directory, before normal application files are copied. It executes
-`--provision-tools all --report <new-private-report>` and checks both process
+`--ensure-tools --app-dir <installation-directory> --report <new-private-report>` and checks both process
 creation and exit zero, plus fresh report existence. The same candidate owns
 the report contract; the installer does not duplicate its JSON or download logic.
 Failure details are bounded and retained in Setup's log. A successful managed

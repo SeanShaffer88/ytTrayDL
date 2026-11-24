@@ -742,3 +742,50 @@ fn symlinked_generation_root_and_manifest_files_cannot_escape_owned_root() {
     std::os::unix::fs::symlink(outside.0.join("sentinel"), &target).unwrap();
     assert!(load_manifest(&root.0).is_err());
 }
+
+#[test]
+fn installer_download_plan_only_selects_missing_families() {
+    assert_eq!(missing_selection(true, true), None);
+    assert_eq!(
+        missing_selection(false, true),
+        Some(ProvisionSelection::YtDlp)
+    );
+    assert_eq!(
+        missing_selection(true, false),
+        Some(ProvisionSelection::FFmpeg)
+    );
+    assert_eq!(
+        missing_selection(false, false),
+        Some(ProvisionSelection::All)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_reuses_existing_portable_tools_without_execution_or_network() {
+    let root = TestRoot::new();
+    fs::write(root.0.join("portable.txt"), b"").unwrap();
+    let data = root.0.join("ytTrayDL-data");
+    fs::create_dir(&data).unwrap();
+    let yt = root.0.join("fixture-ytdlp.exe");
+    let ff = root.0.join("fixture-ffmpeg.exe");
+    fs::write(&yt, b"inert yt-dlp fixture").unwrap();
+    fs::write(&ff, b"inert ffmpeg fixture").unwrap();
+    let settings = crate::settings::Settings {
+        ytdlp_path: yt.clone(),
+        ffmpeg_path: ff.clone(),
+        ..Default::default()
+    };
+    let settings_bytes = serde_json::to_vec(&settings).unwrap();
+    fs::write(data.join("settings.json"), &settings_bytes).unwrap();
+    let report = ensure_for_installer(&root.0).unwrap();
+    assert_eq!(report.status, "success");
+    assert!(report.tools.is_empty());
+    assert!(!data.join("bin").exists());
+    assert_eq!(
+        fs::read(data.join("settings.json")).unwrap(),
+        settings_bytes
+    );
+    assert_eq!(fs::read(yt).unwrap(), b"inert yt-dlp fixture");
+    assert_eq!(fs::read(ff).unwrap(), b"inert ffmpeg fixture");
+}

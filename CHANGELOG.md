@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.1 — Installer and window improvements
+
+### Module window focus
+
+- Repeated module requests from the main panel and tray now request focus on
+  the existing window, matching the single-instance launch-intent behavior.
+
+### Main window and Rules navigation
+
+- Use a non-resizable main window sized to the supplied reference, retaining
+  saved position but not legacy sizes; small work areas can constrain it.
+- Show Rules categories as a radio-button group when space permits, with a
+  compact radio menu on smaller Settings windows.
+
+### Reuse installed media tools
+
+- Setup reuses available yt-dlp and ffmpeg and downloads only missing families;
+  existing tools are not executed, overwritten or automatically updated.
+
 ## 0.13.0 — Window layout and Settings refresh
 
 ### Window layout refresh

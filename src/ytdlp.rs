@@ -46,6 +46,14 @@ pub struct YtDlpBinary {
 /// Locate yt-dlp. Pure with respect to its inputs (the caller passes
 /// the exe directory) apart from PATH lookup and existence checks.
 pub fn locate_ytdlp(settings: &Settings, exe_dir: Option<&std::path::Path>) -> Option<YtDlpBinary> {
+    locate_ytdlp_with_managed(settings, exe_dir, &crate::tools::managed_ytdlp_path())
+}
+
+pub(crate) fn locate_ytdlp_with_managed(
+    settings: &Settings,
+    exe_dir: Option<&std::path::Path>,
+    managed: &std::path::Path,
+) -> Option<YtDlpBinary> {
     let file = if cfg!(windows) {
         "yt-dlp.exe"
     } else {
@@ -67,10 +75,9 @@ pub fn locate_ytdlp(settings: &Settings, exe_dir: Option<&std::path::Path>) -> O
             });
         }
     }
-    let managed = crate::tools::managed_ytdlp_path();
     if managed.is_file() {
         return Some(YtDlpBinary {
-            path: managed,
+            path: managed.to_path_buf(),
             source: YtDlpSource::Managed,
         });
     }
@@ -98,6 +105,14 @@ pub fn find_on_path(file: &str) -> Option<PathBuf> {
 /// or PATH)? Drives an honest warning: without it, separate
 /// video+audio streams can't merge and MP3 extraction can't convert.
 pub fn ffmpeg_available(settings: &Settings, exe_dir: Option<&std::path::Path>) -> bool {
+    ffmpeg_available_with_managed(settings, exe_dir, &crate::tools::managed_ffmpeg_path())
+}
+
+pub(crate) fn ffmpeg_available_with_managed(
+    settings: &Settings,
+    exe_dir: Option<&std::path::Path>,
+    managed: &std::path::Path,
+) -> bool {
     let file = if cfg!(windows) {
         "ffmpeg.exe"
     } else {
@@ -111,7 +126,7 @@ pub fn ffmpeg_available(settings: &Settings, exe_dir: Option<&std::path::Path>) 
             return true;
         }
     }
-    if crate::tools::managed_ffmpeg_path().is_file() {
+    if managed.is_file() {
         return true;
     }
     find_on_path(file).is_some()

@@ -878,7 +878,7 @@ impl App {
             .on_hover_text("Active downloads and history")
             .clicked()
         {
-            self.show_downloads = true;
+            request_module(ui.ctx(), &mut self.show_downloads, "yttraydl-downloads");
         }
         if icon_text_button(ui, IconKind::Folder, "Download folder", btn_size)
             .on_hover_text("Open the download folder in Explorer")
@@ -899,7 +899,7 @@ impl App {
             .on_hover_text("Open the local video converter")
             .clicked()
         {
-            self.show_converter = true;
+            request_module(ui.ctx(), &mut self.show_converter, "yttraydl-converter");
         }
 
         if ui
@@ -910,7 +910,7 @@ impl App {
             .on_hover_text("Open the local audio tag editor")
             .clicked()
         {
-            self.show_tags = true;
+            request_module(ui.ctx(), &mut self.show_tags, "yttraydl-tags");
         }
 
         if ui
@@ -918,7 +918,7 @@ impl App {
             .on_hover_text("Open the local player queue")
             .clicked()
         {
-            self.show_player = true;
+            request_module(ui.ctx(), &mut self.show_player, "yttraydl-player");
         }
 
         // Active downloads (compact).

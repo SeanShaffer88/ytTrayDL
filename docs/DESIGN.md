@@ -482,6 +482,11 @@ interactive Windows DPI/monitor validation remain unverified. These partial
 changes do not establish full FluentGruv compliance.
 
 
+Player queue filtering: **Unverified** interactively on Windows. Queue filter
+matching, underlying indices and selection after removal have unit coverage;
+filtered list accessibility, keyboard navigation and rendering require Windows
+validation. Filtering changes only the view, not playback order.
+
 Optional saved player queue: **Unverified** interactively on Windows. Tests
 cover bounded versioned storage, overwrite and invalid-file handling. Storage is
 explicitly requested, keeps paths but not media, and is not auto-loaded; app data

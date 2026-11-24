@@ -43,6 +43,20 @@ impl PlayQueue {
         }
         added
     }
+    /// Return original queue indices matching a case-insensitive path filter.
+    /// Filtering never changes playback order and duplicate entries remain distinct.
+    pub fn matching_indices(&self, query: &str) -> Vec<usize> {
+        let query = query.trim().to_lowercase();
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                (query.is_empty() || path.to_string_lossy().to_lowercase().contains(&query))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
     pub fn clear(&mut self) {
         self.items.clear();
     }
@@ -79,6 +93,17 @@ impl PlayQueue {
             None
         }
     }
+}
+
+/// Preserve the selected track after removing an entry before it. If the
+/// selected entry itself is removed, select its successor (or the new last).
+pub fn selection_after_remove(selected: usize, removed: usize, remaining: usize) -> usize {
+    if remaining == 0 {
+        return 0;
+    }
+    selected
+        .saturating_sub(usize::from(removed < selected))
+        .min(remaining - 1)
 }
 
 /// Maximum on-disk playlist size; file paths may contain private information.
@@ -307,6 +332,27 @@ mod tests {
         queue.clear();
         assert_eq!(queue.next(0, true), None);
     }
+    #[test]
+    fn filtering_keeps_original_indices_and_selection_tracks_removal() {
+        let mut queue = PlayQueue::default();
+        queue.add([
+            "Music/Álbum/First.MP3".into(),
+            "Other/second.mp4".into(),
+            "Music/Álbum/First.MP3".into(),
+        ]);
+        assert_eq!(queue.matching_indices("  áLBUM  "), [0, 2]);
+        assert_eq!(queue.matching_indices("second"), [1]);
+        assert_eq!(queue.matching_indices("missing"), []);
+        assert_eq!(queue.matching_indices(" "), [0, 1, 2]);
+        assert_eq!(queue.next(0, false), Some(1));
+        assert!(queue.move_down(0));
+        assert_eq!(queue.matching_indices("ÁLBUM"), [1, 2]);
+        assert_eq!(selection_after_remove(2, 0, 2), 1);
+        assert_eq!(selection_after_remove(1, 1, 2), 1);
+        assert_eq!(selection_after_remove(2, 2, 2), 1);
+        assert_eq!(selection_after_remove(0, 0, 0), 0);
+    }
+
     #[test]
     fn saved_queue_roundtrip_replacement_and_invalid_data() {
         let dir = std::env::temp_dir().join(format!("yttray-player-save-{}", std::process::id()));

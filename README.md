@@ -95,7 +95,9 @@ may leave a partial output. Closing the window leaves the job running.
 
 The **Player** opens from the panel, tray, optional desktop shortcut, or
 `yttraydl.exe --player`. It manages a queue of up to 500 local audio and video files, with reorder,
-remove, repeat, previous, next and stop. In Media & playback options, you can
+remove, repeat, previous, next and stop. Filter the queue by path without changing
+playback order; Up and Down move entries within the full queue, including hidden
+items. In Media & playback options, you can
 explicitly save or replace one queue, append its entries later, or delete the
 saved queue. Saving records file paths in `player-queue.json` in the normal or
 portable app data folder; it does not save media or automatically resume

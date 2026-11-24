@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Player queue search
+
+- Filter queue paths without changing playback order; preserve the selected
+  track when an earlier entry is removed.
+
 ## Unreleased — Optional saved player queue
 
 - Explicitly save, append or delete a player queue in app data; no media or

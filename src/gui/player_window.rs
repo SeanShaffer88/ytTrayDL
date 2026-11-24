@@ -24,6 +24,7 @@ enum QueueIoAction {
 pub(super) struct PlayerState {
     queue: PlayQueue,
     input: String,
+    filter: String,
     ffplay_path: String,
     selected: usize,
     active: Option<usize>,
@@ -41,6 +42,7 @@ impl Default for PlayerState {
         Self {
             queue: PlayQueue::default(),
             input: String::new(),
+            filter: String::new(),
             ffplay_path: String::new(),
             selected: 0,
             active: None,
@@ -194,8 +196,18 @@ impl App {
                     if !state.status.is_empty() { ui.add(egui::Label::new(&state.status).truncate()).on_hover_text(&state.status); }
                     let playing = state.receiver.is_some();
                     let busy = playing || state.queue_io.is_some();
+                    ui.horizontal(|ui| {
+                        ui.label("Filter queue");
+                        ui.add(egui::TextEdit::singleline(&mut state.filter).char_limit(256).hint_text("Search file paths"));
+                        if ui.button("Clear filter").clicked() { state.filter.clear(); }
+                    });
+                    let visible = state.queue.matching_indices(&state.filter);
+                    let selected_visible = visible.contains(&state.selected);
+                    if !state.queue.items().is_empty() && !selected_visible {
+                        ui.label("Selected track is hidden; select a visible track or clear the filter to play it.");
+                    }
                     ui.horizontal_wrapped(|ui| {
-                        if ui.add_enabled(!busy && !state.queue.items().is_empty(), egui::Button::new("Play selected")).clicked() { start = true; }
+                        if ui.add_enabled(!busy && !state.queue.items().is_empty() && selected_visible, egui::Button::new("Play selected")).clicked() { start = true; }
                         if ui.add_enabled(playing && !state.stopping, egui::Button::new("Stop")).clicked() { stop = true; }
                         let prev = state.active.and_then(|i| i.checked_sub(1));
                         if ui.add_enabled(playing && !state.stopping && prev.is_some(), egui::Button::new("Previous")).clicked() { skip_to = prev; }
@@ -242,14 +254,18 @@ impl App {
                     });
                     });
                     ui.separator();
-                    ui.label(format!("Queue: {} / {}", state.queue.items().len(), player::MAX_QUEUE));
+                    ui.label(format!("Queue: {} / {} · showing {}", state.queue.items().len(), player::MAX_QUEUE, visible.len()));
+                    if !state.filter.trim().is_empty() {
+                        ui.label("Filter only changes the view. Playback and Up/Down use the full queue.");
+                    }
                     let count = state.queue.items().len();
-                    egui::ScrollArea::vertical().id_salt("player-queue").auto_shrink([false, false]).show_rows(ui, 30.0, count, |ui, rows| {
-                        for index in rows {
+                    egui::ScrollArea::vertical().id_salt("player-queue").auto_shrink([false, false]).show_rows(ui, 30.0, visible.len(), |ui, rows| {
+                        for row in rows {
+                            let index = visible[row];
                             ui.push_id(index, |ui| ui.horizontal(|ui| {
                                 let path = state.queue.items()[index].display().to_string();
                                 let available = (ui.available_width() - 175.0).max(20.0);
-                                if ui.add_sized([available, 24.0], egui::Button::new(&path).selected(state.selected == index)).on_hover_text(&path).clicked() && !busy { state.selected = index; }
+                                if ui.add_enabled_ui(!busy, |ui| ui.add_sized([available, 24.0], egui::Button::new(&path).selected(state.selected == index))).inner.on_hover_text(&path).clicked() { state.selected = index; }
                                 if ui.add_enabled(!busy && index > 0, egui::Button::new("Up")).clicked() { up = Some(index); }
                                 if ui.add_enabled(!busy && index + 1 < count, egui::Button::new("Down")).clicked() { down = Some(index); }
                                 if ui.add_enabled(!busy, egui::Button::new("Remove")).clicked() { remove = Some(index); }
@@ -262,9 +278,8 @@ impl App {
         self.show_player = open;
         if let Some(index) = remove {
             state.queue.remove(index);
-            state.selected = state
-                .selected
-                .min(state.queue.items().len().saturating_sub(1));
+            state.selected =
+                player::selection_after_remove(state.selected, index, state.queue.items().len());
         }
         if let Some(index) = up.filter(|&index| state.queue.move_up(index)) {
             state.selected = index - 1;

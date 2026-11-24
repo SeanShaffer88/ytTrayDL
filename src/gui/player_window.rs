@@ -3,6 +3,19 @@ use super::*;
 use yttraydl::player::{self, PlayQueue};
 use yttraydl::process::CancellationToken;
 
+fn pick_playlist() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        rfd::FileDialog::new()
+            .add_filter("M3U playlist", &["m3u", "m3u8"])
+            .pick_file()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 struct PlayerResult {
     index: usize,
     result: Result<(), String>,
@@ -13,6 +26,7 @@ enum QueueIoResult {
     Loaded(Result<PlayQueue, String>),
     Deleted(Result<(), String>),
     Scanned(Result<player::FolderScan, String>),
+    Imported(Result<player::PlaylistImport, String>),
     OptionsSaved(Result<(), String>),
     OptionsLoaded(Result<player::PlayerOptions, String>),
 }
@@ -153,6 +167,18 @@ impl App {
                         format!("Added {added} file(s). Skipped {} links or inaccessible entries.{limit}", scan.skipped)
                     }
                     QueueIoResult::Scanned(Err(error)) => format!("Folder scan failed: {error}"),
+                    QueueIoResult::Imported(Ok(import)) => {
+                        let added = state.queue.add(import.files);
+                        let limit = if import.limit_reached {
+                            " Queue limit reached."
+                        } else {
+                            ""
+                        };
+                        format!("Imported {added} file(s); skipped {} URL, share or unsupported entries.{limit}", import.skipped)
+                    }
+                    QueueIoResult::Imported(Err(error)) => {
+                        format!("Playlist import failed: {error}")
+                    }
                     QueueIoResult::OptionsSaved(Ok(())) => {
                         "Player options saved to app data.".into()
                     }
@@ -222,6 +248,7 @@ impl App {
         let mut down = None;
         let mut queue_action = None;
         let mut scan_folder = None;
+        let mut playlist_file: Option<std::path::PathBuf> = None;
         let mut cancel_scan = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("yttraydl-player"),
@@ -295,6 +322,10 @@ impl App {
                             scan_folder = pick_folder(std::path::Path::new(&state.input));
                         }
                         ui.label("Folder scan includes subfolders, skips links, and stops at safety or queue limits.");
+                        if ui.add_enabled(state.queue.items().len() < player::MAX_QUEUE, egui::Button::new("Import M3U playlist…")).clicked() {
+                            playlist_file = pick_playlist();
+                        }
+                        ui.label("UTF-8 local playlists only. URLs, network shares and nested playlists are skipped.");
                         if ui.button("Clear queue").clicked() { state.queue.clear(); state.selected = 0; }
                         ui.label("Saved queue (optional; stores file paths in app data)");
                         ui.horizontal_wrapped(|ui| {
@@ -352,6 +383,18 @@ impl App {
             self.background.spawn(move |_| {
                 let result = player::scan_folder(&folder, capacity, &worker_token);
                 let _ = tx.send(QueueIoResult::Scanned(result));
+                wake.request_repaint();
+            });
+        }
+        if let Some(path) = playlist_file {
+            let capacity = player::MAX_QUEUE - state.queue.items().len();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let wake = ctx.clone();
+            state.queue_io = Some(rx);
+            state.status = "Importing playlist…".into();
+            self.background.spawn(move |_| {
+                let result = player::import_playlist(&path, capacity);
+                let _ = tx.send(QueueIoResult::Imported(result));
                 wake.request_repaint();
             });
         }

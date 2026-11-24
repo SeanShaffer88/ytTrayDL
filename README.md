@@ -98,6 +98,9 @@ The **Player** opens from the panel, tray, optional desktop shortcut, or
 remove, repeat, previous, next and stop. Add a folder to scan for supported media
 in its subfolders; the cancellable scan skips symbolic links and Windows reparse
 points and has entry, depth and queue limits. Inaccessible entries are reported.
+You can also import UTF-8 M3U/M3U8 playlists: relative paths resolve against the
+playlist folder, while URLs, network-share entries and nested playlists are
+skipped. Import appends paths only; it never fetches media or starts playback.
 Filter the queue by path without changing
 playback order; Up and Down move entries within the full queue, including hidden
 items. In Media & playback options, you can
@@ -115,8 +118,8 @@ Restoring options never starts playback. The options section scrolls separately
 on smaller windows.
 ffplay is **not** included in the managed ffmpeg download or installer; install
 it separately, put it next to the selected ffmpeg or on PATH, or select its
-executable in the player options. Network playback and playlist files are not
-supported. The player and its Windows shortcuts have not yet been interactively
+executable in the player options. Network playback is not supported; playlist files are imported into the queue,
+not played directly. The player and its Windows shortcuts have not yet been interactively
 verified on Windows.
 
 The installer can optionally create a separate **ytTrayDL Downloads** desktop

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Player playlist import
+
+- Import bounded UTF-8 M3U/M3U8 playlists into the local queue, without fetching
+  URLs or opening referenced files during import.
+
 ## Unreleased — Player options
 
 - Explicitly save and restore the player executable path, starting volume and

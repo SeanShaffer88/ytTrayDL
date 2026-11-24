@@ -95,6 +95,96 @@ impl PlayQueue {
     }
 }
 
+/// Results from an explicitly selected local M3U/M3U8 playlist. Entries remain
+/// in playlist order; importing never opens or fetches referenced media.
+#[derive(Debug)]
+pub struct PlaylistImport {
+    pub files: Vec<PathBuf>,
+    pub skipped: usize,
+    pub limit_reached: bool,
+}
+
+const MAX_PLAYLIST_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_PLAYLIST_LINE_BYTES: usize = 32_768;
+
+/// Read a bounded UTF-8 M3U/M3U8 file. Comments/EXTINF are ignored; URL,
+/// network-share, nested-playlist and unsupported entries are skipped. Relative
+/// paths are resolved against the playlist's directory; existence is checked
+/// only when playback is requested. No referenced files are opened here.
+pub fn import_playlist(path: &Path, capacity: usize) -> Result<PlaylistImport, String> {
+    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+    if !["m3u", "m3u8"]
+        .iter()
+        .any(|ext| extension.eq_ignore_ascii_case(ext))
+    {
+        return Err("Choose an M3U or M3U8 playlist".into());
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("Cannot open playlist: {e}"))?;
+    if !path.is_file() {
+        return Err("Playlist must be a file".into());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .map_err(|e| format!("Cannot open playlist: {e}"))?
+        .take(MAX_PLAYLIST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Cannot read playlist: {e}"))?;
+    if bytes.len() as u64 > MAX_PLAYLIST_BYTES {
+        return Err("Playlist is too large".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "Playlist must be UTF-8")?;
+    let base = path.parent().ok_or("Playlist has no parent directory")?;
+    parse_playlist(text, base, capacity.min(MAX_QUEUE))
+}
+
+fn parse_playlist(text: &str, base: &Path, capacity: usize) -> Result<PlaylistImport, String> {
+    let mut result = PlaylistImport {
+        files: Vec::new(),
+        skipped: 0,
+        limit_reached: false,
+    };
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        if line.len() > MAX_PLAYLIST_LINE_BYTES {
+            return Err("Playlist contains an oversized line".into());
+        }
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.contains('\0')
+            || line.contains("://")
+            || line.starts_with("\\\\")
+            || line.starts_with("//")
+        {
+            result.skipped += 1;
+            continue;
+        }
+        let candidate = Path::new(line);
+        if !supported_path(candidate)
+            || (!candidate.is_absolute()
+                && (candidate.has_root()
+                    || candidate
+                        .components()
+                        .any(|c| matches!(c, std::path::Component::Prefix(_)))))
+        {
+            result.skipped += 1;
+            continue;
+        }
+        if result.files.len() >= capacity {
+            result.limit_reached = true;
+            break;
+        }
+        result.files.push(if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            base.join(candidate)
+        });
+    }
+    Ok(result)
+}
+
 /// A bounded scan result. `limit_reached` means a scan limit was reached;
 /// `skipped` counts unreadable entries and intentionally ignored links.
 #[derive(Debug)]
@@ -544,6 +634,37 @@ mod tests {
         queue.clear();
         assert_eq!(queue.next(0, true), None);
     }
+    #[test]
+    fn local_playlist_import_is_bounded_and_never_accepts_urls() {
+        let dir = std::env::temp_dir().join(format!("yttray-playlist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let path = dir.join("list.m3u8");
+        std::fs::write(&path, "\u{feff}#EXTM3U\n#EXTINF:12,Title\na song.MP3\nhttps://example.test/audio.mp3\nfile:///remote.mp4\n//server/share/a.mp3\nother.m3u\nfolder/second.flac\n").unwrap();
+        let result = import_playlist(&path, 10).unwrap();
+        assert_eq!(
+            result.files,
+            [dir.join("a song.MP3"), dir.join("folder/second.flac")]
+        );
+        assert_eq!(result.skipped, 4);
+        assert!(!result.limit_reached);
+        let result = import_playlist(&path, 1).unwrap();
+        assert_eq!(result.files, [dir.join("a song.MP3")]);
+        assert!(result.limit_reached);
+        assert!(import_playlist(&dir.join("list.txt"), 10).is_err());
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(import_playlist(&path, 10).is_err());
+        std::fs::write(
+            &path,
+            format!("{}.mp3", "x".repeat(MAX_PLAYLIST_LINE_BYTES)),
+        )
+        .unwrap();
+        assert!(import_playlist(&path, 10).is_err());
+        std::fs::write(&path, vec![b'x'; MAX_PLAYLIST_BYTES as usize + 1]).unwrap();
+        assert!(import_playlist(&path, 10).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn player_options_round_trip_and_reject_invalid_files() {
         let dir =

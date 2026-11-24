@@ -13,6 +13,8 @@ enum QueueIoResult {
     Loaded(Result<PlayQueue, String>),
     Deleted(Result<(), String>),
     Scanned(Result<player::FolderScan, String>),
+    OptionsSaved(Result<(), String>),
+    OptionsLoaded(Result<player::PlayerOptions, String>),
 }
 
 #[derive(Clone, Copy)]
@@ -20,6 +22,8 @@ enum QueueIoAction {
     Save,
     Load,
     Delete,
+    SaveOptions,
+    LoadOptions,
 }
 
 pub(super) struct PlayerState {
@@ -149,6 +153,19 @@ impl App {
                         format!("Added {added} file(s). Skipped {} links or inaccessible entries.{limit}", scan.skipped)
                     }
                     QueueIoResult::Scanned(Err(error)) => format!("Folder scan failed: {error}"),
+                    QueueIoResult::OptionsSaved(Ok(())) => {
+                        "Player options saved to app data.".into()
+                    }
+                    QueueIoResult::OptionsLoaded(Ok(options)) => {
+                        state.ffplay_path = options.ffplay_path;
+                        state.volume = options.volume;
+                        state.repeat = options.repeat;
+                        "Player options restored; playback has not started.".into()
+                    }
+                    QueueIoResult::OptionsSaved(Err(error))
+                    | QueueIoResult::OptionsLoaded(Err(error)) => {
+                        format!("Player options failed: {error}")
+                    }
                     QueueIoResult::Saved(Err(error))
                     | QueueIoResult::Loaded(Err(error))
                     | QueueIoResult::Deleted(Err(error)) => {
@@ -235,13 +252,15 @@ impl App {
                         if ui.add_enabled(playing && !state.stopping && prev.is_some(), egui::Button::new("Previous")).clicked() { skip_to = prev; }
                         let next = state.active.and_then(|i| state.queue.next(i, state.repeat));
                         if ui.add_enabled(playing && !state.stopping && next.is_some(), egui::Button::new("Next")).clicked() { skip_to = next; }
-                        ui.checkbox(&mut state.repeat, "Repeat queue");
+                        ui.add_enabled(state.queue_io.is_none(), egui::Checkbox::new(&mut state.repeat, "Repeat queue"));
                     });
                     if state.scan_cancel.is_some() && ui.button("Cancel folder scan").clicked() { cancel_scan = true; }
                     ui.label("Playback window: Space = pause, arrows = seek, 9/0 = volume, M = mute.")
                         .on_hover_text("Closing the playback window advances the queue. Closing this manager leaves playback running.");
                     ui.separator();
                     egui::CollapsingHeader::new("Media & playback options").default_open(false).show(ui, |ui| {
+                    let max_options_height = (ui.available_height() - 90.0).clamp(60.0, 220.0);
+                    egui::ScrollArea::vertical().id_salt("player-options").max_height(max_options_height).auto_shrink([false, true]).show(ui, |ui| {
                     ui.add_enabled_ui(!busy, |ui| {
                         ui.label("ffplay executable (optional; not included in the managed ffmpeg download)");
                         ui.horizontal(|ui| {
@@ -252,6 +271,11 @@ impl App {
                             }
                         });
                         ui.add(egui::Slider::new(&mut state.volume, 0..=100).text("Starting volume"));
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Save player options").clicked() { queue_action = Some(QueueIoAction::SaveOptions); }
+                            if ui.button("Restore player options").clicked() { queue_action = Some(QueueIoAction::LoadOptions); }
+                        });
+                        ui.label("Options are restored only on request; playback never starts automatically.");
                         ui.label("Add a local audio or video file");
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut state.input).desired_width((ui.available_width() - 140.0).max(40.0)));
@@ -278,6 +302,7 @@ impl App {
                             if ui.button("Append saved queue").clicked() { queue_action = Some(QueueIoAction::Load); }
                             if ui.button("Delete saved queue").clicked() { queue_action = Some(QueueIoAction::Delete); }
                         });
+                    });
                     });
                     });
                     ui.separator();
@@ -339,6 +364,8 @@ impl App {
         }
         if let Some(action) = queue_action {
             let queue = state.queue.clone();
+            let options =
+                player::PlayerOptions::new(state.ffplay_path.clone(), state.volume, state.repeat);
             let (tx, rx) = std::sync::mpsc::channel();
             let wake = ctx.clone();
             state.queue_io = Some(rx);
@@ -354,6 +381,14 @@ impl App {
                     }
                     QueueIoAction::Delete => QueueIoResult::Deleted(
                         std::fs::remove_file(&path).map_err(|e| e.to_string()),
+                    ),
+                    QueueIoAction::SaveOptions => QueueIoResult::OptionsSaved(
+                        player::save_options(&player::player_options_path(), &options)
+                            .map_err(|e| e.to_string()),
+                    ),
+                    QueueIoAction::LoadOptions => QueueIoResult::OptionsLoaded(
+                        player::load_options(&player::player_options_path())
+                            .map_err(|e| e.to_string()),
                     ),
                 };
                 let _ = tx.send(result);

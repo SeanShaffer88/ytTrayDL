@@ -482,6 +482,12 @@ interactive Windows DPI/monitor validation remain unverified. These partial
 changes do not establish full FluentGruv compliance.
 
 
+Player option storage: **Unverified** interactively on Windows. Unit tests
+cover bounded, versioned option files, validation and round-trip behavior; the
+player stores options only on explicit request and never autoplays when loading.
+Small-window scrolling, keyboard access, portable storage and real Windows
+lifecycle need interactive validation.
+
 Player folder scan: **Unverified** interactively on Windows. Library tests cover
 supported extensions, ordering, bounds, cancellation and Unix symlinks. Windows
 reparse-point behavior, cancellation during a scan, inaccessible folders and

@@ -109,6 +109,10 @@ uninstall. Playback
 uses a separate ffplay window: Space pauses, arrows seek, 9/0 adjust volume and
 M mutes. Closing that playback window advances the queue; closing the manager
 does not stop playback. The starting volume applies when each track starts.
+Use Save player options and Restore player options to explicitly store or
+restore the ffplay path, starting volume and repeat preference in app data.
+Restoring options never starts playback. The options section scrolls separately
+on smaller windows.
 ffplay is **not** included in the managed ffmpeg download or installer; install
 it separately, put it next to the selected ffmpeg or on PATH, or select its
 executable in the player options. Network playback and playlist files are not

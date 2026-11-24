@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Player options
+
+- Explicitly save and restore the player executable path, starting volume and
+  repeat preference without starting playback. Bound the options panel height.
+
 ## Unreleased — Player folder scan
 
 - Add local folders recursively using a cancellable, bounded background scan;

@@ -283,6 +283,79 @@ pub fn save_queue(path: &Path, queue: &PlayQueue) -> io::Result<()> {
             "Saved queue is too large",
         ));
     }
+    write_atomic(path, &bytes)
+}
+
+/// Player preferences are saved only when explicitly requested; loading them
+/// does not launch a process or start playback.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlayerOptions {
+    version: u8,
+    pub ffplay_path: String,
+    pub volume: u8,
+    pub repeat: bool,
+}
+impl PlayerOptions {
+    pub fn new(ffplay_path: String, volume: u8, repeat: bool) -> Self {
+        Self {
+            version: 1,
+            ffplay_path,
+            volume,
+            repeat,
+        }
+    }
+    fn validate(&self) -> io::Result<()> {
+        if self.version != 1
+            || self.volume > 100
+            || self.ffplay_path.len() > 32_768
+            || self.ffplay_path.contains('\0')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid or unsupported player options",
+            ));
+        }
+        Ok(())
+    }
+}
+const MAX_PLAYER_OPTIONS_BYTES: u64 = 128 * 1024;
+
+pub fn player_options_path() -> PathBuf {
+    crate::settings::config_dir().join("player-options.json")
+}
+
+/// Save options with write-then-rename, preserving the previous file if validation fails.
+pub fn save_options(path: &Path, options: &PlayerOptions) -> io::Result<()> {
+    options.validate()?;
+    let bytes = serde_json::to_vec_pretty(options)?;
+    if bytes.len() as u64 > MAX_PLAYER_OPTIONS_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Player options are too large",
+        ));
+    }
+    write_atomic(path, &bytes)
+}
+
+/// A malformed, unsupported or oversized file is rejected without changing state.
+pub fn load_options(path: &Path) -> io::Result<PlayerOptions> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_PLAYER_OPTIONS_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PLAYER_OPTIONS_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Player options are too large",
+        ));
+    }
+    let options: PlayerOptions = serde_json::from_slice(&bytes)?;
+    options.validate()?;
+    Ok(options)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
@@ -290,7 +363,7 @@ pub fn save_queue(path: &Path, queue: &PlayQueue) -> io::Result<()> {
     let result = (|| {
         use std::io::Write;
         let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&temporary, path)
     })();
@@ -471,6 +544,34 @@ mod tests {
         queue.clear();
         assert_eq!(queue.next(0, true), None);
     }
+    #[test]
+    fn player_options_round_trip_and_reject_invalid_files() {
+        let dir =
+            std::env::temp_dir().join(format!("yttray-player-options-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("player-options.json");
+        let options = PlayerOptions::new("C:/Tools/ffplay.exe".into(), 35, true);
+        save_options(&path, &options).unwrap();
+        assert_eq!(load_options(&path).unwrap(), options);
+        let original = std::fs::read(&path).unwrap();
+        assert!(save_options(&path, &PlayerOptions::new("bad\0path".into(), 100, false)).is_err());
+        assert!(save_options(&path, &PlayerOptions::new(String::new(), 101, false)).is_err());
+        assert!(save_options(&path, &PlayerOptions::new("x".repeat(32769), 50, false)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        for text in [
+            r#"{"version":2,"ffplay_path":"","volume":50,"repeat":false}"#,
+            r#"{"version":1,"ffplay_path":"","volume":101,"repeat":false}"#,
+            r#"{"version":1,"ffplay_path":"","volume":50,"repeat":false,"extra":true}"#,
+            "broken",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert!(load_options(&path).is_err());
+        }
+        std::fs::write(&path, vec![b'x'; MAX_PLAYER_OPTIONS_BYTES as usize + 1]).unwrap();
+        assert!(load_options(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn folder_scan_is_bounded_sorted_and_cancellable() {
         let dir = std::env::temp_dir().join(format!("yttray-player-scan-{}", std::process::id()));

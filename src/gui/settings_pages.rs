@@ -1191,7 +1191,7 @@ pub(super) fn render(
                                 );
                                 ui.painter().line_segment(
                                     [line.left_center(), line.right_center()],
-                                    egui::Stroke::new(1.0, HAIRLINE),
+                                    egui::Stroke::new(1.0_f32, HAIRLINE),
                                 );
                             });
                         }

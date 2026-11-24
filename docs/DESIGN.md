@@ -474,6 +474,14 @@ shipped). The system:
 
 ## Verification matrix
 
+Module shortcut and saved-player-data installer lifecycle: **Partially verified**.
+Hosted Windows CI executes clean and published-baseline upgrade/uninstall
+scenarios with requested module shortcuts and with optional shortcuts disabled.
+It checks each shortcut target and exact argument, removal, and byte preservation
+and real library loading of saved player queue/options. This does not exercise
+shortcut activation, module GUI lifecycle, physical input or display scaling.
+
+
 FluentGruv dark token alignment: **Partially verified**. Automated GUI tests
 check selected palette assignments and key text/background contrast ratios.
 The application still contains custom legacy styling; light-theme switching,

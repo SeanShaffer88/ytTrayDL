@@ -37,7 +37,16 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (host)
-        run: cargo clippy --all-targets --locked -- -D warnings
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --all-targets --locked -- -D warnings > /tmp/clippy.log 2>&1
+          code=$?
+          cat /tmp/clippy.log
+          if [ "$code" -ne 0 ]; then
+            while IFS= read -r line; do echo "::error::$line"; done < <(grep -A 8 '^error' /tmp/clippy.log | head -40)
+          fi
+          exit "$code"
       - name: Clippy (Windows target)
         run: cargo clippy --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
       - name: Tests (full suite)

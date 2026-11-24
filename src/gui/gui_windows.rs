@@ -896,6 +896,14 @@ impl App {
             self.show_converter = true;
         }
 
+        if ui
+            .button("Lyrics & tags…")
+            .on_hover_text("Open the local audio tag editor")
+            .clicked()
+        {
+            self.show_tags = true;
+        }
+
         // Active downloads (compact).
         let active: Vec<(u64, String, String, f32, Option<String>, JobState)> = self
             .downloads

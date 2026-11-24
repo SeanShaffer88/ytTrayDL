@@ -16,6 +16,7 @@
 
 pub mod converter;
 pub mod process;
+pub mod tags;
 pub mod window_geometry;
 
 /// App-owned workers share cancellation and are joined during shutdown.

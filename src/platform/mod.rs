@@ -36,6 +36,8 @@ pub enum PlatformEvent {
     OpenDownloads,
     /// Open the local video converter from a direct launch.
     OpenConverter,
+    /// Open the local lyrics and tags editor.
+    OpenTags,
 }
 
 /// Owns the platform listeners. Dropping it stops the listener
@@ -109,6 +111,18 @@ pub fn forward_open_converter() -> Result<(), String> {
     }
 }
 
+/// Deliver a direct lyrics and tags request to the running instance.
+pub fn forward_open_tags() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_impl::forward_open_tags()
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Launch intent forwarding is only supported on Windows".into())
+    }
+}
+
 /// Deliver an explicit CLI URL to the running instance, with a bounded wait.
 pub fn forward_manual_url(url: &str) -> Result<(), String> {
     #[cfg(windows)]
@@ -128,6 +142,8 @@ const MANUAL_URL_MESSAGE: usize = 0x59545501;
 const OPEN_DOWNLOADS_MESSAGE: usize = 0x59545502;
 #[cfg(any(windows, test))]
 const OPEN_CONVERTER_MESSAGE: usize = 0x59545503;
+#[cfg(any(windows, test))]
+const OPEN_TAGS_MESSAGE: usize = 0x59545504;
 
 #[cfg(any(windows, test))]
 fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
@@ -138,6 +154,7 @@ fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
         MANUAL_URL_MESSAGE => manual_url_payload(bytes).map(PlatformEvent::ManualUrl),
         OPEN_DOWNLOADS_MESSAGE if bytes == b"downloads" => Some(PlatformEvent::OpenDownloads),
         OPEN_CONVERTER_MESSAGE if bytes == b"converter" => Some(PlatformEvent::OpenConverter),
+        OPEN_TAGS_MESSAGE if bytes == b"tags" => Some(PlatformEvent::OpenTags),
         _ => None,
     }
 }
@@ -500,6 +517,14 @@ mod clipboard_tests {
             copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
             OPEN_DOWNLOADS_MESSAGE,
         };
+        assert_eq!(
+            super::copydata_event(super::OPEN_TAGS_MESSAGE, b"tags"),
+            Some(PlatformEvent::OpenTags)
+        );
+        assert_eq!(
+            super::copydata_event(super::OPEN_TAGS_MESSAGE, b"converter"),
+            None
+        );
         assert_eq!(
             copydata_event(OPEN_CONVERTER_MESSAGE, b"converter"),
             Some(PlatformEvent::OpenConverter)

@@ -10,7 +10,7 @@
 
 use super::{
     Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
-    OPEN_DOWNLOADS_MESSAGE,
+    OPEN_DOWNLOADS_MESSAGE, OPEN_TAGS_MESSAGE,
 };
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -185,6 +185,10 @@ pub fn forward_open_downloads() -> Result<(), String> {
 
 pub fn forward_open_converter() -> Result<(), String> {
     forward_copydata(OPEN_CONVERTER_MESSAGE, b"converter")
+}
+
+pub fn forward_open_tags() -> Result<(), String> {
+    forward_copydata(OPEN_TAGS_MESSAGE, b"tags")
 }
 
 fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {

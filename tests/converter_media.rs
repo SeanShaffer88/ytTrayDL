@@ -1,7 +1,10 @@
 //! Opt-in end-to-end ffmpeg coverage. Set YTTRAYDL_TEST_FFMPEG to an
 //! executable with libx264 to exercise the real process owner and encoder.
 use std::path::PathBuf;
-use yttraydl::converter::{build_batch_with_trim, run_batch, TrimRange, VideoProfile};
+use yttraydl::converter::{
+    build_batch_with_trim, run_batch, run_batch_with_progress, BatchProgress, TrimRange,
+    VideoProfile,
+};
 use yttraydl::process::{run_capture, CancellationToken, ProcessLimits, ProcessSpec};
 
 #[test]
@@ -37,8 +40,12 @@ fn ffmpeg_batch_trims_two_files() {
     let specs =
         build_batch_with_trim(&ffmpeg, &[first, second], &dir, VideoProfile::Mp4, trim).unwrap();
     let mut progress = Vec::new();
-    run_batch(&specs, &token, |index, total| progress.push((index, total))).unwrap();
-    assert_eq!(progress, [(1, 2), (2, 2)]);
+    run_batch_with_progress(&specs, &token, |event| progress.push(event)).unwrap();
+    assert!(progress.contains(&BatchProgress::Started { index: 1, total: 2 }));
+    assert!(progress.contains(&BatchProgress::Started { index: 2, total: 2 }));
+    for index in 1..=2 {
+        assert!(progress.iter().any(|event| matches!(event, BatchProgress::EncodedTime { index: value, total: 2, .. } if *value == index)));
+    }
     for file in ["sample one.converted.mp4", "sample two.converted.mp4"] {
         let decoded = ProcessSpec::new(&ffmpeg)
             .args(["-nostdin", "-v", "error", "-i"])
@@ -111,6 +118,71 @@ fn ffmpeg_crops_then_resizes_without_upscaling() {
         let result = run_capture(&inspect, ProcessLimits::default(), &token).unwrap();
         let info = String::from_utf8_lossy(&result.stderr);
         assert!(info.contains(dimensions), "expected {dimensions}: {info}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Additional opt-in: these encoders may be absent or slow on some builds.
+#[test]
+fn ffmpeg_modern_codec_profiles_encode() {
+    use yttraydl::converter::{build_conversion_with_options, ConversionOptions, EncodingQuality};
+    if std::env::var_os("YTTRAYDL_TEST_FFMPEG_ADVANCED").is_none() {
+        eprintln!("Skipping modern encoders: YTTRAYDL_TEST_FFMPEG_ADVANCED is not set");
+        return;
+    }
+    let ffmpeg =
+        PathBuf::from(std::env::var_os("YTTRAYDL_TEST_FFMPEG").expect("set YTTRAYDL_TEST_FFMPEG"));
+    let dir = std::env::temp_dir().join(format!("yttraydl-media-codecs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("source.mkv");
+    let token = CancellationToken::default();
+    let fixture = ProcessSpec::new(&ffmpeg)
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=64x64:rate=2",
+            "-t",
+            "0.5",
+            "-c:v",
+            "libx264",
+            "-n",
+        ])
+        .arg(&input);
+    run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+    for (index, profile) in [
+        VideoProfile::Mp4Hevc,
+        VideoProfile::MkvHevc,
+        VideoProfile::Mp4Av1,
+        VideoProfile::WebmAv1,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let output = dir.join(format!("output-{index}.{}", profile.extension()));
+        let options = ConversionOptions {
+            quality: EncodingQuality::Balanced,
+            ..Default::default()
+        };
+        let spec =
+            build_conversion_with_options(&ffmpeg, &input, &output, profile, options).unwrap();
+        run_batch(&[spec], &token, |_, _| ()).unwrap();
+        assert!(output.metadata().unwrap().len() > 100);
+        let inspect = ProcessSpec::new(&ffmpeg)
+            .args(["-nostdin", "-hide_banner", "-i"])
+            .arg(&output)
+            .args(["-frames:v", "1", "-f", "null", "-"]);
+        let decoded = run_capture(&inspect, ProcessLimits::default(), &token).unwrap();
+        let info = String::from_utf8_lossy(&decoded.stderr);
+        let codec = if matches!(profile, VideoProfile::Mp4Hevc | VideoProfile::MkvHevc) {
+            "Video: hevc"
+        } else {
+            "Video: av1"
+        };
+        assert!(info.contains(codec), "expected {codec}: {info}");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

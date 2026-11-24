@@ -48,8 +48,10 @@ or a portable zip.
 
 The **Video converter** opens from the panel or tray, or via the optional
 installer desktop shortcut (`yttraydl.exe --converter` in portable mode). It
-converts local files to MP4, MKV or WebM using ffmpeg. For one file, select a
-new output filename with the matching extension. For a batch, select multiple
+converts local files to MP4, MKV or WebM using ffmpeg. Video profiles include
+H.264, HEVC, VP9 and AV1, plus selectable encoding quality. HEVC and AV1
+require an ffmpeg build with the corresponding encoder; AV1 can be slow.
+For one file, select a new output filename with the matching extension. For a batch, select multiple
 files and an existing output folder; files are converted sequentially to
 `<name>.converted.<extension>`. Before starting, the batch rejects existing
 outputs and colliding names. A batch stops on the first error or cancellation;
@@ -60,9 +62,19 @@ rather than doing lossless stream-copy cutting. Optional numeric cropping is
 applied before a fit-within resize preset (480p through 4K); resizing preserves
 aspect ratio and does not upscale. Crop coordinates are in source pixels, and
 ffmpeg can adjust offsets at frame edges; some encoders require even crop
-dimensions. Batch inputs can be reordered or
-removed before conversion. Hardware presets and per-file percentage progress
-are not available yet.
+dimensions. Batch inputs can be reordered or removed before conversion. Live
+status reports the current file and encoded media time, not a percentage or an
+ETA. Hardware-accelerated presets are not available yet.
+
+The **Lyrics & tags** window opens from the panel, tray, optional installer
+shortcut, or `yttraydl.exe --tags`. Load a local MP3, M4A, FLAC, OGG or Opus
+file to inspect title, artist, album and lyrics detected by ffprobe. Edit the
+fields or manually enter missing lyrics, then export to a new file with the same
+extension. The original and existing output files are not overwritten. Detected
+lyrics are not deliberately replaced; ffmpeg remuxing may omit or alter tags,
+lyrics or artwork it cannot represent, so verify the copy. This is not an online
+lyrics finder. ffmpeg and ffprobe are required, and a failed or cancelled export
+may leave a partial output. Closing the window leaves the job running.
 
 The installer can optionally create a separate **ytTrayDL Downloads** desktop
 shortcut. It opens the Downloads window, including when ytTrayDL is already

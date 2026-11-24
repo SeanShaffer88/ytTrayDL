@@ -1,5 +1,5 @@
 //! Local video conversion: validate paths and construct a shell-free ffmpeg invocation.
-use crate::process::{self, CancellationToken, ProcessLimits, ProcessSpec};
+use crate::process::{self, CancellationToken, OutputStream, ProcessLimits, ProcessSpec};
 use crate::settings::Settings;
 use std::path::{Path, PathBuf};
 
@@ -9,24 +9,81 @@ pub enum VideoProfile {
     Mp4,
     Mkv,
     Webm,
+    Mp4Hevc,
+    MkvHevc,
+    Mp4Av1,
+    WebmAv1,
 }
 
 impl VideoProfile {
-    pub const ALL: [Self; 3] = [Self::Mp4, Self::Mkv, Self::Webm];
+    pub const ALL: [Self; 7] = [
+        Self::Mp4,
+        Self::Mkv,
+        Self::Webm,
+        Self::Mp4Hevc,
+        Self::MkvHevc,
+        Self::Mp4Av1,
+        Self::WebmAv1,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Mp4 => "MP4 (H.264 + AAC)",
             Self::Mkv => "MKV (H.264 + AAC)",
             Self::Webm => "WebM (VP9 + Opus)",
+            Self::Mp4Hevc => "MP4 (HEVC + AAC)",
+            Self::MkvHevc => "MKV (HEVC + AAC)",
+            Self::Mp4Av1 => "MP4 (AV1 + AAC)",
+            Self::WebmAv1 => "WebM (AV1 + Opus)",
         }
     }
 
     pub fn extension(self) -> &'static str {
         match self {
-            Self::Mp4 => "mp4",
-            Self::Mkv => "mkv",
-            Self::Webm => "webm",
+            Self::Mp4 | Self::Mp4Hevc | Self::Mp4Av1 => "mp4",
+            Self::Mkv | Self::MkvHevc => "mkv",
+            Self::Webm | Self::WebmAv1 => "webm",
+        }
+    }
+}
+
+/// Video encoding quality; encoder default preserves previous behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EncodingQuality {
+    #[default]
+    EncoderDefault,
+    High,
+    Balanced,
+    Smaller,
+}
+impl EncodingQuality {
+    pub const ALL: [Self; 4] = [
+        Self::EncoderDefault,
+        Self::High,
+        Self::Balanced,
+        Self::Smaller,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EncoderDefault => "Encoder default",
+            Self::High => "Higher quality (larger files)",
+            Self::Balanced => "Balanced",
+            Self::Smaller => "Smaller files",
+        }
+    }
+    fn crf(self, profile: VideoProfile) -> Option<&'static str> {
+        let is_modern = matches!(
+            profile,
+            VideoProfile::Webm | VideoProfile::Mp4Av1 | VideoProfile::WebmAv1
+        );
+        match (self, is_modern) {
+            (Self::EncoderDefault, _) => None,
+            (Self::High, false) => Some("18"),
+            (Self::Balanced, false) => Some("23"),
+            (Self::Smaller, false) => Some("28"),
+            (Self::High, true) => Some("24"),
+            (Self::Balanced, true) => Some("32"),
+            (Self::Smaller, true) => Some("40"),
         }
     }
 }
@@ -170,6 +227,7 @@ pub struct ConversionOptions {
     pub trim: TrimRange,
     pub crop: Option<CropRect>,
     pub resize: ResizePreset,
+    pub quality: EncodingQuality,
 }
 
 fn video_filters(options: ConversionOptions) -> Option<String> {
@@ -316,9 +374,22 @@ pub fn build_conversion_with_options(
     let (video, audio) = match profile {
         VideoProfile::Mp4 | VideoProfile::Mkv => ("libx264", "aac"),
         VideoProfile::Webm => ("libvpx-vp9", "libopus"),
+        VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => ("libx265", "aac"),
+        VideoProfile::Mp4Av1 => ("libaom-av1", "aac"),
+        VideoProfile::WebmAv1 => ("libaom-av1", "libopus"),
     };
     let mut spec = ProcessSpec::new(ffmpeg)
-        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-n", "-i"])
+        .args([
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+            "-n",
+            "-i",
+        ])
         .arg(input);
     if trim.start_ms > 0 {
         spec = spec.arg("-ss").arg(seconds_arg(trim.start_ms));
@@ -329,11 +400,23 @@ pub fn build_conversion_with_options(
     if let Some(filters) = video_filters(options) {
         spec = spec.arg("-vf").arg(filters);
     }
-    Ok(spec
-        .args([
-            "-map", "0:v:0", "-map", "0:a:0?", "-c:v", video, "-c:a", audio,
-        ])
-        .arg(output))
+    spec = spec.args([
+        "-map", "0:v:0", "-map", "0:a:0?", "-c:v", video, "-c:a", audio,
+    ]);
+    if let Some(crf) = options.quality.crf(profile) {
+        spec = spec.args(["-crf", crf]);
+        if matches!(
+            profile,
+            VideoProfile::Webm | VideoProfile::Mp4Av1 | VideoProfile::WebmAv1
+        ) {
+            spec = spec.args(["-b:v", "0"]);
+        }
+    }
+    // MP4 HEVC needs this tag for broader player compatibility.
+    if profile == VideoProfile::Mp4Hevc {
+        spec = spec.args(["-tag:v", "hvc1"]);
+    }
+    Ok(spec.arg(output))
 }
 
 /// Build a sequential batch only after every item passes validation. Outputs
@@ -416,41 +499,193 @@ pub fn build_batch_with_options(
     Ok(specs)
 }
 
-/// Execute a preflighted batch sequentially. Stop at the first failed or
-/// cancelled item; already-completed outputs are retained.
+/// A conversion's position in a batch and its encoded media time. Elapsed
+/// media time is not a percentage and may differ from wall-clock time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchProgress {
+    Started {
+        index: usize,
+        total: usize,
+    },
+    EncodedTime {
+        index: usize,
+        total: usize,
+        microseconds: u64,
+    },
+}
+
+/// Incremental parser for ffmpeg's machine-readable stdout. Process callbacks
+/// receive arbitrary chunks, not lines; malformed or oversized lines are ignored.
+#[derive(Default)]
+struct ProgressParser {
+    line: Vec<u8>,
+    dropping: bool,
+}
+impl ProgressParser {
+    fn push(&mut self, bytes: &[u8], mut emit: impl FnMut(u64)) {
+        for &byte in bytes {
+            if byte == b'\n' {
+                if !self.dropping {
+                    if let Ok(line) = std::str::from_utf8(&self.line) {
+                        if let Some(value) =
+                            line.trim_end_matches('\r').strip_prefix("out_time_us=")
+                        {
+                            if let Ok(micros) = value.parse::<u64>() {
+                                emit(micros);
+                            }
+                        }
+                    }
+                }
+                self.line.clear();
+                self.dropping = false;
+            } else if !self.dropping {
+                if self.line.len() >= 256 {
+                    self.line.clear();
+                    self.dropping = true;
+                } else {
+                    self.line.push(byte);
+                }
+            }
+        }
+    }
+}
+
+/// Execute a batch sequentially; stop on the first failure or cancellation.
+/// Completed outputs are kept. Reports starts and throttled ffmpeg progress.
+pub fn run_batch_with_progress(
+    specs: &[ProcessSpec],
+    token: &CancellationToken,
+    mut progress: impl FnMut(BatchProgress),
+) -> Result<(), String> {
+    if specs.is_empty() {
+        return Err("No conversions to run".into());
+    }
+    for (position, spec) in specs.iter().enumerate() {
+        let index = position + 1;
+        let total = specs.len();
+        if token.is_cancelled() {
+            return Err(format!("cancelled before file {index} of {total}"));
+        }
+        progress(BatchProgress::Started { index, total });
+        let mut parser = ProgressParser::default();
+        let mut last_report = None;
+        let limits = ProcessLimits {
+            timeout: std::time::Duration::from_secs(6 * 60 * 60),
+            stdout_bytes: 8192,
+            stderr_bytes: 64 * 1024,
+            line_bytes: 4096,
+        };
+        let run = process::OwnedProcess::spawn(spec).and_then(|owner| {
+            owner.stream(limits, token, |stream, chunk| {
+                if stream == OutputStream::Stdout {
+                    parser.push(chunk, |microseconds| {
+                        let now = std::time::Instant::now();
+                        if last_report.is_none_or(|last: std::time::Instant| {
+                            now.duration_since(last) >= std::time::Duration::from_millis(250)
+                        }) {
+                            last_report = Some(now);
+                            progress(BatchProgress::EncodedTime {
+                                index,
+                                total,
+                                microseconds,
+                            });
+                        }
+                    });
+                }
+            })
+        });
+        run.map_err(|error| format!("file {index} of {total}: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Compatibility wrapper for callers interested only in batch item starts.
 pub fn run_batch(
     specs: &[ProcessSpec],
     token: &CancellationToken,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<(), String> {
-    if specs.is_empty() {
-        return Err("No conversions to run".into());
-    }
-    for (index, spec) in specs.iter().enumerate() {
-        if token.is_cancelled() {
-            return Err(format!(
-                "cancelled before file {} of {}",
-                index + 1,
-                specs.len()
-            ));
+    run_batch_with_progress(specs, token, |event| {
+        if let BatchProgress::Started { index, total } = event {
+            progress(index, total);
         }
-        progress(index + 1, specs.len());
-        process::run_capture(
-            spec,
-            ProcessLimits {
-                timeout: std::time::Duration::from_secs(6 * 60 * 60),
-                ..Default::default()
-            },
-            token,
-        )
-        .map_err(|error| format!("file {} of {}: {}", index + 1, specs.len(), error))?;
-    }
-    Ok(())
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_parser_handles_chunks_invalid_lines_and_bounds() {
+        let mut parser = ProgressParser::default();
+        let mut times = Vec::new();
+        parser.push(b"out_time_", |v| times.push(v));
+        parser.push(b"us=12345\r\nout_time_us=-1\n", |v| times.push(v));
+        parser.push(&vec![b'a'; 300], |v| times.push(v));
+        parser.push(b"out_time_us=88\nout_time_us=9000000\n", |v| times.push(v));
+        assert_eq!(times, [12_345, 9_000_000]);
+    }
+
+    #[test]
+    fn all_profiles_map_to_encoders_and_quality_settings() {
+        let dir = std::env::temp_dir().join(format!("yttraydl-codec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.mkv");
+        std::fs::write(&input, b"input").unwrap();
+        for (index, profile) in VideoProfile::ALL.into_iter().enumerate() {
+            let output = dir.join(format!("result-{index}.{}", profile.extension()));
+            let options = ConversionOptions {
+                quality: EncodingQuality::High,
+                ..Default::default()
+            };
+            let spec = build_conversion_with_options(
+                Path::new("ffmpeg"),
+                &input,
+                &output,
+                profile,
+                options,
+            )
+            .unwrap();
+            let video = match profile {
+                VideoProfile::Mp4 | VideoProfile::Mkv => "libx264",
+                VideoProfile::Webm => "libvpx-vp9",
+                VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => "libx265",
+                VideoProfile::Mp4Av1 | VideoProfile::WebmAv1 => "libaom-av1",
+            };
+            assert!(spec
+                .args
+                .windows(2)
+                .any(|pair| pair[0] == "-c:v" && pair[1] == video));
+            assert!(spec
+                .args
+                .windows(2)
+                .any(|pair| pair[0] == "-crf" && pair[1] == options.quality.crf(profile).unwrap()));
+            assert!(spec
+                .args
+                .windows(2)
+                .any(|pair| pair[0] == "-progress" && pair[1] == "pipe:1"));
+            let uses_zero_bitrate = matches!(
+                profile,
+                VideoProfile::Webm | VideoProfile::Mp4Av1 | VideoProfile::WebmAv1
+            );
+            assert_eq!(
+                spec.args
+                    .windows(2)
+                    .any(|pair| pair[0] == "-b:v" && pair[1] == "0"),
+                uses_zero_bitrate
+            );
+        }
+        let default = build_conversion(
+            Path::new("ffmpeg"),
+            &input,
+            &dir.join("default.mp4"),
+            VideoProfile::Mp4,
+        )
+        .unwrap();
+        assert!(!default.args.iter().any(|arg| arg == "-crf"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn crop_validation_and_filter_order_are_safe() {
@@ -513,6 +748,7 @@ mod tests {
             trim: TrimRange::parse("0.5", "1.5").unwrap(),
             crop: CropRect::parse("640", "360", "0", "0").unwrap(),
             resize: ResizePreset::P480,
+            ..Default::default()
         };
         let specs = build_batch_with_options(
             Path::new("ffmpeg"),

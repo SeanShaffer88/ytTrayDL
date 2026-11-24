@@ -1,6 +1,8 @@
 //! Independent local video-converter viewport.
 use super::*;
-use yttraydl::converter::{self, BatchEdit, ResizePreset, VideoProfile};
+use yttraydl::converter::{
+    self, BatchEdit, BatchProgress, EncodingQuality, ResizePreset, VideoProfile,
+};
 use yttraydl::process;
 
 enum ConverterMessage {
@@ -13,6 +15,7 @@ pub(super) struct ConverterState {
     input: String,
     output: String,
     profile: VideoProfile,
+    quality: EncodingQuality,
     trim_start: String,
     trim_end: String,
     crop_width: String,
@@ -83,6 +86,22 @@ impl App {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Video converter");
                         ui.label("Convert a local video without overwriting existing files.");
+                        ui.separator();
+                        if state.receiver.is_some() {
+                            if state.status.is_empty() {
+                                ui.label(
+                                    "Converting… Closing this window will not stop the conversion.",
+                                );
+                            } else {
+                                ui.label(&state.status);
+                            }
+                            ui.label("Closing this window does not stop the conversion.");
+                            if ui.button("Cancel conversion").clicked() {
+                                cancel = true;
+                            }
+                        } else if !state.status.is_empty() {
+                            ui.label(&state.status);
+                        }
                         ui.add_space(8.0);
                         ui.label("Input file");
                         ui.horizontal(|ui| {
@@ -109,6 +128,15 @@ impl App {
                                     );
                                 }
                             });
+                        ui.label("Encoding quality");
+                        egui::ComboBox::from_id_salt("converter-quality")
+                            .selected_text(state.quality.label())
+                            .show_ui(ui, |ui| {
+                                for quality in EncodingQuality::ALL {
+                                    ui.selectable_value(&mut state.quality, quality, quality.label());
+                                }
+                            });
+                        ui.label("HEVC and AV1 need ffmpeg with the corresponding encoder; AV1 can be slow.");
                         ui.label("Optional trim (seconds; applies to single and batch)");
                         ui.horizontal(|ui| {
                             ui.label("Start");
@@ -213,21 +241,7 @@ impl App {
                         if ui.add_enabled(state.receiver.is_none(), egui::Button::new("Convert batch")).clicked() {
                             start_batch = true;
                         }
-                        ui.separator();
-                        if state.receiver.is_some() {
-                            if state.status.is_empty() {
-                                ui.label(
-                                    "Converting… Closing this window will not stop the conversion.",
-                                );
-                            } else {
-                                ui.label(&state.status);
-                            }
-                            if ui.button("Cancel conversion").clicked() {
-                                cancel = true;
-                            }
-                        } else if !state.status.is_empty() {
-                            ui.label(&state.status);
-                        }
+
                     });
                 });
             },
@@ -247,6 +261,7 @@ impl App {
             let batch_inputs = state.batch_inputs.clone();
             let batch_folder = state.batch_folder.clone();
             let profile = state.profile;
+            let quality = state.quality;
             let trim_start = state.trim_start.clone();
             let trim_end = state.trim_end.clone();
             let crop_width = state.crop_width.clone();
@@ -264,8 +279,14 @@ impl App {
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()));
                 let options =
                     converter::TrimRange::parse(&trim_start, &trim_end).and_then(|trim| {
-                        converter::CropRect::parse(&crop_width, &crop_height, &crop_x, &crop_y)
-                            .map(|crop| converter::ConversionOptions { trim, crop, resize })
+                        converter::CropRect::parse(&crop_width, &crop_height, &crop_x, &crop_y).map(
+                            |crop| converter::ConversionOptions {
+                                trim,
+                                crop,
+                                resize,
+                                quality,
+                            },
+                        )
                     });
                 let specs = options.and_then(|options| {
                     converter::locate_ffmpeg(&settings, exe_dir.as_deref())
@@ -297,10 +318,26 @@ impl App {
                         })
                 });
                 let result = specs.and_then(|specs| {
-                    converter::run_batch(&specs, &token, |index, total| {
-                        let _ = tx.send(ConverterMessage::Progress(format!(
-                            "Converting file {index} of {total}…"
-                        )));
+                    converter::run_batch_with_progress(&specs, &token, |event| {
+                        let message = match event {
+                            BatchProgress::Started { index, total } => {
+                                format!("Converting file {index} of {total}…")
+                            }
+                            BatchProgress::EncodedTime {
+                                index,
+                                total,
+                                microseconds,
+                            } => {
+                                let seconds = microseconds / 1_000_000;
+                                format!(
+                                    "File {index} of {total} · encoded {:02}:{:02}:{:02}",
+                                    seconds / 3600,
+                                    (seconds / 60) % 60,
+                                    seconds % 60
+                                )
+                            }
+                        };
+                        let _ = tx.send(ConverterMessage::Progress(message));
                         wake.request_repaint();
                     })
                 });

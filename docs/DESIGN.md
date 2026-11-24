@@ -474,6 +474,14 @@ shipped). The system:
 
 ## Verification matrix
 
+FluentGruv dark token alignment: **Partially verified**. Automated GUI tests
+check selected palette assignments and key text/background contrast ratios.
+The application still contains custom legacy styling; light-theme switching,
+complete keyboard and focus behavior, actual contrast in every widget, and
+interactive Windows DPI/monitor validation remain unverified. These partial
+changes do not establish full FluentGruv compliance.
+
+
 Local player: **Unverified** on Windows and no real ffplay playback has been
 run in the development sandbox. An isolated Linux harness covers queue bounds,
 ordering, progression/repeat, local argv construction and cancellation of an

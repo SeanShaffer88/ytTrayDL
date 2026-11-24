@@ -2,10 +2,8 @@
 //! (the root viewport, hidden until asked for), and the viewports
 //! implemented in `gui_windows` (popup, settings, downloads, toasts).
 //!
-//! Family look: the black/red Command Deck identity shared with
-//! InstallScope — near-black panels, hairline dividers, one red
-//! accent. Every interactive control carries a tooltip (hover text),
-//! and no essential information is tooltip-only.
+//! Shared dark theme uses FluentGruv's warm surfaces and red accent.
+//! Broader light-theme, DPI and accessibility validation remain in progress.
 
 mod converter_window;
 #[cfg(feature = "field-validation")]
@@ -32,37 +30,34 @@ use yttraydl::url_detect::{extract_urls, host_of};
 use yttraydl::window_geometry::{WindowGeometries, WindowKind};
 use yttraydl::ytdlp::{self, VideoInfo, YtDlpBinary};
 
-pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xE5, 0x48, 0x4D);
-pub const ACCENT_DARK: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x07, 0x00);
-pub const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x10, 0x10, 0x10);
-pub const HAIRLINE: egui::Color32 = egui::Color32::from_rgb(0x2B, 0x2B, 0x2C);
-pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xE9, 0xE9, 0xE9);
-pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xA0, 0xA0, 0xA0);
-pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6E, 0x6E);
-pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0x4C, 0xC3, 0x6B);
+pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xFB, 0x49, 0x34);
+pub const ACCENT_DARK: egui::Color32 = egui::Color32::from_rgb(0x3B, 0x1D, 0x1B);
+pub const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x20, 0x21);
+pub const HAIRLINE: egui::Color32 = egui::Color32::from_rgb(0x3C, 0x38, 0x36);
+pub const TEXT_INVERSE: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x20, 0x21);
+pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xEB, 0xDB, 0xB2);
+pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xD5, 0xC4, 0xA1);
+pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0xA8, 0x99, 0x84);
+pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0xB8, 0xBB, 0x26);
 /// Card fill: panels-within-the-panel (0.5.0 polish pass).
-pub const CARD: egui::Color32 = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+pub const CARD: egui::Color32 = egui::Color32::from_rgb(0x28, 0x28, 0x28);
 /// Control fill at rest / on hover (0.5.0; the rest fill is
 /// CARD2 since 0.6.0 — controls sit one step above the cards).
 pub const CONTROL_BG: egui::Color32 = CARD2;
-pub const CONTROL_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(0x28, 0x28, 0x2A);
+pub const CONTROL_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(0x3C, 0x38, 0x36);
 /// Raised surface (0.6.0 premium pass): one step lighter than
 /// CARD — buttons, chips, value readouts, anything that sits
 /// ON a card instead of being the card.
-pub const CARD2: egui::Color32 = egui::Color32::from_rgb(0x1E, 0x1E, 0x1F);
+pub const CARD2: egui::Color32 = egui::Color32::from_rgb(0x32, 0x30, 0x2F);
 /// Recessed surface (0.6.0): darker than the panel itself —
 /// wells, text fields, the segmented-control track, the panel
 /// footer bar. Depth comes from pairing this with CARD/CARD2.
-pub const WELL: egui::Color32 = egui::Color32::from_rgb(0x0B, 0x0B, 0x0C);
+pub const WELL: egui::Color32 = egui::Color32::from_rgb(0x17, 0x18, 0x19);
 /// Darker outline for recessed surfaces (0.6.0).
-pub const STROKE_DARK: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1E);
+pub const STROKE_DARK: egui::Color32 = egui::Color32::from_rgb(0x3C, 0x38, 0x36);
 /// The 1px light line painted along a card's top edge
 /// (0.6.0) — the cheapest depth cue egui can draw.
-pub const TOP_HIGHLIGHT: egui::Color32 = egui::Color32::from_rgb(0x42, 0x42, 0x44);
-/// Gradient ends for primary buttons / selected segments
-/// (0.6.0): light accent at the top, deep red at the bottom.
-pub const ACCENT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xF0, 0x60, 0x66);
-pub const ACCENT_DEEP: egui::Color32 = egui::Color32::from_rgb(0x94, 0x16, 0x1C);
+pub const TOP_HIGHLIGHT: egui::Color32 = egui::Color32::from_rgb(0x50, 0x49, 0x45);
 /// Gradient top for the selected format chip (0.6.0); its
 /// bottom is ACCENT_DARK.
 pub const CHIP_GRAD_TOP: egui::Color32 = egui::Color32::from_rgb(0x96, 0x1E, 0x24);
@@ -76,7 +71,7 @@ pub const PILL_BG: egui::Color32 = egui::Color32::from_rgb(0x12, 0x12, 0x14);
 pub const PILL_STROKE: egui::Color32 = egui::Color32::from_rgb(0x46, 0x34, 0x36);
 /// Slightly stronger outline than HAIRLINE, for interactive
 /// controls on hover so they read as touchable (0.5.0).
-pub const STROKE_SOFT: egui::Color32 = egui::Color32::from_rgb(0x3A, 0x3A, 0x3A);
+pub const STROKE_SOFT: egui::Color32 = egui::Color32::from_rgb(0x50, 0x49, 0x45);
 /// Tinted fill for the panel failure banner (0.5.0; was an
 /// inline colour in the panel before).
 pub const DANGER_BG: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x0E, 0x0E);
@@ -277,16 +272,13 @@ pub fn paint_focus_ring(painter: &egui::Painter, rect: egui::Rect, radius: f32) 
     painter.rect_stroke(
         rect.expand(1.5),
         egui::CornerRadius::same((radius + 1.5) as u8),
-        egui::Stroke::new(1.5_f32, ACCENT_LIGHT),
+        egui::Stroke::new(2.0_f32, ACCENT),
         egui::epaint::StrokeKind::Outside,
     );
 }
 
-/// The primary action button (0.5.0), rebuilt 0.6.0 as a
-/// custom-painted pill: vertical gradient (ACCENT_LIGHT →
-/// ACCENT_DEEP), a soft deep-red glow underneath, a light
-/// top edge, strong white text — the one button in a view
-/// that should draw the eye (Download, Hide the icon…).
+/// A primary action uses a bright accent with inverse text. Selected chips
+/// reuse the painter with their own dark fill and light text.
 /// Implements `Widget` so every 0.5.0 call site
 /// (`ui.add`, `ui.add_enabled`, `ui.add_sized`, `.min_size`)
 /// works unchanged; interaction (hover/press/focus, Space /
@@ -298,6 +290,7 @@ pub struct GradientButton {
     top: egui::Color32,
     bottom: egui::Color32,
     glow: bool,
+    inverse_text: bool,
     /// Label size override (chips render at 12.5, buttons at
     /// the theme's Button size).
     text_size: Option<f32>,
@@ -307,9 +300,10 @@ pub fn primary_button(text: &str) -> GradientButton {
     GradientButton {
         text: text.to_string(),
         min_size: egui::Vec2::ZERO,
-        top: ACCENT_LIGHT,
-        bottom: ACCENT_DEEP,
+        top: ACCENT,
+        bottom: ACCENT,
         glow: true,
+        inverse_text: true,
         text_size: None,
     }
 }
@@ -324,9 +318,14 @@ impl GradientButton {
 impl egui::Widget for GradientButton {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let enabled = ui.is_enabled();
-        let rich = egui::RichText::new(&self.text)
-            .strong()
-            .color(egui::Color32::WHITE);
+        let text_color = if !enabled {
+            TEXT_FAINT
+        } else if self.inverse_text {
+            TEXT_INVERSE
+        } else {
+            TEXT
+        };
+        let rich = egui::RichText::new(&self.text).strong().color(text_color);
         let rich = match self.text_size {
             Some(s) => rich.size(s),
             None => rich,
@@ -348,12 +347,16 @@ impl egui::Widget for GradientButton {
             let radius = rect.height() / 2.0;
             let (mut top, mut bottom) = (self.top, self.bottom);
             if !enabled {
-                let grey = egui::Color32::from_rgb(0x4A, 0x4A, 0x4C);
-                top = lerp_color(top, grey, 0.55);
-                bottom = lerp_color(bottom, grey, 0.55);
+                top = CARD2;
+                bottom = CARD2;
             } else if response.is_pointer_button_down_on() {
-                top = lerp_color(top, egui::Color32::BLACK, 0.18);
-                bottom = lerp_color(bottom, egui::Color32::BLACK, 0.18);
+                let target = if self.inverse_text {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::BLACK
+                };
+                top = lerp_color(top, target, 0.12);
+                bottom = lerp_color(bottom, target, 0.12);
             } else if response.hovered() {
                 top = lerp_color(top, egui::Color32::WHITE, 0.10);
                 bottom = lerp_color(bottom, egui::Color32::WHITE, 0.10);
@@ -377,11 +380,7 @@ impl egui::Widget for GradientButton {
             if response.has_focus() {
                 paint_focus_ring(painter, rect, radius);
             }
-            painter.galley(
-                rect.center() - galley.size() / 2.0,
-                galley,
-                egui::Color32::WHITE,
-            );
+            painter.galley(rect.center() - galley.size() / 2.0, galley, text_color);
         }
         response
     }
@@ -400,6 +399,7 @@ pub fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
             top: CHIP_GRAD_TOP,
             bottom: ACCENT_DARK,
             glow: false,
+            inverse_text: false,
             text_size: Some(12.5),
         });
         // Accent outline over the gradient (mockup).
@@ -643,7 +643,7 @@ pub fn paint_focus_ring_for_field(ui: &egui::Ui, resp: &egui::Response) {
         painter.rect_stroke(
             resp.rect.expand(1.0),
             egui::CornerRadius::same(RADIUS + 1),
-            egui::Stroke::new(1.5_f32, ACCENT),
+            egui::Stroke::new(2.0_f32, ACCENT),
             egui::epaint::StrokeKind::Outside,
         );
     }
@@ -859,7 +859,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.faint_bg_color = CARD;
     visuals.code_bg_color = CARD;
     visuals.hyperlink_color = ACCENT;
-    visuals.warn_fg_color = egui::Color32::from_rgb(0xE5, 0xA0, 0x3C);
+    visuals.warn_fg_color = egui::Color32::from_rgb(0xFA, 0xBD, 0x2F);
     visuals.error_fg_color = ACCENT;
     visuals.window_corner_radius = egui::CornerRadius::same(10);
     visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS);
@@ -900,10 +900,66 @@ pub fn apply_theme(ctx: &egui::Context) {
     // combo entries and text selection — the mockups' red is
     // the bright one, not the deep red 0.5.0 used here.
     visuals.selection.bg_fill = ACCENT;
-    visuals.selection.stroke = egui::Stroke::new(1.0_f32, TEXT);
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, TEXT_INVERSE);
 
     style.visuals = visuals;
     ctx.set_style(style);
+}
+
+#[cfg(test)]
+mod theme_contrast_tests {
+    use super::*;
+    fn luminance(color: egui::Color32) -> f64 {
+        let linear = |v: u8| {
+            let c = f64::from(v) / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+    }
+    fn contrast(a: egui::Color32, b: egui::Color32) -> f64 {
+        let a = luminance(a);
+        let b = luminance(b);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+    #[test]
+    fn core_dark_text_pairs_and_primary_button_meet_body_contrast() {
+        for (foreground, background) in [
+            (TEXT, PANEL_BG),
+            (TEXT, CARD),
+            (TEXT, CARD2),
+            (TEXT_DIM, CARD),
+            (TEXT_FAINT, CARD2),
+            (TEXT_INVERSE, ACCENT),
+        ] {
+            assert!(
+                contrast(foreground, background) >= 4.5,
+                "contrast {:.2}",
+                contrast(foreground, background)
+            );
+        }
+        for amount in [0.10, 0.12] {
+            assert!(
+                contrast(
+                    TEXT_INVERSE,
+                    lerp_color(ACCENT, egui::Color32::WHITE, amount)
+                ) >= 4.5
+            );
+        }
+    }
+    #[test]
+    fn theme_installs_shared_palette() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let visuals = &ctx.style().visuals;
+        assert_eq!(visuals.panel_fill, PANEL_BG);
+        assert_eq!(visuals.widgets.inactive.bg_fill, CARD2);
+        assert_eq!(visuals.selection.bg_fill, ACCENT);
+        assert_eq!(visuals.selection.stroke.color, TEXT_INVERSE);
+    }
 }
 
 #[derive(Clone)]

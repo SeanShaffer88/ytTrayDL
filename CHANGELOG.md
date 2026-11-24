@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Dark theme tokens
+
+- Align the shared dark canvas, surfaces, text and accent with FluentGruv dark
+  tokens, use inverse text on bright primary actions, and strengthen custom
+  focus outlines. Full light-theme, keyboard and Windows DPI validation remains.
+
 ## Unreleased — Converter progress
 
 - Show approximate per-file progress and ETA using a bounded, cancellable

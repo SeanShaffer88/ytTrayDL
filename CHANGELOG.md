@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Modular installation checks
+
+- Extend installer lifecycle checks to cover requested and unrequested module
+  shortcuts, their exact launch arguments, and preservation of saved player data.
+- Add cross-module and malformed launch-intent tests.
+
 ## Unreleased — Player playlist export
 
 - Export a local queue to a new UTF-8 M3U/M3U8 file without overwriting existing

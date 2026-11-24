@@ -49,7 +49,19 @@ fn main() {
             dpi: 96,
         })
     );
-    println!("Settings, history, archive and window geometry sentinel assertions passed");
+    let queue = yttraydl::player::load_queue(&yttraydl::player::saved_queue_path())
+        .expect("saved player queue remains readable");
+    assert_eq!(queue.items().len(), 1);
+    assert_eq!(
+        queue.items()[0].file_name().unwrap(),
+        "field-071-missing.mp3"
+    );
+    let player = yttraydl::player::load_options(&yttraydl::player::player_options_path())
+        .expect("saved player options remain readable");
+    assert_eq!(player.ffplay_path, "field-071-player.exe");
+    assert_eq!(player.volume, 47);
+    assert!(player.repeat);
+    println!("Settings, history, archive, window geometry and player sentinel assertions passed");
 }
 
 // Test tooling shares production pre-execution JobObject containment, deadlines,

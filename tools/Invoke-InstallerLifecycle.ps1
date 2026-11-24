@@ -25,9 +25,16 @@ $data = Join-Path $env:APPDATA 'ytTrayDL'
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F85DF45F-C581-47D6-8605-ADFF0A87D50A}_is1'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $shortcuts = @((Join-Path ([Environment]::GetFolderPath('Programs')) 'ytTrayDL.lnk'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'ytTrayDL.lnk'))
+$moduleLinks = @(
+    @{ name='ytTrayDL Downloads.lnk'; argument='--downloads' },
+    @{ name='ytTrayDL Video Converter.lnk'; argument='--converter' },
+    @{ name='ytTrayDL Lyrics and Tags.lnk'; argument='--tags' },
+    @{ name='ytTrayDL Player.lnk'; argument='--player' }
+)
+$desktop = [Environment]::GetFolderPath('Desktop')
 $isUpgrade = $Scenario -ne 'clean'
 $baselineVersion = if ($Scenario -eq 'upgrade070-off') { '0.7.0' } else { '0.6.1' }
-$candidateTasks = if ($Scenario -like '*-off') { '' } else { 'desktopicon,startup' }
+$candidateTasks = if ($Scenario -like '*-off') { '' } else { 'desktopicon,downloadsicon,convertericon,tagsicon,playericon,startup' }
 $candidateVersion = (Select-String -LiteralPath (Join-Path $PSScriptRoot '../Cargo.toml') -Pattern '^version = "([^"]+)"$').Matches.Groups[1].Value
 if ([string]::IsNullOrWhiteSpace($candidateVersion)) { throw 'Candidate Cargo version is required.' }
 $foreign = Join-Path $install 'user-downloads/original-user-media.txt'
@@ -54,7 +61,7 @@ function Install([string]$Path, [string]$Phase, [string]$Tasks='desktopicon,star
 }
 function Hash-Data {
     $result = @{}
-    foreach ($name in @('settings.json','history.json','download-archive.txt','window-state.json')) {
+    foreach ($name in @('settings.json','history.json','download-archive.txt','window-state.json','player-queue.json','player-options.json')) {
         $result[$name] = (Get-FileHash -LiteralPath (Join-Path $data $name) -Algorithm SHA256).Hash
     }
     return $result
@@ -69,6 +76,7 @@ $passed = $false
 try {
     Assert (!(Test-Path $install) -and !(Test-Path $data) -and !(Test-Path $key)) 'fresh runner has no existing application state'
     foreach ($shortcut in $shortcuts) { Assert (!(Test-Path $shortcut)) 'shortcut absent before test' }
+    foreach ($link in $moduleLinks) { Assert (!(Test-Path (Join-Path $desktop $link.name))) "module shortcut $($link.name) absent before test" }
     $existingRun = Get-ItemProperty -LiteralPath $runKey -Name ytTrayDL -ErrorAction SilentlyContinue
     Assert ($null -eq $existingRun) 'no preexisting application startup value'
     Assert (!(Test-Path $siblingShortcut)) 'unrelated shortcut sentinel path initially absent'
@@ -105,6 +113,8 @@ try {
     @{entries=@(@{finished_at_unix=1;url='https://example.invalid/field-071';title='field-071-preserved';status='completed';file=$null;error=$null;preset_label='Best quality'})} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $data 'history.json') -Encoding utf8NoBOM
     [IO.File]::WriteAllText((Join-Path $data 'download-archive.txt'), "generic field-071`n")
     @{schema_version=1;main=@{x=120;y=140;width=800;height=600;dpi=96}} | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $data 'window-state.json') -Encoding utf8NoBOM
+    @{version=1;items=@((Join-Path $env:TEMP 'field-071-missing.mp3'))} | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $data 'player-queue.json') -Encoding utf8NoBOM
+    @{version=1;ffplay_path='field-071-player.exe';volume=47;repeat=$true} | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $data 'player-options.json') -Encoding utf8NoBOM
     $hashes = Hash-Data
     Check-Data $hashes
     # Prove actual library assertions reject corrupted synthetic state, then
@@ -137,6 +147,17 @@ try {
         Assert (Test-Path $shortcut) 'requested shortcut exists'
         Assert ($shell.CreateShortcut($shortcut).TargetPath -eq $exe) 'shortcut targets candidate'
     }
+    foreach ($link in $moduleLinks) {
+        $linkPath = Join-Path $desktop $link.name
+        if ($Scenario -like '*-off') {
+            Assert (!(Test-Path $linkPath)) "unrequested module shortcut $($link.name) absent"
+        } else {
+            Assert (Test-Path $linkPath) "requested module shortcut $($link.name) exists"
+            $shortcut = $shell.CreateShortcut($linkPath)
+            Assert ($shortcut.TargetPath -eq $exe) "module shortcut $($link.name) targets candidate"
+            Assert ($shortcut.Arguments -ceq $link.argument) "module shortcut $($link.name) has exact launch intent"
+        }
+    }
     if ($isUpgrade) { Assert ($oldHash -ne (Get-FileHash $exe).Hash) 'upgrade replaced old executable' }
     Check-Data $hashes
     Assert ((Get-FileHash $siblingShortcut).Hash -eq $siblingShortcutHash) 'candidate preserved unrelated sibling shortcut'
@@ -145,6 +166,7 @@ try {
     foreach ($file in @('yttraydl.exe','README.md','LICENSE','THIRD-PARTY-NOTICES.txt')) { Assert (!(Test-Path (Join-Path $install $file))) "uninstall removed owned file $file" }
     Assert (!(Test-Path $key)) 'uninstall removed application registration'
     foreach ($shortcut in $shortcuts) { Assert (!(Test-Path $shortcut)) 'uninstall removed owned shortcut' }
+    foreach ($link in $moduleLinks) { Assert (!(Test-Path (Join-Path $desktop $link.name))) "uninstall removed module shortcut $($link.name)" }
     Assert ($null -eq (Get-ItemProperty $runKey -Name ytTrayDL -ErrorAction SilentlyContinue)) 'uninstall removed owned startup value'
     Check-Data $hashes
     Assert (Test-Path $foreign) 'uninstall preserved user media inside application directory'

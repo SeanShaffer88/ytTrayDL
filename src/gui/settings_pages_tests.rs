@@ -422,7 +422,8 @@ fn conditional_quality_controls_remain_present_and_pagination_is_lossless() {
                 );
                 assert!(pages
                     .iter()
-                    .all(|p| heights[p.clone()].iter().sum::<f32>() <= budget));
+                    .all(|p| heights[p.clone()].iter().sum::<f32>() <= budget
+                        || (p.len() == 1 && heights[p.start] > budget)));
             }
         }
     }

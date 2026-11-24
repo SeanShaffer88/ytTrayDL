@@ -45,6 +45,7 @@ pub(super) fn rows(tab: usize, section: usize, s: &Settings) -> Vec<&'static str
                 r.push("format");
             }
             r.push("container");
+            r.push("audio-quality");
             r
         }
         (1, 2) => vec!["thumbnail", "metadata"],
@@ -386,6 +387,14 @@ pub(super) fn render_row(
                     (Container::Original, "Original (no remux)"),
                 ],
             )
+        }
+        "audio-quality" => {
+            changed = choice(
+                ui,
+                "Audio quality (MP3, M4A, Opus)",
+                &mut s.audio_quality,
+                &AudioQuality::ALL.map(|v| (v, v.label())),
+            );
         }
         "thumbnail" => check!(
             embed_thumbnail,

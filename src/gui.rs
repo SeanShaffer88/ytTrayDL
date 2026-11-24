@@ -2212,7 +2212,7 @@ impl App {
 
     // ---------- per-frame processing ----------
 
-    fn process_platform_events(&mut self) {
+    fn process_platform_events(&mut self, ctx: &egui::Context) {
         while let Ok(ev) = self.platform.events.try_recv() {
             match ev {
                 PlatformEvent::ClipboardText(text) => {
@@ -2224,6 +2224,17 @@ impl App {
                 }
                 PlatformEvent::ManualUrl(url) => {
                     self.handle_detected_url(&url, true);
+                }
+                PlatformEvent::OpenDownloads => {
+                    if self.show_downloads {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of("yttraydl-downloads"),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                    self.show_downloads = true;
+                    self.show_panel = true;
+                    ctx.request_repaint();
                 }
                 PlatformEvent::ShowRequested => {
                     self.settings.tray_icon_visible = true;
@@ -3171,7 +3182,7 @@ impl eframe::App for App {
         }
         self.was_settings_open = self.show_settings;
         self.ensure_tray(ctx);
-        self.process_platform_events();
+        self.process_platform_events(ctx);
         self.process_info_results();
         self.process_download_events();
         if let Some(delay) = self.downloads.disk_recheck_after(Instant::now()) {

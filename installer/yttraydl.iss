@@ -58,6 +58,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "downloadsicon"; Description: "Create a desktop shortcut for Downloads"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "startup"; Description: "Start ytTrayDL when Windows starts (tray, no window)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
@@ -72,6 +73,8 @@ Source: "..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{autoprograms}\ytTrayDL"; Filename: "{app}\{#AppExe}"; Comment: "Clipboard video downloader (yt-dlp front-end)"
 Name: "{autodesktop}\ytTrayDL"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+
+Name: "{autodesktop}\ytTrayDL Downloads"; Filename: "{app}\{#AppExe}"; Parameters: "--downloads"; Tasks: downloadsicon
 
 [Registry]
 ; Same value ytTrayDL's own "Start with Windows" writes, with the

@@ -11,7 +11,7 @@ use super::*;
 mod settings_pages;
 use yttraydl::platform;
 use yttraydl::settings::{
-    Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
+    AudioQuality, Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
 use yttraydl::window_geometry::{TransientWindow, WindowKind};
 use yttraydl::ytdlp::YtDlpSource;

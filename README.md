@@ -46,6 +46,10 @@ or a portable zip.
     with your default quality and folder; a small toast confirms it finished
     (and failures are always reported, never silent).
 
+The installer can optionally create a separate **ytTrayDL Downloads** desktop
+shortcut. It opens the Downloads window, including when ytTrayDL is already
+running. Portable users can launch `yttraydl.exe --downloads` directly.
+
 Right-click the tray icon to pause monitoring, switch modes, open Settings,
 open the download folder, and more. Left-click toggles the control panel —
 click once to show it, click again to hide it.
@@ -85,6 +89,11 @@ click once to show it, click again to hide it.
 - **Subtitles-only and audio your way** — a preset that fetches
   just the subtitle files (`.srt`, no video or audio), and audio
   presets for MP3, M4A, Opus, FLAC, WAV or the original format.
+  Settings → Downloads → Quality offers encoder quality or 128–320 kbps
+  for MP3, M4A and Opus; this cannot improve the source quality.
+  Original and lossless audio are unaffected. yt-dlp may preserve an
+  existing matching audio format instead of re-encoding it, so the chosen
+  bitrate is a conversion target, not a guarantee.
 - **Channel watcher** — subscribe to channels or playlists and
   new uploads download themselves on an interval you choose
   (hourly by default).

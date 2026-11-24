@@ -32,6 +32,8 @@ pub enum PlatformEvent {
     ShowRequested,
     /// A later invocation supplied a URL explicitly, independent of monitoring.
     ManualUrl(String),
+    /// Open the existing Downloads window from a direct launch.
+    OpenDownloads,
 }
 
 /// Owns the platform listeners. Dropping it stops the listener
@@ -55,13 +57,19 @@ pub struct PlatformSetup {
 /// is already running it is told to show itself; if not, this
 /// instance starts with Settings open.
 pub fn setup(show_on_launch: bool) -> PlatformSetup {
+    setup_with_launch_intent(show_on_launch, false)
+}
+
+/// Set up the primary instance without sending the generic show event when a
+/// secondary instance has a more specific launch intent to forward.
+pub fn setup_with_launch_intent(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
     #[cfg(windows)]
     {
-        windows_impl::setup(show_on_launch)
+        windows_impl::setup(show_on_launch, has_launch_intent)
     }
     #[cfg(not(windows))]
     {
-        let _ = show_on_launch;
+        let _ = (show_on_launch, has_launch_intent);
         let (_tx, rx) = std::sync::mpsc::channel();
         // Keep the sender alive inside the (unused) channel pair by
         // leaking it: non-Windows builds are for UI development, and
@@ -75,6 +83,18 @@ pub fn setup(show_on_launch: bool) -> PlatformSetup {
     }
 }
 
+/// Deliver a direct Downloads-window request to the running instance.
+pub fn forward_open_downloads() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_impl::forward_open_downloads()
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Launch intent forwarding is only supported on Windows".into())
+    }
+}
+
 /// Deliver an explicit CLI URL to the running instance, with a bounded wait.
 pub fn forward_manual_url(url: &str) -> Result<(), String> {
     #[cfg(windows)]
@@ -85,6 +105,23 @@ pub fn forward_manual_url(url: &str) -> Result<(), String> {
     {
         let _ = url;
         Err("URL forwarding is only supported on Windows".into())
+    }
+}
+
+#[cfg(any(windows, test))]
+const MANUAL_URL_MESSAGE: usize = 0x59545501;
+#[cfg(any(windows, test))]
+const OPEN_DOWNLOADS_MESSAGE: usize = 0x59545502;
+
+#[cfg(any(windows, test))]
+fn copydata_event(message: usize, bytes: &[u8]) -> Option<PlatformEvent> {
+    if bytes.is_empty() || bytes.len() > MAX_MANUAL_URL_BYTES {
+        return None;
+    }
+    match message {
+        MANUAL_URL_MESSAGE => manual_url_payload(bytes).map(PlatformEvent::ManualUrl),
+        OPEN_DOWNLOADS_MESSAGE if bytes == b"downloads" => Some(PlatformEvent::OpenDownloads),
+        _ => None,
     }
 }
 
@@ -440,6 +477,29 @@ pub(crate) use windows_impl::{read_owned_pipe, ProcessTree};
 #[cfg(test)]
 mod clipboard_tests {
     use super::{clipboard_allocation_units, clipboard_event_text, decode_clipboard_units};
+    #[test]
+    fn launch_intents_are_separate_from_urls_and_bounded() {
+        use super::{copydata_event, PlatformEvent, MANUAL_URL_MESSAGE, OPEN_DOWNLOADS_MESSAGE};
+        assert_eq!(
+            copydata_event(OPEN_DOWNLOADS_MESSAGE, b"downloads"),
+            Some(PlatformEvent::OpenDownloads)
+        );
+        assert_eq!(
+            copydata_event(OPEN_DOWNLOADS_MESSAGE, b"https://example.com"),
+            None
+        );
+        assert_eq!(copydata_event(MANUAL_URL_MESSAGE, b"downloads"), None);
+        assert_eq!(copydata_event(0, b"downloads"), None);
+        assert_eq!(
+            copydata_event(OPEN_DOWNLOADS_MESSAGE, &vec![b'x'; super::MAX_MANUAL_URL_BYTES + 1]),
+            None
+        );
+        assert_eq!(
+            copydata_event(MANUAL_URL_MESSAGE, b"https://example.com"),
+            Some(PlatformEvent::ManualUrl("https://example.com".to_string()))
+        );
+    }
+
     #[test]
     fn forwarded_url_requires_bounded_http_payload() {
         for invalid in [

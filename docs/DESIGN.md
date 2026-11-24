@@ -474,6 +474,14 @@ shipped). The system:
 
 ## Verification matrix
 
+Downloads direct-launch intent and optional desktop shortcut: **Unverified**
+on Windows. Cold launch, running-instance delivery, focus, installer upgrade
+and uninstall require real Windows validation.
+
+Audio encoding quality selection: **Unverified** on a real Windows machine.
+Argument construction and settings compatibility have regression tests; a Windows
+run with actual yt-dlp and ffmpeg is still required to verify UI and output.
+
 The release target is **0.8.0**. Its exact-version field and release gates remain
 pending until recorded; the [release contract](RELEASE-0.8.0.md) preserves actual
 0.7.1 candidate qualification separately as historical baseline evidence. CI

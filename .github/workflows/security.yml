@@ -19,6 +19,11 @@ jobs:
           cargo install cargo-audit --locked
           cargo install cargo-deny --locked
       - name: Check committed lockfile for advisories
-        run: cargo audit
+        run: |
+          set -o pipefail
+          cargo audit --color never 2>&1 | tee /tmp/audit.log || { tail -35 /tmp/audit.log | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }
       - name: Check dependency policy
-        run: cargo deny --locked check
+        if: always()
+        run: |
+          set -o pipefail
+          cargo deny --locked --color never check 2>&1 | tee /tmp/deny.log || { tail -35 /tmp/deny.log | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }

@@ -841,3 +841,18 @@ fn signature_sidecars_require_unique_official_release_assets() {
     data["assets"].as_array_mut().unwrap().push(entry);
     assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_err());
 }
+
+#[test]
+fn upstream_signature_must_match_the_actual_download_hash() {
+    let sums = include_bytes!("../../tests/fixtures/yt-dlp-signature/SHA2-256SUMS");
+    let sig = include_bytes!("../../tests/fixtures/yt-dlp-signature/SHA2-256SUMS.sig");
+    let asset = resolve_asset(
+        &serde_json::to_vec(&metadata(Family::YtDlp, &pe())).unwrap(),
+        Family::YtDlp,
+    )
+    .unwrap();
+    let signed_hash = "622ed48023cac1daa52a3bf3a6ac38f03514de214b5f0fa069389fd0f6d17e5c";
+    assert!(verify_ytdlp_checksum(sums, sig, &asset, signed_hash).is_ok());
+    assert!(verify_ytdlp_checksum(sums, sig, &asset, &"0".repeat(64)).is_err());
+    assert!(verify_ytdlp_checksum(sums, &[], &asset, signed_hash).is_err());
+}

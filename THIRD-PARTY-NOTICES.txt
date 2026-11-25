@@ -1,6 +1,7 @@
 THIRD-PARTY NOTICES — Media Tool Provisioning Dependencies
 
-Scope: the 15 packages added or newly enabled for media-tool provisioning.
+Scope: the 15 packages added or newly enabled for media-tool provisioning,
+plus the verifier dependencies listed in the addendum at the end.
 This is bounded component coverage, not an inventory of every pre-existing
 application, font, media or platform dependency, and not legal certification.
 The application MIT license does not replace these upstream license terms.

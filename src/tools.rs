@@ -270,6 +270,18 @@ fn resolve_sidecar(bytes: &[u8], version: &str, name: &str, cap: u64) -> Result<
     })
 }
 
+fn verify_ytdlp_checksum(
+    sums: &[u8],
+    signature: &[u8],
+    asset: &Asset,
+    hash: &str,
+) -> Result<(), Error> {
+    if signature::verify(sums, signature, &asset.name)? != hash {
+        return Err("Signed yt-dlp checksum does not match the downloaded executable".into());
+    }
+    Ok(())
+}
+
 trait Host {
     fn metadata(&self, family: Family, token: &CancellationToken) -> Result<Vec<u8>, Error>;
     fn verify_ytdlp(
@@ -386,10 +398,7 @@ impl Host for OfficialHost {
         };
         let sums = fetch("SHA2-256SUMS", 64 * 1024)?;
         let signature = fetch("SHA2-256SUMS.sig", 8 * 1024)?;
-        if signature::verify(&sums, &signature, &asset.name)? != hash {
-            return Err("Signed yt-dlp checksum does not match the downloaded executable".into());
-        }
-        Ok(())
+        verify_ytdlp_checksum(&sums, &signature, asset, hash)
     }
     fn download(
         &self,

@@ -41,6 +41,17 @@ impl WindowGeometry {
         }
     }
 
+    /// Align a tool window with the main window while retaining its own size.
+    /// Oversized or edge-adjacent windows are kept reachable in the work area.
+    pub fn aligned_to(self, main: Self, work: [i32; 4], inset: i32) -> Self {
+        Self {
+            x: main.x,
+            y: main.y,
+            ..self
+        }
+        .clamped(work, inset)
+    }
+
     /// Translate actual outer bounds into the native monitor work area.
     /// Oversized windows retain their size and align to the work-area origin.
     pub fn clamped(self, work: [i32; 4], inset: i32) -> Self {
@@ -63,6 +74,30 @@ impl WindowGeometry {
             x: axis(self.x, self.width, work[0], work[2]),
             y: axis(self.y, self.height, work[1], work[3]),
             ..self
+        }
+    }
+}
+
+/// Auxiliary viewports aligned once when opened, not continuously while moved.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolWindow {
+    Settings,
+    Downloads,
+    Player,
+    Tags,
+    Converter,
+    About,
+}
+
+impl ToolWindow {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Settings => "ytTrayDL — Settings",
+            Self::Downloads => "ytTrayDL — Downloads",
+            Self::Player => "ytTrayDL — Player",
+            Self::Tags => "ytTrayDL — Lyrics & tags",
+            Self::Converter => "ytTrayDL — Video converter",
+            Self::About => "About ytTrayDL",
         }
     }
 }
@@ -94,6 +129,38 @@ pub fn client_capacity(
 #[cfg(test)]
 mod client_capacity_tests {
     use super::client_capacity;
+    #[test]
+    fn tool_placement_uses_main_origin_and_clamps_without_resizing() {
+        use super::WindowGeometry;
+        let main = WindowGeometry {
+            x: -800,
+            y: 100,
+            width: 600,
+            height: 730,
+            dpi: 96,
+        };
+        let tool = WindowGeometry {
+            x: 0,
+            y: 0,
+            width: 700,
+            height: 600,
+            dpi: 96,
+        };
+        let aligned = tool.aligned_to(main, [-1000, 0, 0, 900], 12);
+        assert_eq!(
+            (aligned.x, aligned.y, aligned.width, aligned.height),
+            (-800, 100, 700, 600)
+        );
+        let edge = WindowGeometry {
+            x: -100,
+            y: 700,
+            ..main
+        };
+        let aligned = tool.aligned_to(edge, [-1000, 0, 0, 900], 12);
+        assert_eq!((aligned.x, aligned.y), (-712, 288));
+        assert_eq!((aligned.width, aligned.height), (700, 600));
+    }
+
     #[test]
     fn actual_frame_workarea_and_dpi_bound_the_settings_client() {
         assert_eq!(

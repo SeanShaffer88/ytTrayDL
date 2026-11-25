@@ -592,6 +592,7 @@ pub struct App {
     last_settings_check: Instant,
     window_geometries: WindowGeometries,
     window_geometry_ready: [bool; 4],
+    tool_window_aligned: [bool; 6],
     window_geometry_dirty: bool,
     last_geometry_save: Instant,
     /// A creation hint only; queue changes must not resize an open window.
@@ -629,6 +630,37 @@ impl App {
             yttraydl::platform::window_geometry(kind).is_some()
         };
     }
+    fn align_open_tool_windows(&mut self) {
+        use yttraydl::window_geometry::ToolWindow;
+        let windows = [
+            (
+                self.show_settings,
+                self.window_geometry_ready[1],
+                ToolWindow::Settings,
+            ),
+            (
+                self.show_downloads,
+                self.window_geometry_ready[2],
+                ToolWindow::Downloads,
+            ),
+            (self.show_player, true, ToolWindow::Player),
+            (self.show_tags, true, ToolWindow::Tags),
+            (self.show_converter, true, ToolWindow::Converter),
+            (
+                self.show_about,
+                self.window_geometry_ready[3],
+                ToolWindow::About,
+            ),
+        ];
+        for (index, (open, restored, window)) in windows.into_iter().enumerate() {
+            if !open {
+                self.tool_window_aligned[index] = false;
+            } else if restored && !self.tool_window_aligned[index] {
+                self.tool_window_aligned[index] = yttraydl::platform::align_tool_window(window);
+            }
+        }
+    }
+
     /// Restore each persistent window once per opening. Capture only visible
     /// normal bounds, before close/hide intent changes native visibility.
     fn maintain_window_geometry(&mut self, force: bool) {
@@ -787,6 +819,7 @@ impl App {
             last_settings_check: Instant::now(),
             window_geometries: WindowGeometries::load(),
             window_geometry_ready: [false; 4],
+            tool_window_aligned: [false; 6],
             window_geometry_dirty: false,
             last_geometry_save: Instant::now(),
             downloads_initial_size: None,
@@ -2486,6 +2519,7 @@ impl eframe::App for App {
         self.player_ui(ctx);
         self.toasts_ui(ctx);
         self.about_ui(ctx);
+        self.align_open_tool_windows();
         self.hide_icon_confirm_ui(ctx);
         self.close_choice_ui(ctx);
         #[cfg(feature = "field-validation")]

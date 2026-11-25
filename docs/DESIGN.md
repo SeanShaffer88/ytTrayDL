@@ -730,3 +730,21 @@ progress. The headless egui layout regression covers the actual controls and
 button bounds; physical Windows rendering, focus and high-DPI behaviour remain
 unverified for this revision. Existing screenshots are historical, not a
 capture of this candidate.
+
+
+### Main panel spacing and auxiliary window placement
+
+The fixed main panel distributes available vertical space across its navigation
+buttons, leaving only the normal body/footer gap. Settings, Downloads, Player,
+Lyrics & Tags, Video Encoder and About align their outer top-left corner to the
+main window once per opening on Windows. The target keeps its size and is
+clamped to the main monitor work area, so edge cases can change its exact
+position. Existing Settings and Downloads saved sizes are restored first; their
+saved positions no longer override this opening anchor. A user may move a
+window freely while it is open; focusing an existing window does not reposition
+it. Transient prompts keep their existing positioning rules.
+
+Pure geometry and headless egui layout tests cover clamping and button bounds;
+interactive Windows placement, visual spacing and mixed-DPI behaviour are
+unverified for this revision. Historical verification above applies to its
+original candidate, not the new alignment policy.

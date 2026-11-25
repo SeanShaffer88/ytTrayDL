@@ -93,8 +93,7 @@ fn main_navigation_buttons(ui: &mut egui::Ui) -> Vec<(MainAction, egui::Response
         1
     };
     let rows = MAIN_ACTIONS.len().div_ceil(columns);
-    let height =
-        ((ui.available_height() - (rows - 1) as f32 * gap) / rows as f32).clamp(18.0, 34.0);
+    let height = ((ui.available_height() - (rows - 1) as f32 * gap) / rows as f32).max(18.0);
     let mut buttons = Vec::with_capacity(MAIN_ACTIONS.len());
     for row in MAIN_ACTIONS.chunks(columns) {
         ui.horizontal(|ui| {
@@ -383,6 +382,11 @@ mod layout_tests {
                         "{size:?} / {status}: {action:?} at {rect:?} outside {body:?}"
                     );
                 }
+                let last = observed.last().expect("navigation buttons").1;
+                assert!(
+                    body.bottom() - last.bottom() <= 2.0,
+                    "unexpected empty space: {body:?} / {last:?}"
+                );
                 for pair in observed.windows(2) {
                     assert!(pair[1].1.top() >= pair[0].1.top());
                     if pair[1].1.top() == pair[0].1.top() {

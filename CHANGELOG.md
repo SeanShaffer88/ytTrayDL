@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fill the main window space above the footer with navigation buttons.
+- Open auxiliary windows at the main window position when possible, clamped to the monitor work area.
+
 ## 0.13.4 — Main window layout
 
 - Remove the main window scrollbar and use the requested module button order and labels.

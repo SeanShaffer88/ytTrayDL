@@ -267,6 +267,19 @@ pub fn restore_window_geometry(
     }
 }
 
+/// Align an auxiliary window to the main window once, clamped to its work area.
+pub fn align_tool_window(window: crate::window_geometry::ToolWindow) -> bool {
+    #[cfg(windows)]
+    {
+        windows_impl::align_tool_window(window)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        true
+    }
+}
+
 /// Translate an exact owned transient window into its monitor work area.
 pub fn constrain_transient_window(window: crate::window_geometry::TransientWindow) {
     #[cfg(windows)]

@@ -1,7 +1,7 @@
 # Actual trusted installer execution is restricted to an ephemeral GitHub VM.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('clean','upgrade','upgrade061-off','upgrade070-off')][string]$Scenario,
+    [Parameter(Mandatory)][ValidateSet('clean','upgrade','upgrade061-off','upgrade070-off','previous-stable')][string]$Scenario,
     [Parameter(Mandatory)][string]$Candidate,
     [Parameter(Mandatory)][string]$CandidateExe,
     [Parameter(Mandatory)][string]$StateProbe,
@@ -90,6 +90,16 @@ try {
     $null = New-ItemProperty -LiteralPath $runKey -Name $siblingRunName -Value 'field-071-unrelated-sentinel' -PropertyType String
     $oldHash = $null
     if ($isUpgrade) {
+        if ($Scenario -eq 'previous-stable') {
+            if ($candidateVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid candidate version' }
+            $candidateNumber = [version]$candidateVersion
+            # Select a published, non-prerelease three-part version strictly older
+            # than the candidate. Never execute an unchecked or same-version build.
+            $releases = @(Invoke-RestMethod 'https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases?per_page=100' -TimeoutSec 120)
+            $eligible = @($releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and [version]$_.tag_name.Substring(1) -lt $candidateNumber } | Sort-Object { [version]$_.tag_name.Substring(1) } -Descending)
+            Assert ($eligible.Count -gt 0) 'published previous stable version exists among the first 100 releases'
+            $baselineVersion = $eligible[0].tag_name.Substring(1)
+        }
         $release = Invoke-RestMethod "https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases/tags/v$baselineVersion" -TimeoutSec 120
         $asset = @($release.assets | Where-Object name -eq "ytTrayDL-Setup-v$baselineVersion-windows-x64.exe")
         $sums = @($release.assets | Where-Object name -eq 'SHA256SUMS.txt')
@@ -173,6 +183,17 @@ try {
     Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'preserved user media hash'
     Assert ((Get-FileHash $siblingShortcut).Hash -eq $siblingShortcutHash) 'uninstall preserved unrelated sibling shortcut'
     Assert ((Get-ItemProperty -LiteralPath $runKey -Name $siblingRunName).$siblingRunName -eq 'field-071-unrelated-sentinel') 'uninstall preserved unrelated startup value'
+    if ($Scenario -eq 'clean') {
+        Install $Candidate 'after-uninstall-reinstall' $candidateTasks
+        Assert ((Get-FileHash $exe -Algorithm SHA256).Hash -eq (Get-FileHash $CandidateExe -Algorithm SHA256).Hash) 'reinstall after uninstall restores candidate executable'
+        Assert ((Get-ItemProperty $key).DisplayVersion -eq $candidateVersion) 'reinstall after uninstall restores registration'
+        Check-Data $hashes
+        Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'reinstall after uninstall preserved user media'
+        Run-Installer (Join-Path $install 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + (Join-Path $EvidenceRoot 'reinstall-uninstall.log'))) 'reinstall-uninstall'
+        Assert (!(Test-Path $exe) -and !(Test-Path $key)) 'second uninstall removes candidate and registration'
+        Check-Data $hashes
+        Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'second uninstall preserves user media'
+    }
     $passed = $true
 } finally {
     @{ scenario=$Scenario; baselineVersion=$baselineVersion; candidateTasks=$candidateTasks; passed=$passed; commit=$env:GITHUB_SHA; os=[Environment]::OSVersion.VersionString; runner=$env:RUNNER_ENVIRONMENT; events=$events.ToArray(); startupExecution='Not exercised; registry command only'; gui='Not exercised in headless installer job' } | ConvertTo-Json -Depth 9 | Set-Content (Join-Path $EvidenceRoot 'evidence.json')

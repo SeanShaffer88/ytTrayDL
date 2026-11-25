@@ -38,6 +38,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Test release asset verification
+        run: python3 -m unittest discover -s tests -p test_release_assets.py
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (host)
@@ -189,7 +191,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [clean, upgrade, upgrade061-off, upgrade070-off]
+        scenario: [clean, upgrade, upgrade061-off, upgrade070-off, previous-stable]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -224,7 +226,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [latest, upgrade-latest, offline-failure, skip, existing-both, existing-yt-only]
+        scenario: [latest, upgrade-latest, offline-failure, skip, existing-both, existing-yt-only, cli-report]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:

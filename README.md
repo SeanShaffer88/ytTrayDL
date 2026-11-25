@@ -107,7 +107,9 @@ may leave a partial output. Closing the window leaves the job running.
 
 The [roadmap](ROADMAP.md) records outstanding interactive Windows and release
 verification; see the [hardware matrix](docs/HARDWARE-ENCODING-MATRIX.md) and
-[installer checklist](docs/INSTALLER-VERIFICATION.md).
+[installer checklist](docs/INSTALLER-VERIFICATION.md). Hosted installer CI includes a previous-stable upgrade,
+uninstall/reinstall and fresh provisioning-report scenarios; physical interactive
+checks remain separate.
 
 The **Player** opens from the panel, tray, optional desktop shortcut, or
 `yttraydl.exe --player`. If ffplay is missing, playback does not start. Use

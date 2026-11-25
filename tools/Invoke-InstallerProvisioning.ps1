@@ -1,6 +1,6 @@
 # Real installer execution is confined to disposable GitHub-hosted Windows VMs.
 [CmdletBinding()]
-param([Parameter(Mandatory)][ValidateSet('latest','upgrade-latest','offline-failure','skip','existing-both','existing-yt-only')][string]$Scenario,
+param([Parameter(Mandatory)][ValidateSet('latest','upgrade-latest','offline-failure','skip','existing-both','existing-yt-only','cli-report')][string]$Scenario,
       [Parameter(Mandatory)][string]$Candidate,
       [Parameter(Mandatory)][string]$CandidateExe,
       [Parameter(Mandatory)][string]$StateProbe,
@@ -68,12 +68,12 @@ try {
  }
  # Do not let tools preinstalled on the hosted runner alter scenario outcomes.
  $env:PATH="$env:SystemRoot\System32;$env:SystemRoot"
- if($Scenario-notlike'*latest'){
+ if($Scenario-notlike'*latest' -and $Scenario-ne'cli-report'){
   # Exercise real production download failures without a test-only transport.
   # Closed loopback proxy makes curl fail immediately; skip must never invoke it.
   $env:HTTPS_PROXY='http://127.0.0.1:1';$env:HTTP_PROXY=$env:HTTPS_PROXY;$env:ALL_PROXY=$env:HTTPS_PROXY;$env:NO_PROXY=''
  }
- $mode=if($Scenario-eq'skip'){'skip'}else{'required'}
+ $mode=if($Scenario-in@('skip','cli-report')){'skip'}else{'required'}
  $installerArgs=@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/TASKS=',('/LOG='+(Join-Path $EvidenceRoot 'install.log')))
  # The clean live case deliberately omits the parameter to test the default.
  if($Scenario-ne'latest'){$installerArgs+=('/TOOLSDOWNLOAD='+$mode)}
@@ -88,6 +88,19 @@ try {
   Assert ((Get-FileHash -LiteralPath (Join-Path $install 'THIRD-PARTY-NOTICES.txt')).Hash-eq(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '../THIRD-PARTY-NOTICES.txt')).Hash) 'installed dependency notices match reviewed source'
   Assert (Test-Path $key) 'candidate registered'
   Assert (@(Get-Process -Name yttraydl -ErrorAction SilentlyContinue).Count-eq0) 'silent install did not launch app'
+  if($Scenario-eq'cli-report'){
+   $report=Join-Path $EvidenceRoot 'fresh-provision-report.json'
+   Assert (-not(Test-Path -LiteralPath $report)) 'provision report path is new'
+   Assert ((Run-Owned (Join-Path $install 'yttraydl.exe') @('--provision-tools','all','--report',$report) 'cli-provision')-eq0) 'explicit provisioning CLI succeeded'
+   Assert (Test-Path -LiteralPath $report -PathType Leaf) 'explicit provisioning produced report'
+   $reportData=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+   Assert ($reportData.schemaVersion-eq1-and$reportData.status-eq'success'-and$reportData.selection-eq'all'-and$reportData.tools.Count-eq3) 'fresh report confirms all three managed tools'
+   $reportHash=(Get-FileHash -LiteralPath $report).Hash
+   $manifestAfterCli=(Get-FileHash -LiteralPath $manifest).Hash
+   Assert ((Run-Owned (Join-Path $install 'yttraydl.exe') @('--provision-tools','all','--report',$report) 'cli-existing-report')-ne0) 'existing report path is refused'
+   Assert ((Get-FileHash -LiteralPath $report).Hash-eq$reportHash) 'existing report bytes remain unchanged'
+   Assert ((Get-FileHash -LiteralPath $manifest).Hash-eq$manifestAfterCli) 'report refusal does not alter managed tools'
+  }
   if($Scenario-eq'existing-both'){
    Assert (-not(Test-Path -LiteralPath $manifest)) 'existing tools reused without managed downloads'
    Assert (Select-String -LiteralPath (Join-Path $EvidenceRoot 'install.log') -Pattern 'Media tool provisioning succeeded' -Quiet) 'existing tools satisfy setup with blocked network'
@@ -127,7 +140,7 @@ try {
   Assert ($uninstall-eq0) 'uninstall succeeded'
   Assert (-not(Test-Path (Join-Path $install 'yttraydl.exe'))-and-not(Test-Path $key)) 'uninstall removed owned app and registration'
   Assert (-not(Test-Path (Join-Path $install 'THIRD-PARTY-NOTICES.txt'))) 'uninstall removed owned dependency notices'
-  if($Scenario-like'*latest'){
+  if($Scenario-like'*latest' -or $Scenario-eq'cli-report'){
    foreach($tool in $toolSnapshots){Assert ((Get-FileHash -LiteralPath $tool.path).Hash-eq$tool.sha256) 'uninstall preserved managed tool bytes'}
    Assert ((Run-Owned $StateProbe @('--tool-status') 'post-uninstall-tool-resolvers')-eq0) 'actual managed resolver still works after uninstall'
   }

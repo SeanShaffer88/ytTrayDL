@@ -12,9 +12,10 @@ jobs:
       - name: Resolve and report lockfile
         run: |
           cargo update --workspace
+          git diff -- Cargo.lock > changes.diff
           python3 - <<'PY'
-          import base64
-          s = base64.b64encode(open('Cargo.lock','rb').read()).decode()
-          for i in range(0,len(s),8000):
-              print('::notice::LOCK%03d %s' % (i//8000,s[i:i+8000]))
+          import base64,zlib
+          s = base64.b64encode(zlib.compress(open('changes.diff','rb').read(),9)).decode()
+          assert len(s) < 3600, len(s)
+          print('::notice::LOCKDIFF ' + s)
           PY

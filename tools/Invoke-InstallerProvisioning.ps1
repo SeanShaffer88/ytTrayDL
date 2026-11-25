@@ -114,7 +114,17 @@ try {
    # could hide an installer integration failure and is deliberately avoided.
    Assert (Test-Path -LiteralPath $manifest) 'installer created canonical managed pointer'
    $tools=Get-Content -LiteralPath $manifest -Raw|ConvertFrom-Json
-   Assert ($tools.schemaVersion-eq1-and$tools.tools.Count-eq3) 'installer provisioned yt-dlp, ffmpeg, and ffprobe'
+   Assert ($tools.schemaVersion-eq1-and$tools.tools.Count-eq3) 'managed pointer contains yt-dlp, ffmpeg, and ffprobe'
+   if($Scenario-eq'cli-report'){
+    foreach($reported in $reportData.tools){
+     $matching=@($tools.tools | Where-Object { $_.name -eq $reported.name })
+     Assert ($matching.Count-eq1) ('report tool appears once in managed pointer: '+$reported.name)
+     $managedPath=[IO.Path]::GetFullPath((Join-Path (Join-Path $data 'bin') $matching[0].path))
+     Assert ([IO.Path]::IsPathFullyQualified($reported.path)-and([IO.Path]::GetFullPath($reported.path)-eq$managedPath)) ('report path matches managed tool: '+$reported.name)
+     Assert ($reported.sha256-eq$matching[0].sha256-and$reported.version-eq$matching[0].version) ('report version and hash match managed pointer: '+$reported.name)
+     Assert ((Get-FileHash -LiteralPath $reported.path).Hash-eq$reported.sha256) ('report hash matches actual managed file: '+$reported.name)
+    }
+   }
    Copy-Item -LiteralPath $manifest -Destination (Join-Path $EvidenceRoot 'installed-tools.json')
    foreach($tool in $tools.tools){
     $toolPath=[IO.Path]::GetFullPath((Join-Path (Join-Path $data 'bin') $tool.path))

@@ -21,6 +21,7 @@ const EXPANDED_CAP: u64 = 768 * 1024 * 1024;
 const MANIFEST_CAP: u64 = 64 * 1024;
 
 mod progress;
+mod signature;
 pub use progress::{ProgressMailbox, ToolProgress, ToolStage};
 
 #[derive(Clone, Debug)]
@@ -219,8 +220,65 @@ fn resolve_asset(bytes: &[u8], family: Family) -> Result<Asset, Error> {
     })
 }
 
+/// A bounded signature-sidecar asset from the same immutable release tag.
+fn resolve_sidecar(bytes: &[u8], version: &str, name: &str, cap: u64) -> Result<Asset, Error> {
+    if bytes.len() > METADATA_CAP
+        || !valid_component(version)
+        || !matches!(name, "SHA2-256SUMS" | "SHA2-256SUMS.sig")
+    {
+        return Err("Invalid signature sidecar request".into());
+    }
+    let release: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| "Invalid release metadata")?;
+    if release["tag_name"].as_str() != Some(version)
+        || release["draft"].as_bool() != Some(false)
+        || release["prerelease"].as_bool() != Some(false)
+    {
+        return Err("Signature sidecars must belong to the same stable release".into());
+    }
+    let entries = release["assets"]
+        .as_array()
+        .ok_or("Missing release assets")?;
+    let mut matching = entries
+        .iter()
+        .filter(|entry| entry["name"].as_str() == Some(name));
+    let entry = matching.next().ok_or("Missing yt-dlp signature sidecar")?;
+    if matching.next().is_some() {
+        return Err("Duplicate yt-dlp signature sidecar".into());
+    }
+    let size = entry["size"]
+        .as_u64()
+        .filter(|size| *size > 0 && *size <= cap)
+        .ok_or("Invalid signature sidecar size")?;
+    let sha256 = entry["digest"]
+        .as_str()
+        .and_then(|v| v.strip_prefix("sha256:"))
+        .filter(|v| valid_digest(v))
+        .ok_or("Invalid signature sidecar digest")?
+        .to_ascii_lowercase();
+    let url = format!("https://github.com/yt-dlp/yt-dlp/releases/download/{version}/{name}");
+    if entry["browser_download_url"].as_str() != Some(&url) {
+        return Err("Invalid signature sidecar URL".into());
+    }
+    Ok(Asset {
+        version: version.into(),
+        name: name.into(),
+        url,
+        size,
+        sha256,
+        metadata_url: "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest".into(),
+    })
+}
+
 trait Host {
     fn metadata(&self, family: Family, token: &CancellationToken) -> Result<Vec<u8>, Error>;
+    fn verify_ytdlp(
+        &self,
+        metadata: &[u8],
+        asset: &Asset,
+        hash: &str,
+        token: &CancellationToken,
+    ) -> Result<(), Error>;
     fn download(
         &self,
         asset: &Asset,
@@ -304,6 +362,34 @@ impl Host for OfficialHost {
             90,
             METADATA_CAP,
         )
+    }
+    fn verify_ytdlp(
+        &self,
+        metadata: &[u8],
+        asset: &Asset,
+        hash: &str,
+        token: &CancellationToken,
+    ) -> Result<(), Error> {
+        let fetch = |name: &str, cap: usize| -> Result<Vec<u8>, Error> {
+            let sidecar = resolve_sidecar(metadata, &asset.version, name, cap as u64)?;
+            let bytes = run(&curl_spec(&sidecar.url, sidecar.size)?, token, 90, cap)?;
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if bytes.len() as u64 != sidecar.size || digest != sidecar.sha256 {
+                return Err(
+                    "Signature sidecar size or SHA256 did not match release metadata".into(),
+                );
+            }
+            Ok(bytes)
+        };
+        let sums = fetch("SHA2-256SUMS", 64 * 1024)?;
+        let signature = fetch("SHA2-256SUMS.sig", 8 * 1024)?;
+        if signature::verify(&sums, &signature, &asset.name)? != hash {
+            return Err("Signed yt-dlp checksum does not match the downloaded executable".into());
+        }
+        Ok(())
     }
     fn download(
         &self,
@@ -820,7 +906,8 @@ fn provision_at_with_progress(
     for family in selection.families() {
         check_cancel(token)?;
         progress.stage(*family, ToolStage::Resolve, None);
-        let asset = resolve_asset(&host.metadata(*family, token)?, *family)?;
+        let metadata = host.metadata(*family, token)?;
+        let asset = resolve_asset(&metadata, *family)?;
         let download = stage.path.join(&asset.name);
         progress.stage(*family, ToolStage::Download, Some(asset.size));
         host.download(&asset, &download, token, &mut |done, total| {
@@ -832,6 +919,9 @@ fn provision_at_with_progress(
             return Err(
                 "Downloaded media tool size or SHA256 did not match the official release".into(),
             );
+        }
+        if *family == Family::YtDlp {
+            host.verify_ytdlp(&metadata, &asset, &hash, token)?;
         }
         let tools = if *family == Family::YtDlp {
             vec![("yt-dlp".into(), download.clone())]

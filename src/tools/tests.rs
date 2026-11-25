@@ -79,6 +79,7 @@ struct FakeHost {
     truncate: bool,
     cancel: Option<Family>,
     bad_version: bool,
+    bad_signature: bool,
     version_calls: AtomicUsize,
     loopback: Option<std::net::SocketAddr>,
 }
@@ -92,6 +93,7 @@ impl Default for FakeHost {
             truncate: false,
             cancel: None,
             bad_version: false,
+            bad_signature: false,
             version_calls: AtomicUsize::new(0),
             loopback: None,
         }
@@ -108,6 +110,19 @@ impl Host for FakeHost {
             },
         ))
         .unwrap())
+    }
+    fn verify_ytdlp(
+        &self,
+        _: &[u8],
+        _: &Asset,
+        _: &str,
+        _: &CancellationToken,
+    ) -> Result<(), Error> {
+        if self.bad_signature {
+            Err("injected signature error".into())
+        } else {
+            Ok(())
+        }
     }
     fn download(
         &self,
@@ -609,6 +624,15 @@ fn actual_owned_curl_cancel_and_oversize_roll_back_then_independent_retry_succee
         ) -> Result<String, Error> {
             self.base.version(name, path, token)
         }
+        fn verify_ytdlp(
+            &self,
+            metadata: &[u8],
+            asset: &Asset,
+            hash: &str,
+            token: &CancellationToken,
+        ) -> Result<(), Error> {
+            self.base.verify_ytdlp(metadata, asset, hash, token)
+        }
         fn download(
             &self,
             asset: &Asset,
@@ -788,4 +812,32 @@ fn installer_reuses_existing_portable_tools_without_execution_or_network() {
     );
     assert_eq!(fs::read(yt).unwrap(), b"inert yt-dlp fixture");
     assert_eq!(fs::read(ff).unwrap(), b"inert ffmpeg fixture");
+}
+
+#[test]
+fn signature_failure_cannot_activate_downloaded_tool() {
+    let root = TestRoot::new();
+    let host = FakeHost {
+        bad_signature: true,
+        ..FakeHost::default()
+    };
+    let error = install(&root.0, ProvisionSelection::YtDlp, &host).unwrap_err();
+    assert!(error.contains("signature"));
+    assert_eq!(host.version_calls.load(Ordering::SeqCst), 0);
+    assert!(!root.0.join("current-tools.json").exists());
+}
+
+#[test]
+fn signature_sidecars_require_unique_official_release_assets() {
+    let mut data = metadata(Family::YtDlp, &pe());
+    let name = "SHA2-256SUMS.sig";
+    let entry = json!({"name":name,"size":566,"digest":format!("sha256:{}", "a".repeat(64)),"browser_download_url":"https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/SHA2-256SUMS.sig"});
+    let encoded = |v: &Value| serde_json::to_vec(v).unwrap();
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_err());
+    data["assets"].as_array_mut().unwrap().push(entry.clone());
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_ok());
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 100).is_err());
+    assert!(resolve_sidecar(&encoded(&data), "other", name, 8192).is_err());
+    data["assets"].as_array_mut().unwrap().push(entry);
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_err());
 }

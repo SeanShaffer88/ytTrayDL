@@ -314,7 +314,7 @@ impl App {
                         ui.label("ffplay executable (optional; not included in the managed ffmpeg download)");
                         ui.label("An explicit path overrides auto-detection; clear it to search next to ffmpeg and on PATH.");
                         if ui.link("Get ffplay / FFmpeg downloads").clicked() {
-                            if let Err(error) = platform::open_url("https://ffmpeg.org/download.html") {
+                            if let Err(error) = yttraydl::platform::open_url("https://ffmpeg.org/download.html") {
                                 state.status = format!("Could not open download page: {error}");
                             }
                         }

@@ -41,7 +41,9 @@ jobs:
           set -o pipefail
           cargo clippy --all-targets --all-features --locked --color never -- -D warnings 2>&1 | tee /tmp/clippy.log || { grep -A 16 -B 1 -E "^error" /tmp/clippy.log | head -40 | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }
       - name: Clippy (Windows target)
-        run: cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features --locked -- -D warnings
+        run: |
+          set -o pipefail
+          cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features --locked --color never -- -D warnings 2>&1 | tee /tmp/windows-clippy.log || { tail -60 /tmp/windows-clippy.log | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }
       - name: Tests (full suite)
         run: cargo test --locked
       - name: Windows check
@@ -59,7 +61,16 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Tests (native)
-        run: cargo test --locked
+        shell: pwsh
+        run: |
+          cargo test --locked --color never *> test-output.txt
+          $code = $LASTEXITCODE
+          Get-Content test-output.txt | Select-Object -Last 120
+          if ($code -ne 0) {
+            $text = (Get-Content test-output.txt -Raw).Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Output "::error::$text"
+            exit $code
+          }
       - name: Release build
         run: cargo build --release --locked --bin yttraydl
       - name: Stage portable payload with dependency notices

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.5 — Main window spacing and placement
 
 - Fill the main window space above the footer with navigation buttons.
 - Open auxiliary windows at the main window position when possible, clamped to the monitor work area.

@@ -79,6 +79,7 @@ struct FakeHost {
     truncate: bool,
     cancel: Option<Family>,
     bad_version: bool,
+    bad_signature: bool,
     version_calls: AtomicUsize,
     loopback: Option<std::net::SocketAddr>,
 }
@@ -92,6 +93,7 @@ impl Default for FakeHost {
             truncate: false,
             cancel: None,
             bad_version: false,
+            bad_signature: false,
             version_calls: AtomicUsize::new(0),
             loopback: None,
         }
@@ -108,6 +110,19 @@ impl Host for FakeHost {
             },
         ))
         .unwrap())
+    }
+    fn verify_ytdlp(
+        &self,
+        _: &[u8],
+        _: &Asset,
+        _: &str,
+        _: &CancellationToken,
+    ) -> Result<(), Error> {
+        if self.bad_signature {
+            Err("injected signature error".into())
+        } else {
+            Ok(())
+        }
     }
     fn download(
         &self,
@@ -278,6 +293,10 @@ fn errors_cancellation_hash_truncation_and_version_failure_preserve_previous_man
         },
         FakeHost {
             bad_version: true,
+            ..Default::default()
+        },
+        FakeHost {
+            bad_signature: true,
             ..Default::default()
         },
     ] {
@@ -609,6 +628,15 @@ fn actual_owned_curl_cancel_and_oversize_roll_back_then_independent_retry_succee
         ) -> Result<String, Error> {
             self.base.version(name, path, token)
         }
+        fn verify_ytdlp(
+            &self,
+            metadata: &[u8],
+            asset: &Asset,
+            hash: &str,
+            token: &CancellationToken,
+        ) -> Result<(), Error> {
+            self.base.verify_ytdlp(metadata, asset, hash, token)
+        }
         fn download(
             &self,
             asset: &Asset,
@@ -788,4 +816,62 @@ fn installer_reuses_existing_portable_tools_without_execution_or_network() {
     );
     assert_eq!(fs::read(yt).unwrap(), b"inert yt-dlp fixture");
     assert_eq!(fs::read(ff).unwrap(), b"inert ffmpeg fixture");
+}
+
+#[test]
+fn signature_failure_cannot_activate_downloaded_tool() {
+    let root = TestRoot::new();
+    let host = FakeHost {
+        bad_signature: true,
+        ..FakeHost::default()
+    };
+    let error = install(&root.0, ProvisionSelection::YtDlp, &host).unwrap_err();
+    assert!(error.contains("signature"));
+    assert_eq!(host.version_calls.load(Ordering::SeqCst), 0);
+    assert!(!root.0.join("current-tools.json").exists());
+}
+
+#[test]
+fn signature_sidecars_require_unique_official_release_assets() {
+    let mut data = metadata(Family::YtDlp, &pe());
+    let name = "SHA2-256SUMS.sig";
+    let entry = json!({"name":name,"size":566,"digest":format!("sha256:{}", "a".repeat(64)),"browser_download_url":"https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/SHA2-256SUMS.sig"});
+    let encoded = |v: &Value| serde_json::to_vec(v).unwrap();
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_err());
+    data["assets"].as_array_mut().unwrap().push(entry.clone());
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_ok());
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 100).is_err());
+    assert!(resolve_sidecar(&encoded(&data), "other", name, 8192).is_err());
+    for (field, invalid) in [
+        (
+            "browser_download_url",
+            json!("https://attacker.invalid/signature"),
+        ),
+        ("digest", json!("sha256:invalid")),
+        ("size", json!(0)),
+    ] {
+        let mut modified = data.clone();
+        modified["assets"][1][field] = invalid;
+        assert!(
+            resolve_sidecar(&encoded(&modified), "2026.10.26", name, 8192).is_err(),
+            "{field}"
+        );
+    }
+    data["assets"].as_array_mut().unwrap().push(entry);
+    assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_err());
+}
+
+#[test]
+fn upstream_signature_must_match_the_actual_download_hash() {
+    let sums = include_bytes!("../../tests/fixtures/yt-dlp-signature/SHA2-256SUMS");
+    let sig = include_bytes!("../../tests/fixtures/yt-dlp-signature/SHA2-256SUMS.sig");
+    let asset = resolve_asset(
+        &serde_json::to_vec(&metadata(Family::YtDlp, &pe())).unwrap(),
+        Family::YtDlp,
+    )
+    .unwrap();
+    let signed_hash = "622ed48023cac1daa52a3bf3a6ac38f03514de214b5f0fa069389fd0f6d17e5c";
+    assert!(verify_ytdlp_checksum(sums, sig, &asset, signed_hash).is_ok());
+    assert!(verify_ytdlp_checksum(sums, sig, &asset, &"0".repeat(64)).is_err());
+    assert!(verify_ytdlp_checksum(sums, &[], &asset, signed_hash).is_err());
 }

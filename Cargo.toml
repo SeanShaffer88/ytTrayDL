@@ -1,6 +1,6 @@
 [package]
 name = "yttraydl"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 rust-version = "1.89"
 authors = ["Sean Shaffer"]
@@ -43,6 +43,8 @@ egui = { version = "0.33", default-features = false, features = ["default_fonts"
 # than enough for this UI.
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
 sha2 = { version = "0.11.1", default-features = false }
+# Detached upstream OpenPGP RSA signature verification.
+ring = "0.17.14"
 zip = { version = "=9.8.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(not(windows))'.dependencies]
@@ -77,6 +79,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+yttraydl-property-check = { version = "0.1.0", path = "tools/property-check" }
 
 [build-dependencies]
 winresource = "0.1"

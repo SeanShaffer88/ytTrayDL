@@ -1,2 +1,6 @@
 # Preserve upstream license text and the verified deterministic notice checksum.
 THIRD-PARTY-NOTICES.txt -text -whitespace
+
+# Detached signatures authenticate exact bytes, including line endings.
+tests/fixtures/yt-dlp-signature/SHA2-256SUMS -text
+tests/fixtures/yt-dlp-signature/SHA2-256SUMS.sig -text

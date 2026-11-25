@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.2 — Security and maintenance
+
+- Added a private disclosure policy and dependency advisory tracking, plus
+  dependency audit/policy and scheduled URL, clipboard and release-signature
+  fuzz-smoke workflows.
+- Added deterministic generated input checks, a cross-platform native fake
+  downloader queue, cancellation, history and failure scenarios, contributor examples and extracted common
+  GUI widgets into their own module.
+- Documented least-privilege/offline tool setup and the current release-metadata
+  checksum trust model. Added fail-closed yt-dlp release-signature verification
+  against the pinned key; see the security policy for scope and rotation limits.
+- See the security audit addendum for verification and limitations. Interactive
+  Windows desktop behavior is not established by Linux or hosted CI alone.
+
+
 ## 0.13.1 — Installer and window improvements
 
 ### Module window focus

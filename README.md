@@ -8,6 +8,8 @@ downloads quietly in the background with your defaults while you keep working.
 
 ![ytTrayDL icon](assets/icon.png)
 
+[Security policy and disclosure](SECURITY.md) · [Contributing and verification](CONTRIBUTING.md) · [Dependency review](docs/DEPENDENCIES.md) · [Security audit addendum](docs/AUDIT-2026-11-24.md) · [Examples](examples/README.md) · [Windows safety](docs/WINDOWS-SAFETY.md)
+
 Settings use bounded pages, never scrollbars. Related controls share a page when
 space permits; use the section selector and Previous/Next page controls to reach
 all options. Domain rules and watched channels have independent list pages.

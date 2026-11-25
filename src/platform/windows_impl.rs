@@ -6,7 +6,12 @@
 //!   thread (it blocks in WaitForSingleObject),
 //! - the Ctrl+Alt+G hotkey (`WM_HOTKEY`).
 //!
-//! All three report through the same mpsc channel the GUI drains.
+//! All three report through the same mpsc channel the GUI drains. The message
+//! thread owns its window, clipboard listener and hotkey; WM_DESTROY unregisters
+//! them. The event waiter owns and closes its handle. COM taskbar state is
+//! thread-local and balances only successful apartment initialization. Clipboard
+//! reads retry briefly, validate allocation size, require a bounded terminator,
+//! and suppress only repeated nonzero sequence numbers after a successful read.
 
 use super::{
     Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
@@ -72,8 +77,9 @@ pub struct Inner {
     _thread: Option<std::thread::JoinHandle<()>>,
 }
 
-// HANDLE is a raw pointer wrapper; the mutex is only ever closed on
-// this struct's Drop, from the owning thread's process teardown.
+// SAFETY: the mutex handle is process-owned, transferred with Inner and closed
+// only in Platform::drop. The listener and waiter use their own handles; the
+// stop flag is atomic and no borrowed pointer crosses threads.
 unsafe impl Send for Inner {}
 
 pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
@@ -83,10 +89,14 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
     // Single instance: try to create the named mutex. If it already
     // exists, signal the running instance to show itself and report
     // `already_running` so the caller exits quietly.
+    // SAFETY: the security attributes are null and wide() supplies a
+    // NUL-terminated name valid for the duration of CreateMutexW.
     let mutex = unsafe { CreateMutexW(std::ptr::null(), 1, wide(MUTEX_NAME).as_ptr()) };
+    // SAFETY: GetLastError reads this thread's last-error slot immediately.
     let last_err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     const ERROR_ALREADY_EXISTS: u32 = 183;
     if !mutex.is_null() && last_err == ERROR_ALREADY_EXISTS {
+        // SAFETY: this non-null handle came from CreateMutexW and is closed once.
         unsafe {
             CloseHandle(mutex);
         }
@@ -111,6 +121,8 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
     {
         let tx2 = tx.clone();
         let stop = event_stop.clone();
+        // SAFETY: the thread owns the event handle it creates and closes it
+        // after the wait loop; API name buffers live through each call.
         std::thread::spawn(move || unsafe {
             let ev = CreateEventW(std::ptr::null(), 0, 0, wide(SHOW_EVENT_NAME).as_ptr());
             if ev.is_null() {
@@ -140,6 +152,7 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
 
     // Clipboard listener + hotkey on a message-window thread.
     let thread_tx = tx.clone();
+    // SAFETY: the new thread owns the message loop and callback registration.
     let thread = std::thread::spawn(move || unsafe {
         message_window_thread(thread_tx);
     });
@@ -162,6 +175,8 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
 }
 
 fn signal_show_event() {
+    // SAFETY: OpenEventW receives a terminated name; a successful handle is
+    // used only for signaling and is closed before this function returns.
     unsafe {
         let ev = OpenEventW(EVENT_MODIFY_STATE, 0, wide(SHOW_EVENT_NAME).as_ptr());
         if !ev.is_null() {
@@ -200,6 +215,8 @@ fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let class = wide("ytTrayDLMessageWindow");
     loop {
+        // SAFETY: the class string is terminated and stays alive for the call;
+        // the returned HWND is checked before use.
         let hwnd = unsafe {
             FindWindowExW(
                 HWND_MESSAGE,
@@ -222,6 +239,8 @@ fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
             if remaining == 0 {
                 break;
             }
+            // SAFETY: COPYDATASTRUCT and payload remain alive for the bounded
+            // synchronous send; the output pointer refers to a local usize.
             let sent = unsafe {
                 SendMessageTimeoutW(
                     hwnd,
@@ -248,6 +267,8 @@ fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
 }
 
 fn window_executable_matches(hwnd: HWND, expected: &Path) -> bool {
+    // SAFETY: output buffers are allocated for the declared lengths, and the
+    // process handle is checked and closed once after querying its image path.
     unsafe {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
@@ -271,6 +292,9 @@ fn window_executable_matches(hwnd: HWND, expected: &Path) -> bool {
     }
 }
 
+/// # Safety
+/// Must run on the thread that owns the created window and message loop.
+/// The registered callback follows the Win32 window-procedure contract.
 unsafe fn message_window_thread(tx: Sender<PlatformEvent>) {
     let hinstance = GetModuleHandleW(std::ptr::null());
     let class_name = wide("ytTrayDLMessageWindow");
@@ -305,6 +329,8 @@ unsafe fn message_window_thread(tx: Sender<PlatformEvent>) {
     RegisterHotKey(hwnd, HOTKEY_SHOW, MOD_CONTROL | MOD_ALT, 'G' as u32);
     let _ = tx; // the window proc sends via the static SENDER
 
+    // SAFETY: MSG is a plain Win32 record; zero is valid before GetMessageW
+    // fills it, and the buffer remains live throughout the dispatch loop.
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     loop {
         let r = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
@@ -316,6 +342,10 @@ unsafe fn message_window_thread(tx: Sender<PlatformEvent>) {
     }
 }
 
+/// # Safety
+/// Called by Windows with its documented window-procedure arguments. For
+/// WM_COPYDATA Windows supplies a readable COPYDATASTRUCT and payload for the
+/// duration of the synchronous callback; bounds are checked before copying.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -383,6 +413,9 @@ unsafe extern "system" fn wnd_proc(
 /// Read CF_UNICODETEXT. The clipboard can be momentarily locked by
 /// the app that just set it, so retry briefly (5 × 15 ms) — the
 /// event-specific deduplication belongs to WM_CLIPBOARDUPDATE, never manual reads.
+/// # Safety
+/// Win32 clipboard access is paired with CloseClipboard on every successful
+/// OpenClipboard path; the returned data is copied while the clipboard is open.
 unsafe fn read_clipboard_text_with_retry() -> Option<String> {
     for _ in 0..5 {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
@@ -404,6 +437,8 @@ unsafe fn read_clipboard_text_with_retry() -> Option<String> {
 impl Drop for Platform {
     fn drop(&mut self) {
         #[cfg(windows)]
+        // SAFETY: signaling/posting uses non-owning handles; the owned mutex
+        // is closed once here. A stale window handle simply makes posting fail.
         unsafe {
             if let Some(stop) = &self.inner.event_stop {
                 stop.store(true, std::sync::atomic::Ordering::Release);
@@ -427,6 +462,8 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     } else {
         None
     };
+    // SAFETY: registry strings are NUL-terminated and buffers live through
+    // each call; a successful HKEY is closed once on all paths.
     unsafe {
         let mut hkey: HKEY = std::ptr::null_mut();
         let rc = RegCreateKeyExW(
@@ -475,6 +512,8 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
 }
 
 pub fn autostart_enabled() -> bool {
+    // SAFETY: Win32 receives live output pointers and terminated value names;
+    // a successfully opened registry handle is closed before returning.
     unsafe {
         let mut hkey: HKEY = std::ptr::null_mut();
         if RegOpenKeyExW(
@@ -532,6 +571,8 @@ fn valid_cached_window(hwnd: HWND, thread: u32, role: usize) -> bool {
     if hwnd.is_null() || thread == 0 {
         return false;
     }
+    // SAFETY: the borrowed HWND is not dereferenced by Rust; Win32 validates
+    // it, and pid and the terminated property name are live for each call.
     unsafe {
         let mut pid = 0;
         IsWindow(hwnd) != 0
@@ -542,6 +583,7 @@ fn valid_cached_window(hwnd: HWND, thread: u32, role: usize) -> bool {
 }
 
 fn find_owned_window(title: &str) -> Option<HWND> {
+    // SAFETY: this Win32 query takes no pointers or ownership.
     let thread = unsafe { GetCurrentThreadId() };
     let role = persistent_role(title);
     if role != 0 {
@@ -561,7 +603,11 @@ fn find_owned_window(title: &str) -> Option<HWND> {
         found: HWND,
         title: String,
     }
+    // SAFETY: EnumThreadWindows synchronously passes the live Search pointer
+    // provided below, and supplies an HWND for each callback invocation.
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam points to that exclusive Search for the callback; the
+        // stack text buffer is writable for the stated capacity.
         unsafe {
             let search = &mut *(lparam as *mut Search);
             let mut pid: u32 = 0;
@@ -578,6 +624,8 @@ fn find_owned_window(title: &str) -> Option<HWND> {
             1
         }
     }
+    // SAFETY: EnumThreadWindows invokes visit synchronously with a live Search;
+    // property names are terminated and cached HWNDs are revalidated on use.
     unsafe {
         let mut search = Search {
             pid: GetCurrentProcessId(),
@@ -613,6 +661,8 @@ fn find_owned_window(title: &str) -> Option<HWND> {
 
 pub fn show_main_window() -> bool {
     match find_main_window() {
+        // SAFETY: find_main_window validates the cached handle immediately
+        // before use; Win32 handles disappearing windows by returning failure.
         Some(hwnd) => unsafe {
             let hidden = IsWindowVisible(hwnd) == 0;
             if hidden {
@@ -631,7 +681,9 @@ pub fn show_main_window() -> bool {
 
 fn native_geometry(hwnd: HWND) -> Option<crate::window_geometry::WindowGeometry> {
     use windows_sys::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::GetWindowRect};
+    // SAFETY: RECT is a plain Win32 integer structure and zero is valid.
     let mut rect = unsafe { std::mem::zeroed() };
+    // SAFETY: rect is writable and hwnd is a borrowed Win32 handle.
     if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
         return None;
     }
@@ -640,6 +692,7 @@ fn native_geometry(hwnd: HWND) -> Option<crate::window_geometry::WindowGeometry>
         y: rect.top,
         width: rect.right - rect.left,
         height: rect.bottom - rect.top,
+        // SAFETY: GetDpiForWindow only inspects the borrowed HWND.
         dpi: unsafe { GetDpiForWindow(hwnd) },
     };
     value.valid().then_some(value)
@@ -649,9 +702,12 @@ fn work_area(hwnd: HWND) -> Option<[i32; 4]> {
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
+    // SAFETY: MonitorFromWindow only inspects the borrowed HWND.
     let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    // SAFETY: MONITORINFO is an integer record; cbSize is initialized below.
     let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    // SAFETY: non-null monitor is a borrowed OS handle and info has cbSize set.
     if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
         return None;
     }
@@ -673,6 +729,8 @@ fn set_normal_geometry(
     };
     let flags =
         SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | if resize { 0 } else { SWP_NOSIZE };
+    // SAFETY: only a borrowed HWND and integer geometry are passed; null
+    // insert-after is ignored with SWP_NOZORDER.
     unsafe {
         SetWindowPos(
             hwnd,
@@ -691,6 +749,7 @@ pub fn window_geometry(
 ) -> Option<crate::window_geometry::WindowGeometry> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, IsZoomed};
     let hwnd = find_owned_window(kind.title())?;
+    // SAFETY: these Win32 queries inspect a borrowed HWND without pointers.
     if unsafe { IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 } {
         return None;
     }
@@ -705,7 +764,9 @@ pub fn window_client_capacity(
     let hwnd = find_owned_window(kind.title())?;
     let outer = native_geometry(hwnd)?;
     let work = work_area(hwnd)?;
+    // SAFETY: RECT is a plain integer record and zero is valid.
     let mut client: windows_sys::Win32::Foundation::RECT = unsafe { std::mem::zeroed() };
+    // SAFETY: client is a live writable RECT and hwnd is borrowed.
     if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
         return None;
     }
@@ -796,6 +857,8 @@ pub fn constrain_transient_window(window: crate::window_geometry::TransientWindo
 /// toggle can never diverge from what the user sees.
 pub fn toggle_main_window() -> Option<bool> {
     let hwnd = find_main_window()?;
+    // SAFETY: the validated borrowed handle is only passed to Win32 APIs;
+    // a window destroyed between calls is handled by the APIs.
     unsafe {
         if IsWindowVisible(hwnd) != 0 {
             ShowWindow(hwnd, SW_HIDE);
@@ -817,6 +880,8 @@ pub fn open_url(url: &str) -> Result<(), String> {
 }
 
 fn shell_execute(target: &str) -> Result<(), String> {
+    // SAFETY: the operation and target strings are terminated and remain
+    // live for the synchronous call; optional arguments are null.
     unsafe {
         let rc = ShellExecuteW(
             std::ptr::null_mut(),
@@ -836,6 +901,8 @@ fn shell_execute(target: &str) -> Result<(), String> {
 }
 
 pub fn fatal_error_box(title: &str, message: &str) {
+    // SAFETY: both temporary UTF-16 buffers are terminated and live until
+    // MessageBoxW returns; the optional owner is null.
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),
@@ -847,6 +914,8 @@ pub fn fatal_error_box(title: &str, message: &str) {
 }
 
 pub fn cursor_position() -> Option<(f32, f32)> {
+    // SAFETY: POINT is an integer record and GetCursorPos receives a live
+    // writable pointer; fields are read only on success.
     unsafe {
         let mut p: windows_sys::Win32::Foundation::POINT = std::mem::zeroed();
         if GetCursorPos(&mut p) != 0 {
@@ -861,6 +930,7 @@ pub fn cursor_position() -> Option<(f32, f32)> {
 /// in the tray menu, where the current content matters rather than
 /// a change event).
 pub fn current_clipboard_text() -> Option<String> {
+    // SAFETY: the helper opens, copies and closes the clipboard on this thread.
     unsafe { read_clipboard_text_with_retry() }
 }
 
@@ -871,6 +941,7 @@ fn wide(s: &str) -> Vec<u16> {
 #[allow(dead_code)]
 fn close_listener() {
     if let Some(&hwnd) = LISTENER_HWND.get() {
+        // SAFETY: the HWND is non-owning; posting to a stale handle fails.
         unsafe {
             PostMessageW(hwnd as HWND, 0x0012 /* WM_QUIT */, 0, 0);
         }
@@ -893,6 +964,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK;
 /// General → Notifications → "Play a sound when a download
 /// finishes").
 pub fn play_notification_sound() {
+    // SAFETY: MessageBeep takes only a documented constant and no pointers.
     unsafe {
         let _ = MessageBeep(MB_ICONASTERISK);
     }
@@ -912,6 +984,8 @@ pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
     }
     let w = wide(&s);
     let mut free: u64 = 0;
+    // SAFETY: the path is NUL-terminated and free is a live output buffer;
+    // optional outputs are explicitly null.
     let ok = unsafe {
         GetDiskFreeSpaceExW(
             w.as_ptr(),
@@ -925,6 +999,7 @@ pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
 
 /// Suspend the machine (not hibernate, no forced close).
 pub fn suspend_system() -> bool {
+    // SAFETY: the API takes only boolean flags and borrows no memory.
     unsafe { SetSuspendState(0, 0, 0) != 0 }
 }
 
@@ -944,6 +1019,8 @@ struct TaskbarObject {
 
 impl Drop for TaskbarObject {
     fn drop(&mut self) {
+        // SAFETY: the thread-local object is released on its creating thread;
+        // CoUninitialize balances only a successful CoInitializeEx call.
         unsafe {
             if !self.pointer.is_null() {
                 type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
@@ -971,6 +1048,8 @@ fn taskbar_list3() -> Option<*mut std::ffi::c_void> {
     if cached.is_some() {
         return cached;
     }
+    // SAFETY: COM is initialized on this thread before creating the requested
+    // interface; a thread-local owner releases it and balances initialization.
     unsafe {
         // Best-effort COM init for this thread; eframe/winit may
         // already have initialized an apartment (an RPC_E_CHANGED_MODE
@@ -1003,6 +1082,10 @@ fn taskbar_list3() -> Option<*mut std::ffi::c_void> {
 }
 
 /// Read vtbl slot `slot` of a COM object as a function pointer.
+///
+/// # Safety
+/// `obj` must be a live ITaskbarList3 on its owning apartment thread; `slot`
+/// and `T` must match the documented interface ABI and function-pointer size.
 unsafe fn vtbl_fn<T: Copy>(obj: *mut std::ffi::c_void, slot: usize) -> T {
     let vtbl = *(obj as *const *const usize);
     std::mem::transmute_copy(&*vtbl.add(slot))
@@ -1017,6 +1100,8 @@ pub fn set_taskbar_progress(frac: Option<f64>) {
     let Some(obj) = taskbar_list3() else {
         return;
     };
+    // SAFETY: taskbar_list3 returns a live thread-local ITaskbarList3 and the
+    // function signatures and slots match the Windows ITaskbarList3 ABI.
     unsafe {
         if !TASKBAR_INITED.with(|c| c.get()) {
             type HrInitFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> i32;
@@ -1043,6 +1128,10 @@ pub fn set_taskbar_progress(frac: Option<f64>) {
 
 // The allocation remains locked throughout the bounded copy. No clipboard state
 // is modified, allowing this acquisition path to be tested with owned memory.
+/// # Safety
+/// `data` must be a valid CF_UNICODETEXT handle borrowed from an open clipboard.
+/// GlobalLock keeps its storage stable until GlobalUnlock; the allocation size
+/// is bounded before forming a slice and decoding requires a terminator.
 unsafe fn decode_global_text(data: windows_sys::Win32::Foundation::HGLOBAL) -> Option<String> {
     let units = super::clipboard_allocation_units(GlobalSize(data))?;
     let ptr = GlobalLock(data) as *const u16;
@@ -1058,6 +1147,8 @@ unsafe fn decode_global_text(data: windows_sys::Win32::Foundation::HGLOBAL) -> O
 /// Owns a kill-on-close job. The root is spawned suspended and resumed only
 /// after successful assignment; no child code can escape before containment.
 pub(crate) struct ProcessTree(HANDLE);
+// SAFETY: the job handle is owned by this value, not thread-affine, and is
+// closed once by Drop after ownership is transferred between threads.
 unsafe impl Send for ProcessTree {}
 impl ProcessTree {
     pub(crate) fn spawn(
@@ -1067,6 +1158,9 @@ impl ProcessTree {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::JobObjects::*;
         use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        // SAFETY: the job handle is owned by ProcessTree, the limits buffer has
+        // the correct Win32 layout/size, and the child remains suspended until
+        // assignment succeeds. Failure kills and waits for the child.
         unsafe {
             let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if handle.is_null() {
@@ -1102,6 +1196,7 @@ impl ProcessTree {
     }
     pub(crate) fn terminate(&self) -> std::io::Result<()> {
         use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: self owns a live job handle for the duration of this call.
         if unsafe { TerminateJobObject(self.0, 1) } == 0 {
             Err(std::io::Error::last_os_error())
         } else {
@@ -1111,8 +1206,11 @@ impl ProcessTree {
             };
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
+                // SAFETY: the Win32 accounting record contains integer fields.
                 let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
                     unsafe { std::mem::zeroed() };
+                // SAFETY: self owns the job and accounting is a writable
+                // buffer of exactly the specified structure size.
                 if unsafe {
                     QueryInformationJobObject(
                         self.0,
@@ -1141,12 +1239,18 @@ impl ProcessTree {
 }
 impl Drop for ProcessTree {
     fn drop(&mut self) {
+        // SAFETY: this value exclusively owns the non-null job handle, which
+        // is closed once here and kills any remaining contained processes.
         unsafe {
             CloseHandle(self.0);
         }
     }
 }
 
+/// # Safety
+/// `pid` must identify the suspended child just created by this process and
+/// already assigned to its owned job; callers kill it on any failure. The
+/// snapshot and any opened thread handle are closed on every return path.
 unsafe fn resume_suspended_root(pid: u32) -> std::io::Result<()> {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
@@ -1198,6 +1302,8 @@ pub(crate) fn read_owned_pipe<R: std::io::Read + std::os::windows::io::AsRawHand
             return Ok(0);
         }
         let mut available = 0;
+        // SAFETY: pipe owns a live anonymous read handle and available is a
+        // writable local; all optional buffers are null with zero length.
         if unsafe {
             PeekNamedPipe(
                 pipe.as_raw_handle(),
@@ -1233,6 +1339,7 @@ mod geometry_cache_tests {
         DestroyWindow, UnregisterClassW, WM_CLOSE, WM_GETTEXT,
     };
     static SLOW_TEXT_CALLS: AtomicU32 = AtomicU32::new(0);
+    // SAFETY: Windows calls this procedure with its documented HWND/message ABI.
     unsafe extern "system" fn slow_window(
         hwnd: HWND,
         message: u32,
@@ -1249,6 +1356,8 @@ mod geometry_cache_tests {
         }
         DefWindowProcW(hwnd, message, w, l)
     }
+    // SAFETY: callers provide a terminated class name and valid Win32 window
+    // procedure; returned windows are destroyed before unregistering the class.
     unsafe fn create(
         class: &[u16],
         title: &str,
@@ -1281,6 +1390,8 @@ mod geometry_cache_tests {
     fn geometry_cache_excludes_other_thread_text_and_invalidates_destroyed_windows() {
         let (tx, rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
+        // SAFETY: the thread owns its test window, class and message pump;
+        // all names and output records remain live for their Win32 calls.
         let foreign = std::thread::spawn(move || unsafe {
             let class = wide(&format!("ytTrayDL-slow-field-{}", GetCurrentThreadId()));
             let window = create(&class, "Owned other-thread sentinel", slow_window);
@@ -1297,6 +1408,8 @@ mod geometry_cache_tests {
         assert!(!other.is_null());
         let mut text = [0u16; 64];
         let control = Instant::now();
+        // SAFETY: the foreign test window is alive and text is a writable
+        // buffer with the passed length; the window is closed only afterward.
         unsafe {
             GetWindowTextW(other, text.as_mut_ptr(), text.len() as i32);
         }
@@ -1306,6 +1419,8 @@ mod geometry_cache_tests {
         let missing = find_owned_window("Absent owned field window");
         let lookup_duration = lookup.elapsed();
         let crossed = SLOW_TEXT_CALLS.load(Ordering::Relaxed);
+        // SAFETY: other is the borrowed live test HWND; failure does not
+        // transfer ownership or invalidate Rust memory.
         unsafe {
             PostMessageW(other, WM_CLOSE, 0, 0);
         }
@@ -1321,6 +1436,9 @@ mod geometry_cache_tests {
             lookup_duration < Duration::from_millis(100),
             "geometry lookup entered the armed 150ms stall"
         );
+        // SAFETY: this thread owns both test windows and class; each window is
+        // destroyed before unregistering, and cached stale handles are queried
+        // only through Win32 validation functions.
         unsafe {
             let class = wide(&format!("ytTrayDL-cache-field-{}", GetCurrentThreadId()));
             let first = create(&class, "ytTrayDL", DefWindowProcW);
@@ -1342,6 +1460,9 @@ mod owned_clipboard_tests {
     #[test]
     fn native_owned_allocation_is_bounded() {
         use windows_sys::Win32::System::Memory::*;
+        // SAFETY: this test owns the GlobalAlloc allocation, locks it while
+        // accessing the measured extent, unlocks before decoding, and frees it
+        // exactly once after both checks.
         unsafe {
             let data = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 4);
             assert!(!data.is_null());

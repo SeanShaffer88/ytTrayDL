@@ -3,7 +3,8 @@
 ## Unreleased — security and maintenance work in progress
 
 - Added a private disclosure policy and dependency advisory tracking, plus
-  dependency audit/policy and scheduled fuzz-smoke workflows.
+  dependency audit/policy and scheduled URL, clipboard and release-signature
+  fuzz-smoke workflows.
 - Added deterministic generated input checks, a cross-platform native fake
   downloader queue/failure scenario, contributor examples and extracted common
   GUI widgets into their own module.

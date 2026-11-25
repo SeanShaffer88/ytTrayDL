@@ -198,4 +198,19 @@ mod tests {
         assert!(verify(SUMS, &bad_sig, "yt-dlp.exe").is_err());
         assert!(verify_with_key(SUMS, SIG, "yt-dlp.exe", &[1; 512], EXPONENT).is_err());
     }
+    #[test]
+    fn bounded_packet_parser_rejects_truncation_and_unrecognized_subpackets() {
+        for end in 0..SIG.len() {
+            assert!(
+                verify(SUMS, &SIG[..end], "yt-dlp.exe").is_err(),
+                "truncation at {end}"
+            );
+        }
+        assert!(signature_packet(&[0x89, 0xff, 0xff]).is_none());
+        assert!(signature_packet(&[0xc2, 224]).is_none());
+        assert!(!supported_hashed_subpackets(&[2, 3, 0]));
+        assert!(!supported_hashed_subpackets(&[2, 0x83, 0]));
+        assert!(!supported_hashed_subpackets(&[255, 255, 255, 255, 255]));
+        assert!(!supported_hashed_subpackets(&[5, 2, 0]));
+    }
 }

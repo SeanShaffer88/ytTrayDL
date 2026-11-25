@@ -15,7 +15,8 @@ cargo audit
 cargo deny check
 ```
 
-Install the Windows target and cargo-audit/cargo-deny separately. Normal tests
+Run the Windows-target commands with the MSVC toolchain on Windows (the
+signature verifier builds native code). Install cargo-audit/cargo-deny separately. Normal tests
 must not contact external services; the dedicated hosted installer/media field
 jobs have explicit network access and are not normal unit tests. Keep `Cargo.lock`
 committed. For each PR describe user-visible behavior, tests, security impact,

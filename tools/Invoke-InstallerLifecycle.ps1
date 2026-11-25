@@ -191,7 +191,15 @@ try {
         Assert ((Get-ItemProperty $key).DisplayVersion -eq $candidateVersion) 'reinstall after uninstall restores registration'
         Check-Data $hashes
         Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'reinstall after uninstall preserved user media'
-        Run-Installer (Join-Path $install 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + (Join-Path $EvidenceRoot 'reinstall-uninstall.log'))) 'reinstall-uninstall'
+        # Inno may retain the first uninstaller briefly while its self-delete
+        # finishes and register unins001.exe on reinstall. Resolve the new owned
+        # uninstaller from the candidate registration, not a fixed filename.
+        $uninstallString = (Get-ItemProperty -LiteralPath $key).UninstallString
+        Assert ($uninstallString -match '^"(?<path>[^"\r\n]+)"(?:\s.*)?$') 'reinstall registration has quoted uninstall executable'
+        $registeredUninstaller = [IO.Path]::GetFullPath($Matches.path)
+        Assert ((Split-Path -Parent $registeredUninstaller).TrimEnd('\') -eq $install.TrimEnd('\')) 'reinstall uninstaller stays inside app directory'
+        Assert ((Split-Path -Leaf $registeredUninstaller) -match '^unins[0-9]{3}\.exe$' -and (Test-Path -LiteralPath $registeredUninstaller -PathType Leaf)) 'reinstall registered uninstaller exists'
+        Run-Installer $registeredUninstaller @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + (Join-Path $EvidenceRoot 'reinstall-uninstall.log'))) 'reinstall-uninstall'
         Assert (!(Test-Path $exe) -and !(Test-Path $key)) 'second uninstall removes candidate and registration'
         Check-Data $hashes
         Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'second uninstall preserves user media'

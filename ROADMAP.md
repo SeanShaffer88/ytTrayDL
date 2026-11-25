@@ -21,10 +21,9 @@ app version, environment, steps and outcomes when evidence becomes available.
 
 ## Milestone 2 — playback and trimming polish
 
-- [ ] Implement and verify safe stream-copy trimming where compatible, with
-  explicit keyframe limitations, actual method reporting and safe fallback.
-  Preserve profile, transforms and explicit encoder choices. Until implemented,
-  trims continue to re-encode.
+- [ ] Verify the new stream-copy trim path on hosted and interactive Windows,
+  including keyframe limitations, method reporting and safe fallback. Profile,
+  transforms and explicit hardware encoder choices must remain preserved.
 - [x] Provide a direct ffplay download link and explain discovery and refusal.
 - [x] Evaluate network URL playback: defer it. The current player is local-only;
   network playback would require an explicit opt-in, URL and redirect policy,

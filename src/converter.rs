@@ -111,7 +111,7 @@ impl EncodingQuality {
     }
 }
 
-/// Optional accurate re-encoding trim, in milliseconds. The end is exclusive
+/// Trim range in milliseconds. Re-encoding is accurate; stream-copy is keyframe-limited. The end is exclusive
 /// and must follow the start. An absent end keeps the rest of the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TrimRange {
@@ -441,7 +441,7 @@ pub struct ConversionOptions {
     pub audio_bitrate: AudioBitrate,
 }
 
-/// Conservative preflight for a future lossless trim attempt. `probe_json` is
+/// Conservative preflight for a lossless trim attempt. `probe_json` is
 /// bounded ffprobe JSON containing stream codec_name and codec_type fields.
 /// Unknown or missing data fails closed to re-encoding. This decision alone
 /// does not start a process or promise that a particular muxer will succeed.
@@ -858,6 +858,42 @@ impl ProgressParser {
     }
 }
 
+fn run_one_with_progress(
+    spec: &ProcessSpec,
+    token: &CancellationToken,
+    index: usize,
+    total: usize,
+    progress: &mut impl FnMut(BatchProgress),
+) -> Result<process::ProcessOutput, process::ProcessError> {
+    let mut parser = ProgressParser::default();
+    let mut last_report = None;
+    let limits = ProcessLimits {
+        timeout: std::time::Duration::from_secs(6 * 60 * 60),
+        stdout_bytes: 8192,
+        stderr_bytes: 64 * 1024,
+        line_bytes: 4096,
+    };
+    process::OwnedProcess::spawn(spec).and_then(|owner| {
+        owner.stream(limits, token, |stream, chunk| {
+            if stream == OutputStream::Stdout {
+                parser.push(chunk, |microseconds| {
+                    let now = std::time::Instant::now();
+                    if last_report.is_none_or(|last: std::time::Instant| {
+                        now.duration_since(last) >= std::time::Duration::from_millis(250)
+                    }) {
+                        last_report = Some(now);
+                        progress(BatchProgress::EncodedTime {
+                            index,
+                            total,
+                            microseconds,
+                        });
+                    }
+                });
+            }
+        })
+    })
+}
+
 /// Execute a batch sequentially; stop on the first failure or cancellation.
 /// Completed outputs are kept. Reports starts and throttled ffmpeg progress.
 pub fn run_batch_with_progress(
@@ -878,36 +914,318 @@ pub fn run_batch_with_progress(
         if token.is_cancelled() {
             return Err(format!("cancelled before file {index} of {total}"));
         }
-        let mut parser = ProgressParser::default();
-        let mut last_report = None;
-        let limits = ProcessLimits {
-            timeout: std::time::Duration::from_secs(6 * 60 * 60),
-            stdout_bytes: 8192,
-            stderr_bytes: 64 * 1024,
-            line_bytes: 4096,
-        };
-        let run = process::OwnedProcess::spawn(spec).and_then(|owner| {
-            owner.stream(limits, token, |stream, chunk| {
-                if stream == OutputStream::Stdout {
-                    parser.push(chunk, |microseconds| {
-                        let now = std::time::Instant::now();
-                        if last_report.is_none_or(|last: std::time::Instant| {
-                            now.duration_since(last) >= std::time::Duration::from_millis(250)
-                        }) {
-                            last_report = Some(now);
-                            progress(BatchProgress::EncodedTime {
-                                index,
-                                total,
-                                microseconds,
-                            });
-                        }
-                    });
-                }
-            })
-        });
-        run.map_err(|error| format!("file {index} of {total}: {error}"))?;
+        run_one_with_progress(spec, token, index, total, &mut progress)
+            .map_err(|error| format!("file {index} of {total}: {error}"))?;
     }
     Ok(())
+}
+
+/// A validated conversion paired with the information needed for optional trim copy.
+#[derive(Debug, Clone)]
+pub struct PreparedConversion {
+    spec: ProcessSpec,
+    input: PathBuf,
+    output: PathBuf,
+    profile: VideoProfile,
+    options: ConversionOptions,
+}
+
+/// Validate a single conversion without creating or changing the output.
+pub fn prepare_conversion(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    profile: VideoProfile,
+    options: ConversionOptions,
+) -> Result<PreparedConversion, String> {
+    let spec = build_conversion_with_options(ffmpeg, input, output, profile, options)?;
+    let input = input
+        .canonicalize()
+        .map_err(|e| format!("Cannot open input: {e}"))?;
+    let output = PathBuf::from(spec.args.last().ok_or("Missing output")?);
+    Ok(PreparedConversion {
+        spec,
+        input,
+        output,
+        profile,
+        options,
+    })
+}
+
+/// Validate all batch outputs before any process starts.
+pub fn prepare_batch(
+    ffmpeg: &Path,
+    inputs: &[PathBuf],
+    output_dir: &Path,
+    profile: VideoProfile,
+    options: ConversionOptions,
+) -> Result<Vec<PreparedConversion>, String> {
+    let specs = build_batch_with_options(ffmpeg, inputs, output_dir, profile, options)?;
+    inputs
+        .iter()
+        .zip(specs)
+        .map(|(input, spec)| {
+            let input = input
+                .canonicalize()
+                .map_err(|e| format!("Cannot open input: {e}"))?;
+            let output = PathBuf::from(spec.args.last().ok_or("Missing output")?);
+            Ok(PreparedConversion {
+                spec,
+                input,
+                output,
+                profile,
+                options,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionMethod {
+    StreamCopy,
+    Reencode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptimizedProgress {
+    Started {
+        index: usize,
+        total: usize,
+    },
+    Method {
+        index: usize,
+        total: usize,
+        method: ConversionMethod,
+        fallback: bool,
+    },
+    MediaTime {
+        index: usize,
+        total: usize,
+        microseconds: u64,
+    },
+}
+
+fn inspect_streams(ffprobe: &Path, input: &Path, token: &CancellationToken) -> Option<Vec<u8>> {
+    let spec = ProcessSpec::new(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-show_entries",
+            "stream=codec_name,codec_type",
+            "-of",
+            "json",
+            "-i",
+        ])
+        .arg(input);
+    process::run_capture(
+        &spec,
+        ProcessLimits {
+            timeout: std::time::Duration::from_secs(15),
+            stdout_bytes: 64 * 1024,
+            stderr_bytes: 8192,
+            line_bytes: 8192,
+        },
+        token,
+    )
+    .ok()
+    .map(|result| result.stdout)
+}
+
+fn copy_spec(job: &PreparedConversion, temp_output: &Path) -> ProcessSpec {
+    let trim = job.options.trim;
+    let mut spec = ProcessSpec::new(&job.spec.program).args([
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-n",
+        "-protocol_whitelist",
+        "file,pipe",
+    ]);
+    if trim.start_ms > 0 {
+        spec = spec.arg("-ss").arg(seconds_arg(trim.start_ms));
+    }
+    spec = spec.arg("-i").arg(&job.input);
+    if let Some(end_ms) = trim.end_ms {
+        spec = spec.arg("-t").arg(seconds_arg(end_ms - trim.start_ms));
+    }
+    if job.profile.is_audio_only() {
+        spec = spec.args(["-map", "0:a:0", "-vn"]);
+    } else {
+        spec = spec.args(["-map", "0:v:0"]);
+        if job.options.mute_audio {
+            spec = spec.arg("-an");
+        } else {
+            spec = spec.args(["-map", "0:a:0?"]);
+        }
+    }
+    spec = spec.args(["-c", "copy"]);
+    if job.profile == VideoProfile::Mp4Hevc {
+        spec = spec.args(["-tag:v", "hvc1"]);
+    }
+    spec.arg(temp_output)
+}
+
+fn reserve_copy_directory(output: &Path) -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let parent = output.parent().ok_or("Output has no parent")?;
+    for _ in 0..100 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = parent.join(format!(".yttraydl-trim-{}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Cannot reserve copy workspace: {e}")),
+        }
+    }
+    Err("Cannot reserve a unique copy workspace".into())
+}
+
+fn cleanup_copy_directory(dir: &Path, temp_output: &Path) -> Result<(), String> {
+    match std::fs::remove_file(temp_output) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(format!(
+                "Cannot remove temporary copy {}: {e}",
+                temp_output.display()
+            ))
+        }
+    }
+    std::fs::remove_dir(dir)
+        .map_err(|e| format!("Cannot remove temporary directory {}: {e}", dir.display()))
+}
+
+/// Execute validated jobs, conservatively attempting stream-copy for compatible
+/// trims. Copy output is isolated, then published with a non-overwriting hard
+/// link. Only ffmpeg's nonzero copy exit triggers re-encoding. Cancellation,
+/// I/O, timeout and publication failures never trigger a fallback.
+pub fn run_prepared_batch(
+    jobs: &[PreparedConversion],
+    ffprobe: Option<&Path>,
+    token: &CancellationToken,
+    mut progress: impl FnMut(OptimizedProgress),
+) -> Result<Vec<ConversionMethod>, String> {
+    if jobs.is_empty() {
+        return Err("No conversions to run".into());
+    }
+    let total = jobs.len();
+    let mut methods = Vec::with_capacity(total);
+    for (position, job) in jobs.iter().enumerate() {
+        let index = position + 1;
+        let fail = |error: String| format!("file {index} of {total}: {error}");
+        if token.is_cancelled() {
+            return Err(fail("cancelled".into()));
+        }
+        progress(OptimizedProgress::Started { index, total });
+        let compatible = if job.options.trim != TrimRange::default() {
+            ffprobe
+                .and_then(|probe| inspect_streams(probe, &job.input, token))
+                .is_some_and(|data| stream_copy_compatible(job.profile, job.options, &data))
+        } else {
+            false
+        };
+        if token.is_cancelled() {
+            return Err(fail("cancelled".into()));
+        }
+        let mut fallback = false;
+        if compatible {
+            progress(OptimizedProgress::Method {
+                index,
+                total,
+                method: ConversionMethod::StreamCopy,
+                fallback: false,
+            });
+            if token.is_cancelled() {
+                return Err(fail("cancelled".into()));
+            }
+            let dir = reserve_copy_directory(&job.output).map_err(fail)?;
+            let temp = dir.join(format!("copy.{}", job.profile.extension()));
+            let spec = copy_spec(job, &temp);
+            let mut relay = |event| {
+                if let BatchProgress::EncodedTime {
+                    index,
+                    total,
+                    microseconds,
+                } = event
+                {
+                    progress(OptimizedProgress::MediaTime {
+                        index,
+                        total,
+                        microseconds,
+                    });
+                }
+            };
+            let run = run_one_with_progress(&spec, token, index, total, &mut relay);
+            match run {
+                Ok(_) if !token.is_cancelled() => {
+                    let valid = std::fs::symlink_metadata(&temp)
+                        .is_ok_and(|meta| meta.file_type().is_file() && meta.len() > 0);
+                    let publication = if valid {
+                        std::fs::hard_link(&temp, &job.output).map_err(|e| {
+                            format!("Cannot publish copy without overwriting output: {e}")
+                        })
+                    } else {
+                        Err("Copy produced no regular, nonempty output".into())
+                    };
+                    let cleanup = cleanup_copy_directory(&dir, &temp);
+                    if let Err(error) = publication {
+                        cleanup.map_err(fail)?;
+                        return Err(fail(error));
+                    }
+                    cleanup.map_err(|e| fail(format!("Output was created, but {e}")))?;
+                    methods.push(ConversionMethod::StreamCopy);
+                    continue;
+                }
+                Ok(_) => {
+                    cleanup_copy_directory(&dir, &temp).map_err(fail)?;
+                    return Err(fail("cancelled".into()));
+                }
+                Err(error) => {
+                    cleanup_copy_directory(&dir, &temp).map_err(fail)?;
+                    if matches!(error, process::ProcessError::Exit { .. }) && !token.is_cancelled()
+                    {
+                        fallback = true;
+                    } else {
+                        return Err(fail(error.to_string()));
+                    }
+                }
+            }
+        }
+        progress(OptimizedProgress::Method {
+            index,
+            total,
+            method: ConversionMethod::Reencode,
+            fallback,
+        });
+        if token.is_cancelled() {
+            return Err(fail("cancelled".into()));
+        }
+        let mut relay = |event| {
+            if let BatchProgress::EncodedTime {
+                index,
+                total,
+                microseconds,
+            } = event
+            {
+                progress(OptimizedProgress::MediaTime {
+                    index,
+                    total,
+                    microseconds,
+                });
+            }
+        };
+        run_one_with_progress(&job.spec, token, index, total, &mut relay)
+            .map_err(|e| fail(e.to_string()))?;
+        methods.push(ConversionMethod::Reencode);
+    }
+    Ok(methods)
 }
 
 /// Compatibility wrapper for callers interested only in batch item starts.

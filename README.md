@@ -62,8 +62,17 @@ files and an existing output folder; files are converted sequentially to
 outputs and colliding names. A batch stops on the first error or cancellation;
 completed outputs are kept and a partial output may remain. Closing the
 window leaves conversion running. An optional start/end trim in seconds can be
-applied to a single file or every item in a batch. Trimming re-encodes the media
-rather than doing lossless stream-copy cutting. Optional numeric cropping is
+applied to a single file or every item in a batch. For compatible codecs and
+encoder-default settings, ffprobe is used to attempt lossless stream-copy;
+otherwise the selected profile is re-encoded. Stream-copy cuts can start at an
+earlier keyframe and are not frame-accurate; timestamps and duration can differ
+from the requested range. Set a quality, transform, bitrate or hardware encoder
+to require re-encoding. If ffprobe is missing or cannot determine compatibility,
+the app re-encodes. A failed copy attempt falls back to re-encoding only after
+its isolated partial file is cleaned up. Copy output is published without
+overwriting via a hard link, which requires filesystem support; publication failure
+stops the batch. Interruptions may leave a temporary `.yttraydl-trim-*` directory.
+Status and the completion summary identify the methods used. Optional numeric cropping is
 applied before a fit-within resize preset (480p through 4K); resizing preserves
 aspect ratio and does not upscale. Rotation (90°, 180° or 270°) is applied
 after cropping and before resizing. Audio can be removed from video outputs.

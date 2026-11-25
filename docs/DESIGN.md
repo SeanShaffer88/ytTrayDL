@@ -706,6 +706,13 @@ Playback remains local-only. Network URL playback is deferred pending an
 explicit opt-in and a reviewed URL/redirect, protocol, privacy and timeout
 policy; this decision adds no network request. The player exposes the official
 FFmpeg download page and explains explicit-path precedence if ffplay is missing.
-Trimming currently re-encodes; stream-copy with keyframe limitations, preserving
-selected options and safely handling partial output remains planned, not shipped.
+Compatible trims may use stream-copy after bounded local ffprobe inspection;
+unknown codecs or options requiring encoding use the existing re-encoder. Copy
+cuts can begin at earlier keyframes and need not be frame-accurate. Explicit
+hardware encoder choices always use that encoder and never fall back to software.
+A copy attempt writes in a freshly created sibling directory and publishes with a
+non-overwriting hard link. Only a nonzero ffmpeg copy exit, after cleanup, permits
+fallback; cancellation, timeouts, I/O and publication failures stop the batch.
+Filesystems without hard links cannot publish a copy; interruptions can leave a
+temporary directory. Progress reports the current method and final counts.
 See [ROADMAP.md](../ROADMAP.md) for validation status.

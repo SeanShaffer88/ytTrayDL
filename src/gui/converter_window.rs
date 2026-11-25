@@ -1,14 +1,14 @@
 //! Independent local video-converter viewport.
 use super::*;
 use yttraydl::converter::{
-    self, AudioBitrate, BatchEdit, BatchProgress, EncodingQuality, ResizePreset, Rotation,
-    VideoEncoder, VideoProfile,
+    self, AudioBitrate, BatchEdit, ConversionMethod, EncodingQuality, OptimizedProgress,
+    ResizePreset, Rotation, VideoEncoder, VideoProfile,
 };
 use yttraydl::process;
 
 enum ConverterMessage {
     Progress(String),
-    Finished(Result<(), String>),
+    Finished(Result<Vec<ConversionMethod>, String>),
 }
 
 #[derive(Default)]
@@ -45,7 +45,16 @@ impl App {
                     Ok(ConverterMessage::Progress(message)) => state.status = message,
                     Ok(ConverterMessage::Finished(result)) => {
                         state.status = match result {
-                            Ok(()) => "Conversion complete.".into(),
+                            Ok(methods) => {
+                                let copies = methods
+                                    .iter()
+                                    .filter(|method| **method == ConversionMethod::StreamCopy)
+                                    .count();
+                                format!(
+                                    "Conversion complete: {copies} stream-copied, {} re-encoded.",
+                                    methods.len() - copies
+                                )
+                            }
                             Err(error) => {
                                 format!("Conversion stopped: {error}. A partial output may remain.")
                             }
@@ -176,7 +185,7 @@ impl App {
                             ui.label("End");
                             ui.add(egui::TextEdit::singleline(&mut state.trim_end).desired_width(80.0).hint_text("end"));
                         });
-                        ui.label("Up to 3 decimals. Empty end keeps the rest; output is re-encoded.");
+                        ui.label("Up to 3 decimals. Empty end keeps the rest. Compatible trims may stream-copy: cuts can start at an earlier keyframe and may not be exact. Other settings re-encode.");
                         ui.add_enabled_ui(!state.profile.is_audio_only(), |ui| {
                         ui.label("Optional crop (pixels before resize; applies to every file)");
                         ui.horizontal_wrapped(|ui| {
@@ -353,13 +362,12 @@ impl App {
                             "ffmpeg not found. Configure or install it in Settings".to_string()
                         })
                         .and_then(|bin| {
-                            probe_context =
-                                Some((yttraydl::tags::locate_ffprobe(&bin), options.trim));
+                            probe_context = Some((yttraydl::tags::locate_ffprobe(&bin), options));
                             if start_batch {
                                 if batch_folder.trim().is_empty() {
                                     return Err("Choose a batch output folder".into());
                                 }
-                                converter::build_batch_with_options(
+                                converter::prepare_batch(
                                     &bin,
                                     &batch_inputs,
                                     std::path::Path::new(&batch_folder),
@@ -367,7 +375,7 @@ impl App {
                                     options,
                                 )
                             } else {
-                                converter::build_conversion_with_options(
+                                converter::prepare_conversion(
                                     &bin,
                                     std::path::Path::new(&input),
                                     std::path::Path::new(&output),
@@ -379,13 +387,15 @@ impl App {
                         })
                 });
                 let result = specs.and_then(|specs| {
-                    let (probe, trim) =
+                    let (probe, options) =
                         probe_context.expect("validated conversion has probe context");
+                    let trim = options.trim;
                     let mut duration = None;
                     let mut started = std::time::Instant::now();
-                    converter::run_batch_with_progress(&specs, &token, |event| {
+                    let mut current_method = "working";
+                    converter::run_prepared_batch(&specs, probe.as_deref(), &token, |event| {
                         let message = match event {
-                            BatchProgress::Started { index, total } => {
+                            OptimizedProgress::Started { index, total } => {
                                 let message = format!("Preparing file {index} of {total}…");
                                 let _ = tx.send(ConverterMessage::Progress(message));
                                 wake.request_repaint();
@@ -403,14 +413,33 @@ impl App {
                                 started = std::time::Instant::now();
                                 format!("Converting file {index} of {total}…")
                             }
-                            BatchProgress::EncodedTime {
+                            OptimizedProgress::Method {
+                                index,
+                                total,
+                                method,
+                                fallback,
+                            } => {
+                                current_method = match method {
+                                    ConversionMethod::StreamCopy => "stream-copy",
+                                    ConversionMethod::Reencode => "re-encode",
+                                };
+                                started = std::time::Instant::now();
+                                if fallback {
+                                    format!(
+                                        "File {index} of {total}: stream-copy failed; re-encoding…"
+                                    )
+                                } else {
+                                    format!("File {index} of {total}: {current_method}…")
+                                }
+                            }
+                            OptimizedProgress::MediaTime {
                                 index,
                                 total,
                                 microseconds,
                             } => {
                                 let seconds = microseconds / 1_000_000;
                                 let mut text = format!(
-                                    "File {index} of {total} · encoded {:02}:{:02}:{:02}",
+                                    "File {index} of {total} · {current_method} {:02}:{:02}:{:02}",
                                     seconds / 3600,
                                     (seconds / 60) % 60,
                                     seconds % 60

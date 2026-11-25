@@ -6,6 +6,25 @@ use std::{
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // Shell-free fake ffprobe/ffmpeg for trim fallback tests. The fake
+        // copy writes a partial then fails; the re-encoder writes a new file.
+        Some("-v") => {
+            println!("{{\"streams\":[{{\"codec_type\":\"video\",\"codec_name\":\"h264\"}}]}}")
+        }
+        Some("-nostdin") => {
+            use std::fs::OpenOptions;
+            let path = args.last().unwrap();
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .unwrap();
+            if args.windows(2).any(|w| w == ["-c", "copy"]) {
+                file.write_all(b"partial copy").unwrap();
+                std::process::exit(7);
+            }
+            file.write_all(b"reencoded").unwrap();
+        }
         Some("binary") => {
             for _ in 0..128 {
                 io::stdout().write_all(&[0xa5; 8192]).unwrap();

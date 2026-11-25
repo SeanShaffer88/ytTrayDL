@@ -149,6 +149,13 @@ jobs:
       - name: Resolve hash-pinned real tools
         shell: pwsh
         run: ./tools/Get-FieldTools.ps1 -Destination "$env:RUNNER_TEMP/field-tools" -ProcessRunner "$env:RUNNER_TEMP/process-runner/InstallerStateProbe.exe"
+      - name: Test real converter media
+        shell: pwsh
+        run: |
+          $env:YTTRAYDL_TEST_FFMPEG = $env:FIELD_FFMPEG
+          $env:YTTRAYDL_TEST_FFPROBE = $env:FIELD_FFPROBE
+          cargo test --locked --test converter_media
+          if ($LASTEXITCODE -ne 0) { throw "Converter media tests failed: $LASTEXITCODE" }
       - name: Build real media harness
         run: cargo build --locked --features field-validation --bin field_validation
       - name: Exercise real media and process lifecycle

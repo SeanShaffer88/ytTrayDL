@@ -50,7 +50,12 @@ function Run-Installer([string]$Path, [string[]]$Arguments, [string]$Phase) {
     & $StateProbe --run-owned 300 $Path @Arguments *> (Join-Path $EvidenceRoot "$Phase-process.log")
     $code = $LASTEXITCODE
     $events.Add(@{ phase=$Phase; exitCode=$code; arguments=$Arguments; sha256=$hash; containment='production-owned-tree'; processEvidence="$Phase-process.log" })
-    Assert ($code -eq 0) "$Phase exit code is zero"
+    if ($code -ne 0) {
+        $log = Join-Path $EvidenceRoot "$Phase.log"
+        $tail = if (Test-Path -LiteralPath $log) { (Get-Content -LiteralPath $log -Tail 18) -join "`n" } else { 'No installer log' }
+        throw "$Phase exit code $code; installer log tail:`n$tail"
+    }
+    Assert $true "$Phase exit code is zero"
 }
 function Install([string]$Path, [string]$Phase, [string]$Tasks='desktopicon,startup') {
     # OwnedProcess accepts argv, not a shell command line; Command supplies the
@@ -95,7 +100,7 @@ try {
             $candidateNumber = [version]$candidateVersion
             # Select a published, non-prerelease three-part version strictly older
             # than the candidate. Never execute an unchecked or same-version build.
-            $releases = @(Invoke-RestMethod 'https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases?per_page=100' -TimeoutSec 120)
+            $releases = Invoke-RestMethod 'https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases?per_page=100' -TimeoutSec 120
             $eligible = @($releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and [version]$_.tag_name.Substring(1) -lt $candidateNumber } | Sort-Object { [version]$_.tag_name.Substring(1) } -Descending)
             Assert ($eligible.Count -gt 0) 'published previous stable version exists among the first 100 releases'
             $baselineVersion = $eligible[0].tag_name.Substring(1)

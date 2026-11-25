@@ -31,6 +31,7 @@ With Rust nightly and `cargo-fuzz` installed, run a bounded local smoke test:
 ```sh
 cargo +nightly fuzz run url_input -- -max_total_time=30
 cargo +nightly fuzz run clipboard_input -- -max_total_time=30
+cargo +nightly fuzz run release_signature -- -max_total_time=30
 ```
 
 Fuzzing is separate from ordinary PR tests and runs on a weekly schedule. Never

@@ -18,3 +18,5 @@ jobs:
         run: cargo +nightly fuzz run url_input -- -max_total_time=60 -max_len=65536
       - name: Smoke clipboard input
         run: cargo +nightly fuzz run clipboard_input -- -max_total_time=60 -max_len=65536
+      - name: Smoke release signature input
+        run: cargo +nightly fuzz run release_signature -- -max_total_time=60 -max_len=73732

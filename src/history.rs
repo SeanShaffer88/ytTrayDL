@@ -87,7 +87,7 @@ impl History {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        Self::save_to(&crate::settings::Settings::history_path())
+        self.save_to(&crate::settings::Settings::history_path())
     }
 
     /// Persist in the same directory as the destination using a temporary file.

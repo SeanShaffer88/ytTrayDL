@@ -128,6 +128,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Test previous stable selector
+        shell: pwsh
+        run: |
+          try { ./tools/Test-PreviousStable.ps1 } catch {
+            $message = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Previous stable selector test::$message"
+            throw
+          }
       - name: Test release media evidence export
         shell: pwsh
         run: |

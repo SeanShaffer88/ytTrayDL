@@ -96,14 +96,11 @@ try {
     $oldHash = $null
     if ($isUpgrade) {
         if ($Scenario -eq 'previous-stable') {
-            if ($candidateVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid candidate version' }
-            $candidateNumber = [version]$candidateVersion
-            # Select a published, non-prerelease three-part version strictly older
-            # than the candidate. Never execute an unchecked or same-version build.
+            # Refuse an unchecked, prerelease or same-version baseline.
+            . (Join-Path $PSScriptRoot 'Select-PreviousStable.ps1')
             $releases = Invoke-RestMethod 'https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases?per_page=100' -TimeoutSec 120
-            $eligible = @($releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and [version]$_.tag_name.Substring(1) -lt $candidateNumber } | Sort-Object { [version]$_.tag_name.Substring(1) } -Descending)
-            Assert ($eligible.Count -gt 0) 'published previous stable version exists among the first 100 releases'
-            $baselineVersion = $eligible[0].tag_name.Substring(1)
+            $baselineVersion = Select-PreviousStable -Releases $releases -CandidateVersion $candidateVersion
+            Assert $true "selected previous stable $baselineVersion"
         }
         $release = Invoke-RestMethod "https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases/tags/v$baselineVersion" -TimeoutSec 120
         $asset = @($release.assets | Where-Object name -eq "ytTrayDL-Setup-v$baselineVersion-windows-x64.exe")

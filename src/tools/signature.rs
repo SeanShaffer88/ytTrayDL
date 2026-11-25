@@ -24,7 +24,7 @@ fn signature_packet(bytes: &[u8]) -> Option<&[u8]> {
     if ctb & 0x80 == 0 {
         return None;
     }
-    let (header, length) = if ctb & 0x40 == 0 {
+    let (header, length): (usize, usize) = if ctb & 0x40 == 0 {
         if (ctb >> 2) & 0x0f != 2 {
             return None;
         }
@@ -52,18 +52,19 @@ fn signature_packet(bytes: &[u8]) -> Option<&[u8]> {
             _ => return None,
         }
     };
-    if header + length != bytes.len() {
+    if header.checked_add(length) != Some(bytes.len()) {
         return None;
     }
     bytes.get(header..)
 }
 
-/// Reject unknown critical hashed subpackets. Their semantics cannot be
-/// ignored safely even when the mathematical signature is valid.
+/// Support only the two hashed subpacket types in the pinned-key release
+/// format. Even noncritical expiration or policy packets must not be silently
+/// ignored: a new subpacket requires review before an updated app accepts it.
 fn supported_hashed_subpackets(mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
         let first = bytes[0] as usize;
-        let (header, size) = match first {
+        let (header, size): (usize, usize) = match first {
             0 => return false,
             1..=191 => (1, first),
             192..=223 if bytes.len() >= 2 => (2, ((first - 192) << 8) + bytes[1] as usize + 192),
@@ -73,16 +74,17 @@ fn supported_hashed_subpackets(mut bytes: &[u8]) -> bool {
             ),
             _ => return false,
         };
-        if size == 0 || header + size > bytes.len() {
+        let Some(end) = header.checked_add(size).filter(|end| *end <= bytes.len()) else {
+            return false;
+        };
+        if size == 0 {
             return false;
         }
-        let kind = bytes[header];
-        // Creation time and issuer fingerprint have no extra semantics to
-        // enforce for our independently pinned primary key.
-        if kind & 0x80 != 0 && !matches!(kind & 0x7f, 2 | 33) {
+        let kind = bytes[header] & 0x7f;
+        if !((kind == 2 && size == 5) || (kind == 33 && size == 22 && bytes[header + 1] == 4)) {
             return false;
         }
-        bytes = &bytes[header + size..];
+        bytes = &bytes[end..];
     }
     true
 }

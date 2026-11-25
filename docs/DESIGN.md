@@ -699,3 +699,13 @@ current bounded-page behavior and verification matrix. Earlier field reports and
 | Physical DPI / monitor transitions | Not performed in this pass | Headless pixels-per-point tests do not establish physical display behavior |
 | Native Settings UI | Required before delivery | Owned private-profile inspection; does not certify accessibility |
 | Exact-head CI and installer lifecycle | Required before merge | Full hosted matrix; no installer executes on the developer host |
+
+### Playback and trim roadmap decision
+
+Playback remains local-only. Network URL playback is deferred pending an
+explicit opt-in and a reviewed URL/redirect, protocol, privacy and timeout
+policy; this decision adds no network request. The player exposes the official
+FFmpeg download page and explains explicit-path precedence if ffplay is missing.
+Trimming currently re-encodes; stream-copy with keyframe limitations, preserving
+selected options and safely handling partial output remains planned, not shipped.
+See [ROADMAP.md](../ROADMAP.md) for validation status.

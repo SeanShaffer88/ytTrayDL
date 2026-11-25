@@ -116,6 +116,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Test release media evidence export
+        shell: pwsh
+        run: ./tools/Test-ReleaseMediaEvidence.ps1
       - name: Build owned process runner
         shell: pwsh
         run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/process-runner"

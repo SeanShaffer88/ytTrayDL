@@ -96,8 +96,17 @@ lyrics or artwork it cannot represent, so verify the copy. ffmpeg and ffprobe
 are required for tag inspection and export, and a failed or cancelled export
 may leave a partial output. Closing the window leaves the job running.
 
+The [roadmap](ROADMAP.md) records outstanding interactive Windows and release
+verification; see the [hardware matrix](docs/HARDWARE-ENCODING-MATRIX.md) and
+[installer checklist](docs/INSTALLER-VERIFICATION.md).
+
 The **Player** opens from the panel, tray, optional desktop shortcut, or
-`yttraydl.exe --player`. It manages a queue of up to 500 local audio and video files, with reorder,
+`yttraydl.exe --player`. If ffplay is missing, playback does not start. Use
+Media & playback options to select it or open the official FFmpeg downloads
+page; clear an invalid explicit path to allow auto-detection next to ffmpeg or
+on PATH. The managed ffmpeg download does not include ffplay. Network URL
+playback was evaluated and remains deferred; the player is local-only.
+It manages a queue of up to 500 local audio and video files, with reorder,
 remove, repeat, previous, next and stop. Add a folder to scan for supported media
 in its subfolders; the cancellable scan skips symbolic links and Windows reparse
 points and has entry, depth and queue limits. Inaccessible entries are reported.
@@ -250,7 +259,10 @@ recoverable:
 
 Two ways to get it from the
 [Releases page](https://github.com/SeanShaffer88/ytTrayDL/releases)
-— downloads are 64-bit (`-x64`) builds:
+— downloads are 64-bit (`-x64`) builds. The release workflow is configured
+to attach a checksummed, sanitized summary of its synthetic real-media field run;
+that summary does not establish physical hardware or interactive GUI behaviour:
+
 
 - **Installer** — `ytTrayDL-Setup-vX.Y.Z-windows-x64.exe`:
   per-user install (no admin) to

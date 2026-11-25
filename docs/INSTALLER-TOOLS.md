@@ -107,3 +107,22 @@ retained, and a fresh passing exact-head run is required.
 - [Indeterminate progress](https://jrsoftware.org/inno-setup/documentation/topic_isxfunc_createoutputmarqueeprogresspage.htm)
 - [Queued close message](https://jrsoftware.org/inno-setup/documentation/topic_isxfunc_postmessage.htm)
 - [Inno 6.5.4 cancellation implementation](https://github.com/jrsoftware/issrc/blob/is-6_5_4/Projects/Src/Setup.MainForm.pas)
+
+## Least-privilege and offline installation
+
+Install as the intended standard user: Setup uses per-user locations and does
+not require administrator rights or modify the system PATH. For an offline or
+centrally managed environment, preinstall trusted `yt-dlp.exe`, `ffmpeg.exe`
+and `ffprobe.exe` in a location readable by that user, configure the app's
+explicit paths or put the tools on that user's PATH, then run Setup with
+`/TOOLSDOWNLOAD=skip` (optionally `/VERYSILENT`). Skip avoids the provider and
+post-install launch; it does not install or validate these tools. The user must
+maintain and authenticate preinstalled binaries. A partial ffmpeg family may
+lack ffprobe, and an invalid explicit ffmpeg path takes precedence over a
+managed one. To provision later, use the app's Tools UI or its documented CLI.
+
+Managed provisioning downloads release assets over HTTPS and requires their
+published size and SHA-256 metadata; it verifies the exact bytes before use.
+It resolves versions at provisioning time, not as immutable pins baked into the
+installer. This integrity check and its limits, including the lack of detached
+signature verification, are described in [SECURITY.md](../SECURITY.md).

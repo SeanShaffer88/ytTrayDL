@@ -614,3 +614,16 @@ First version.
   Windows-target compile + clippy gates in CI.
 
 Known limitations are listed in `docs/DESIGN.md`.
+
+### Unreleased — security and maintenance work in progress
+
+- Added a private disclosure policy and dependency advisory tracking, plus
+  dependency audit/policy and scheduled fuzz-smoke workflows.
+- Added deterministic generated input checks, a cross-platform native fake
+  downloader queue/failure scenario, contributor examples and extracted common
+  GUI widgets into their own module.
+- Documented least-privilege/offline tool setup and the current release-metadata
+  checksum trust model. Independent upstream OpenPGP signature verification is
+  **not yet implemented**. See the security policy before relying on it.
+- Verification and remaining limitations are recorded in the PR; interactive
+  Windows desktop behavior is not established by Linux or hosted CI alone.

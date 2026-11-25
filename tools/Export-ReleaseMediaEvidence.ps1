@@ -13,7 +13,7 @@ if ($Commit -notmatch '^[0-9a-f]{40}$') { throw 'Invalid commit identity' }
 if (Test-Path -LiteralPath $Output) { throw 'Output must be new' }
 $invocation = Get-Content -LiteralPath (Join-Path $Root 'invocation.json') -Raw | ConvertFrom-Json
 $evidence = Get-Content -LiteralPath (Join-Path $Root 'evidence.json') -Raw | ConvertFrom-Json
-$provenance = Get-Content -LiteralPath $Provenance -Raw | ConvertFrom-Json
+$provenanceData = Get-Content -LiteralPath $Provenance -Raw | ConvertFrom-Json
 if ($invocation.commit -ne $Commit -or $invocation.exitCode -ne 0 -or $invocation.timedOut -or $evidence.status -ne 'passed') { throw 'Media run did not pass for this commit' }
 $expected = @('video','merge','audio','subtitles','playlist','retry','pause','cancel','shutdown')
 $actual = @($evidence.scenarios | ForEach-Object { $_.scenario })
@@ -21,7 +21,7 @@ if ($actual.Count -ne $expected.Count -or (Compare-Object ($actual | Sort-Object
 if (@($evidence.scenarios | Where-Object { $_.status -ne 'passed' }).Count -ne 0) { throw 'Media scenario failed' }
 $tools = [ordered]@{}
 foreach ($name in @('ytdlp','ffmpeg','ffprobe')) {
-    $tool = $provenance.tools.$name
+    $tool = $provenanceData.tools.$name
     if ($tool.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Invalid $name hash" }
     $tools[$name] = @{ sha256 = $tool.sha256.ToLowerInvariant(); version = ($tool.version -split "`n")[0] }
 }

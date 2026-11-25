@@ -28,10 +28,10 @@ requires its advertised SHA-256 digest and expected size, checks the downloaded
 bytes, validates Windows x64 executables, checks versions in bounded owned
 processes, and atomically activates a generation only after verification. The
 checksum and artifact come from the same release infrastructure: compromise of
-that infrastructure alone can defeat the ffmpeg check. It is not an immutable
-version pin across installations; the provider resolves a concrete release for
-each operation. Existing user-supplied tools are
-only checked for presence and are not authenticated by Setup.
+that infrastructure alone can defeat the ffmpeg check. The provider resolves a
+concrete release for each operation; it does not pin one version across
+installations or provide anti-rollback protection. Existing user-supplied tools
+are only checked for presence and are not authenticated by Setup.
 
 For yt-dlp the provider additionally requires the release's detached OpenPGP
 signature over `SHA2-256SUMS`, verifies it with the pinned primary RSA public
@@ -51,9 +51,10 @@ rotates it. Offline pinning cannot automatically discover revocation or expiry;
 users should update ytTrayDL promptly after any reported compromise. Verification
 accepts only binary-document OpenPGP v4 RSA/SHA-512 detached signatures, not a
 full OpenPGP policy engine. An upstream format or algorithm change fails closed
-until reviewed and supported. The selected ffmpeg provider has no implemented
-independent signature verification and remains checked against GitHub's
-release-asset SHA-256 digest and size.
+until reviewed and supported. The selected GyanD/codexffmpeg release did not
+publish detached signatures for its ZIP assets when reviewed (2026-11-24); the
+provider has no independent signature verification and remains checked against
+GitHub's release-asset SHA-256 digest and size. Reassess this on provider changes.
 
 Tools run with the user's privileges. For least-privilege/offline setup use
 `/TOOLSDOWNLOAD=skip`; see [installer details](docs/INSTALLER-TOOLS.md).

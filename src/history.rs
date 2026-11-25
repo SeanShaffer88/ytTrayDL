@@ -29,6 +29,42 @@ pub struct HistoryEntry {
     pub preset_label: String,
 }
 
+impl HistoryEntry {
+    /// Convert an acknowledged terminal download into the history record used
+    /// by the GUI. Paused and nonterminal jobs are never history entries.
+    pub fn from_finished_job(job: &crate::download::Job, finished_at_unix: i64) -> Option<Self> {
+        use crate::download::JobState;
+        let (status, error) = match job.state {
+            JobState::Done => (HistoryStatus::Completed, None),
+            JobState::Cancelled => (HistoryStatus::Cancelled, None),
+            JobState::Failed => (
+                HistoryStatus::Failed,
+                job.error.clone().or_else(|| {
+                    job.tail_lines
+                        .iter()
+                        .rev()
+                        .find(|line| line.contains("ERROR"))
+                        .cloned()
+                }),
+            ),
+            _ => return None,
+        };
+        Some(Self {
+            finished_at_unix,
+            url: job.url.clone(),
+            title: if job.title.is_empty() || job.title == job.url {
+                crate::url_detect::host_of(&job.url)
+            } else {
+                job.title.clone()
+            },
+            status,
+            file: job.final_file.clone(),
+            error,
+            preset_label: job.preset.label().to_string(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct History {
@@ -39,6 +75,11 @@ pub struct History {
 impl History {
     pub fn load() -> Self {
         let path = crate::settings::Settings::history_path();
+        Self::load_from(&path)
+    }
+
+    /// Load history from an explicit path, useful for isolated consumers/tests.
+    pub fn load_from(path: &std::path::Path) -> Self {
         let Ok(text) = std::fs::read_to_string(path) else {
             return Self::default();
         };
@@ -46,13 +87,31 @@ impl History {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let dir = crate::settings::config_dir();
-        std::fs::create_dir_all(&dir)?;
+        Self::save_to(&crate::settings::Settings::history_path())
+    }
+
+    /// Persist in the same directory as the destination using a temporary file.
+    pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        std::fs::create_dir_all(dir)?;
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let tmp = dir.join("history.json.tmp");
+        let mut name = path
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "history path has no filename",
+                )
+            })?
+            .to_os_string();
+        name.push(".tmp");
+        let tmp = dir.join(name);
         std::fs::write(&tmp, text)?;
-        std::fs::rename(&tmp, crate::settings::Settings::history_path())
+        std::fs::rename(&tmp, path)
     }
 
     pub fn push(&mut self, entry: HistoryEntry) {

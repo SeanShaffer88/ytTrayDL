@@ -20,7 +20,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use yttraydl::dedupe::SeenCache;
 use yttraydl::download::{DownloadEvent, DownloadManager, JobState};
-use yttraydl::history::{now_unix, History, HistoryEntry, HistoryStatus};
+use yttraydl::history::{now_unix, History, HistoryEntry};
 #[cfg(windows)]
 use yttraydl::platform;
 use yttraydl::platform::{PlatformEvent, PlatformSetup};
@@ -2010,33 +2010,11 @@ impl App {
                     );
                     continue;
                 }
-                let (status, error) = match job.state {
-                    JobState::Done => (HistoryStatus::Completed, None),
-                    JobState::Cancelled => (HistoryStatus::Cancelled, None),
-                    _ => (
-                        HistoryStatus::Failed,
-                        job.error.clone().or_else(|| {
-                            job.tail_lines
-                                .iter()
-                                .rev()
-                                .find(|l| l.contains("ERROR"))
-                                .cloned()
-                        }),
-                    ),
+                let Some(entry) = HistoryEntry::from_finished_job(&job, now_unix()) else {
+                    continue;
                 };
-                self.history.push(HistoryEntry {
-                    finished_at_unix: now_unix(),
-                    url: job.url.clone(),
-                    title: if job.title.is_empty() || job.title == job.url {
-                        host_of(&job.url)
-                    } else {
-                        job.title.clone()
-                    },
-                    status,
-                    file: job.final_file.clone(),
-                    error: error.clone(),
-                    preset_label: job.preset.label().to_string(),
-                });
+                let error = entry.error.clone();
+                self.history.push(entry);
                 let _ = self.history.save();
                 match job.state {
                     JobState::Done => {

@@ -5,7 +5,8 @@ use std::{
 };
 use yttraydl::process::{run_capture, CancellationToken, ProcessLimits, ProcessSpec};
 use yttraydl::{
-    download::{DownloadManager, JobState},
+    download::{DownloadEvent, DownloadManager, JobState},
+    history::{History, HistoryEntry, HistoryStatus},
     settings::{Preset, Settings},
 };
 fn fixture() -> &'static Path {
@@ -190,9 +191,14 @@ fn native_fixture_checks_queue_argv_and_failure_without_network() {
     manager.enqueue("fixture-argv".into(), "argv".into(), Preset::Best, false);
     manager.enqueue("fixture-fail".into(), "failure".into(), Preset::Best, false);
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut history = History::default();
     loop {
         manager.pump(&settings, Some(fixture()));
-        manager.poll_events();
+        for event in manager.poll_events() {
+            if let DownloadEvent::Finished(job) = event {
+                history.push(HistoryEntry::from_finished_job(&job, 123).unwrap());
+            }
+        }
         if manager.finished_jobs().len() == 2 {
             break;
         }
@@ -211,5 +217,24 @@ fn native_fixture_checks_queue_argv_and_failure_without_network() {
         jobs[1].final_file.as_deref(),
         Some(Path::new("fixture.mp4"))
     );
+    let dir = std::env::temp_dir().join(format!("yttraydl-history-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("history.json");
+    history.save_to(&path).unwrap();
+    let loaded = History::load_from(&path);
+    assert_eq!(loaded.entries.len(), 2);
+    assert_eq!(loaded.entries[0].status, HistoryStatus::Failed);
+    assert!(loaded.entries[0]
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("synthetic fixture failure"));
+    assert_eq!(loaded.entries[1].status, HistoryStatus::Completed);
+    assert_eq!(
+        loaded.entries[1].file.as_deref(),
+        Some(Path::new("fixture.mp4"))
+    );
+    assert_eq!(loaded.entries[1].finished_at_unix, 123);
+    std::fs::remove_dir_all(dir).unwrap();
     manager.shutdown();
 }

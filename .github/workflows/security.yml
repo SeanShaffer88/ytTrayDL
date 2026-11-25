@@ -21,9 +21,9 @@ jobs:
       - name: Check committed lockfile for advisories
         run: |
           set -o pipefail
-          cargo audit --color never 2>&1 | tee /tmp/audit.log || { tail -35 /tmp/audit.log | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }
+          cargo audit --color never 2>&1 | tee /tmp/audit.log || { python3 -c 'print("::error::" + open("/tmp/audit.log").read()[-12000:].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))'; exit 1; }
       - name: Check dependency policy
         if: always()
         run: |
           set -o pipefail
-          cargo deny --locked --color never check 2>&1 | tee /tmp/deny.log || { tail -35 /tmp/deny.log | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }
+          cargo deny --locked --color never check 2>&1 | tee /tmp/deny.log || { python3 -c 'print("::error::" + open("/tmp/deny.log").read()[-12000:].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))'; exit 1; }

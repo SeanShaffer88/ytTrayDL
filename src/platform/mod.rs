@@ -514,9 +514,9 @@ fn clipboard_allocation_units(bytes: usize) -> Option<usize> {
         Some((bytes / 2).min(1_000_000))
     }
 }
-/// Interpret only a validated allocation, requiring a terminator within the cap.
-#[cfg(any(windows, test))]
-fn decode_clipboard_units(units: &[u16]) -> Option<String> {
+/// Decode bounded UTF-16 clipboard units, requiring a terminator within the
+/// one-million-unit cap. This pure helper performs no native clipboard access.
+pub fn decode_clipboard_units(units: &[u16]) -> Option<String> {
     let bounded = &units[..units.len().min(1_000_000)];
     let end = bounded.iter().position(|unit| *unit == 0)?;
     Some(String::from_utf16_lossy(&bounded[..end]))

@@ -13,6 +13,10 @@ const EXPONENT: &[u8] = &[1, 0, 1];
 const MAX_SUMS: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 8 * 1024;
 
+pub(super) fn valid_digest(digest: &str) -> bool {
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn u16_at(bytes: &[u8], offset: usize) -> Option<usize> {
     Some(u16::from_be_bytes(bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?) as usize)
 }
@@ -158,6 +162,12 @@ fn verify_with_key(
     }
     .verify(&RSA_PKCS1_2048_8192_SHA512, &signed, &padded)
     .map_err(|_| invalid())?;
+    find_signed_digest(sums, asset_name)
+}
+
+// This must only be used after the detached signature has been authenticated.
+fn find_signed_digest(sums: &[u8], asset_name: &str) -> Result<String, String> {
+    let invalid = || "Invalid or unsupported yt-dlp release signature".to_string();
     let text = std::str::from_utf8(sums).map_err(|_| invalid())?;
     let mut found = None;
     for line in text.lines() {
@@ -165,7 +175,7 @@ fn verify_with_key(
             continue;
         };
         if name == asset_name {
-            if found.is_some() || !super::valid_digest(hash) {
+            if found.is_some() || !valid_digest(hash) {
                 return Err(invalid());
             }
             found = Some(hash.to_ascii_lowercase());
@@ -212,5 +222,28 @@ mod tests {
         assert!(!supported_hashed_subpackets(&[2, 0x83, 0]));
         assert!(!supported_hashed_subpackets(&[255, 255, 255, 255, 255]));
         assert!(!supported_hashed_subpackets(&[5, 2, 0]));
+    }
+    #[test]
+    fn signed_checksum_entry_must_be_unique_exact_and_well_formed() {
+        let digest = "a".repeat(64);
+        let upper = "A".repeat(64);
+        let listing = format!("{digest}  yt-dlp.exe.extra\n{upper} *yt-dlp.exe\n");
+        assert_eq!(
+            find_signed_digest(listing.as_bytes(), "yt-dlp.exe").unwrap(),
+            digest
+        );
+        let duplicate = format!("{digest}  yt-dlp.exe\n{digest} *yt-dlp.exe\n");
+        assert!(find_signed_digest(duplicate.as_bytes(), "yt-dlp.exe").is_err());
+        assert!(find_signed_digest(
+            format!("{digest}  yt-dlp.exe.extra\n").as_bytes(),
+            "yt-dlp.exe"
+        )
+        .is_err());
+        assert!(find_signed_digest(
+            format!("{}  yt-dlp.exe\n", "g".repeat(64)).as_bytes(),
+            "yt-dlp.exe"
+        )
+        .is_err());
+        assert!(find_signed_digest(b"\xff", "yt-dlp.exe").is_err());
     }
 }

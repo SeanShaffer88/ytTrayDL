@@ -151,9 +151,7 @@ struct Asset {
     metadata_url: String,
 }
 
-fn valid_digest(digest: &str) -> bool {
-    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
+use signature::valid_digest;
 fn valid_component(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128

@@ -8,6 +8,7 @@ plan, not a substitute for a fresh scan.
 
 | Crate / advisory | Current path and impact | Remediation / tracking |
 |---|---|---|
+| `url` / RUSTSEC-2026-0592 | Stack overflow on nested blob origins in 2.5.8. | Lockfile updated to patched 2.5.9 with form_urlencoded 1.2.3; CI must confirm resolution and audit. |
 | `proc-macro-error` 1.0.4 / RUSTSEC-2024-0370 | Unmaintained build-time macro through optional GTK/glib macro stack; not application runtime code. | Track upstream GTK/tray dependency migration; do not enable unused GTK features for Windows. |
 | `ttf-parser` 0.25.1 / RUSTSEC-2026-0192 | Unmaintained parser through `owned_ttf_parser` / GUI font stack; font parsing remains security relevant. | Track egui/font-stack migration and evaluate a maintained compatible parser when upstream supports it. |
 | `zbus_names` 4.3.5 / RUSTSEC-2026-0371 | Unmaintained through zbus / Linux accessibility stack; target-specific, not the Windows tray implementation. | Monitor zbus/accesskit upstream replacement and update the compatible dependency family together. |

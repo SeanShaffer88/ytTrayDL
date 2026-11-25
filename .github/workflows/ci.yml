@@ -22,7 +22,12 @@ jobs:
       - name: Install minimum Rust toolchain
         run: rustup toolchain install 1.89.0 --profile minimal --no-self-update
       - name: Check full locked graph on minimum Rust
-        run: cargo +1.89.0 check --all-targets --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          if cargo +1.89.0 check --all-targets --locked 2>&1 | tee msrv-check.log; then exit 0; fi
+          python -c 'import pathlib; s=pathlib.Path("msrv-check.log").read_text(errors="replace")[-3000:]; print("::error title=MSRV check details::" + s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+          exit 1
       - name: Check field harness on minimum Rust
         run: cargo +1.89.0 check --all-targets --features field-validation --locked
 
@@ -36,7 +41,12 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (host)
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          if cargo clippy --all-targets --all-features --locked -- -D warnings 2>&1 | tee host-clippy.log; then exit 0; fi
+          python -c 'import pathlib; s=pathlib.Path("host-clippy.log").read_text(errors="replace")[-3000:]; print("::error title=Host clippy details::" + s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+          exit 1
       - name: Tests (full suite)
         run: cargo test --locked
       - name: Field harness clippy (host)

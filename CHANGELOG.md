@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.3 — Trimming and verification
+
+- Attempt compatible single and batch trims using stream-copy, with keyframe
+  limitations, safe no-overwrite publication, and explicit re-encoding fallback.
+- Improve ffplay discovery guidance and link to the official FFmpeg downloads.
+- Add release real-media evidence, installer lifecycle and previous-stable
+  checks, provisioning report verification, and release-repair asset tests.
+- Record outstanding physical Windows, GPU and accessibility verification in
+  the roadmap; mixed-DPI validation is deferred.
+
 ## 0.13.2 — Security and maintenance
 
 - Added a private disclosure policy and dependency advisory tracking, plus

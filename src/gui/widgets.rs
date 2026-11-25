@@ -136,41 +136,6 @@ pub fn premium_card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::U
     shown.inner
 }
 
-/// A recessed well frame (0.6.0): WELL fill (darker than the
-/// panel), the darker stroke, no shadow — wells sink, cards
-/// rise. Same padding/grid as `card_frame`.
-pub fn well_frame() -> egui::Frame {
-    egui::Frame::NONE
-        .fill(WELL)
-        .stroke(egui::Stroke::new(1.0_f32, STROKE_DARK))
-        .corner_radius(RADIUS)
-        .inner_margin(egui::Margin::same(12))
-        .outer_margin(egui::Margin {
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: 8,
-        })
-}
-
-/// Show a well and paint its inset top line (0.6.0): wells get
-/// a dark line just inside the top edge (the shadow a raised
-/// neighbour would cast into the recess) instead of a card's
-/// light highlight.
-pub fn premium_well<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let shown = well_frame().show(ui, add_contents);
-    let rect = shown.response.rect;
-    let y = rect.top() + 1.5;
-    ui.painter().line_segment(
-        [
-            egui::pos2(rect.left() + RADIUS as f32, y),
-            egui::pos2(rect.right() - RADIUS as f32, y),
-        ],
-        egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(170)),
-    );
-    shown.inner
-}
-
 /// Section heading (0.5.0), restyled 0.6.0 as a micro-label:
 /// small, strong, uppercase, faint — the mockups' section
 /// voice ("ENGINE", "RECENT", "TRAY & STARTUP"). egui has no
@@ -421,9 +386,7 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
 /// 16px icon box around `center`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IconKind {
-    Gear,
     Download,
-    Folder,
 }
 
 pub fn paint_icon(
@@ -439,110 +402,13 @@ pub fn paint_icon(
     };
     let at = |dx: f32, dy: f32| center + egui::vec2(dx * scale, dy * scale);
     match kind {
-        IconKind::Gear => {
-            for k in 0..6 {
-                let a = (k as f32 * 60.0 + 30.0).to_radians();
-                line(
-                    at(5.2 * a.cos(), 5.2 * a.sin()),
-                    at(8.0 * a.cos(), 8.0 * a.sin()),
-                    2.4 * scale,
-                    color,
-                );
-            }
-            painter.circle_stroke(center, 5.4 * scale, egui::Stroke::new(1.9 * scale, color));
-            painter.circle_filled(center, 1.8 * scale, color);
-        }
         IconKind::Download => {
             line(at(0.0, -7.0), at(0.0, 3.0), 2.2 * scale, color);
             line(at(-4.5, -1.0), at(0.0, 3.5), 2.2 * scale, color);
             line(at(0.0, 3.5), at(4.5, -1.0), 2.2 * scale, color);
             line(at(-7.0, 7.0), at(7.0, 7.0), 2.2 * scale, tray_color);
         }
-        IconKind::Folder => {
-            let pts = [
-                at(-8.0, -5.0),
-                at(-2.0, -5.0),
-                at(1.0, -2.4),
-                at(8.0, -2.4),
-                at(8.0, 6.0),
-                at(-8.0, 6.0),
-                at(-8.0, -5.0),
-            ];
-            painter.add(egui::Shape::line(
-                pts.to_vec(),
-                egui::Stroke::new(1.8 * scale, color),
-            ));
-        }
     }
-}
-
-/// A ghost button with a drawn line icon (0.6.0): raised
-/// CARD2 fill, hairline stroke, top highlight, icon at the
-/// left, truncating label — the panel's Settings / Downloads
-/// / Download-folder trio. With an empty label the icon is
-/// centred (used for the Recent rows' folder button).
-pub fn icon_text_button(
-    ui: &mut egui::Ui,
-    kind: IconKind,
-    label: &str,
-    size: egui::Vec2,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let radius = 9.0_f32.min(rect.height() / 2.0);
-        let fill = if !ui.is_enabled() || response.is_pointer_button_down_on() {
-            CARD
-        } else if response.hovered() {
-            CONTROL_BG_HOVER
-        } else {
-            CARD2
-        };
-        painter.rect_filled(rect, radius, fill);
-        painter.rect_stroke(
-            rect,
-            egui::CornerRadius::same(radius as u8),
-            egui::Stroke::new(
-                1.0_f32,
-                if response.hovered() {
-                    STROKE_SOFT
-                } else {
-                    HAIRLINE
-                },
-            ),
-            egui::epaint::StrokeKind::Inside,
-        );
-        paint_top_highlight(painter, rect, radius);
-        if response.has_focus() {
-            paint_focus_ring(painter, rect, radius);
-        }
-        let icon_color = if response.hovered() { TEXT } else { TEXT_DIM };
-        if label.is_empty() {
-            paint_icon(painter, kind, rect.center(), 0.85, icon_color, icon_color);
-        } else {
-            paint_icon(
-                painter,
-                kind,
-                egui::pos2(rect.left() + 17.0, rect.center().y),
-                0.85,
-                icon_color,
-                icon_color,
-            );
-            let galley = egui::WidgetText::from(egui::RichText::new(label).color(TEXT))
-                .into_galley(
-                    ui,
-                    Some(egui::TextWrapMode::Truncate),
-                    (rect.width() - 37.0).max(0.0),
-                    egui::TextStyle::Button,
-                );
-            painter.galley(
-                egui::pos2(rect.left() + 29.0, rect.center().y - galley.size().y / 2.0),
-                galley,
-                TEXT,
-            );
-        }
-    }
-    response
 }
 
 /// A visible focus ring for text fields (0.6.0): the mockup's

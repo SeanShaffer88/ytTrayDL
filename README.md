@@ -17,7 +17,11 @@ Settings window resizing adjusts page capacity without changing saved preference
 The main window has a fixed size, adjusted only when necessary to fit a smaller
 monitor work area, and has no scrollbar. Its buttons are Player, Lyrics & Tags,
 Video Encoder, Settings, Downloads and Output Folder, in that order. On short
-work areas they use two columns in reading order. Detailed download activity,
+work areas they use two columns in reading order. Navigation buttons fill the
+space above the bottom toolbar. Settings, Downloads, Player, Lyrics & Tags,
+Video Encoder and About open at the main window's position when possible (their
+placement is adjusted to keep them on the monitor). Moving an open window does
+not move it back until it is reopened. Detailed download activity,
 saved links, ignored links, failures, and tool progress/cancellation are in the
 Downloads window; install or configure media tools in Settings → Tools.
 
@@ -385,10 +389,12 @@ all of it into a `ytTrayDL-data` folder beside the exe when a
 ## Window geometry module
 
 On Windows, the application keeps normal window bounds in `window-state.json` in its own
-configuration directory, alongside settings. Main, Settings and Downloads retain
-size and position; About retains position. Hidden, minimized and maximized states
-are not restored. Transient prompts stay anchored and are kept inside the current
-monitor work area. Missing or invalid saved geometry uses the normal defaults.
+configuration directory, alongside settings. Main retains its position; Settings
+and Downloads retain their sizes but open at the main window's current position.
+Auxiliary windows are clamped to the main monitor's work area and can be moved
+independently while open. Hidden, minimized and maximized states are not restored.
+Transient prompts keep their separate anchors. Missing or invalid saved geometry
+uses the normal defaults.
 
 The MIT-licensed `window_geometry` library module provides serializable bounds,
 DPI scaling and work-area translation without starting background work. Native

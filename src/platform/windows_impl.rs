@@ -833,6 +833,40 @@ pub fn restore_window_geometry(
     set_normal_geometry(hwnd, restored.clamped(work, inset), true)
 }
 
+pub fn align_tool_window(window: crate::window_geometry::ToolWindow) -> bool {
+    let Some(main) = find_owned_window("ytTrayDL") else {
+        return false;
+    };
+    let Some(target) = find_owned_window(window.title()) else {
+        return false;
+    };
+    let (Some(main_bounds), Some(target_bounds), Some(work)) = (
+        native_geometry(main),
+        native_geometry(target),
+        work_area(main),
+    ) else {
+        return false;
+    };
+    // Move before clamping so the target picks up the destination monitor DPI.
+    let proposed = crate::window_geometry::WindowGeometry {
+        x: main_bounds.x,
+        y: main_bounds.y,
+        ..target_bounds
+    };
+    if !set_normal_geometry(target, proposed, false) {
+        return false;
+    }
+    let Some(target_bounds) = native_geometry(target) else {
+        return false;
+    };
+    let inset = ((12 * target_bounds.dpi + 48) / 96) as i32;
+    set_normal_geometry(
+        target,
+        target_bounds.aligned_to(main_bounds, work, inset),
+        false,
+    )
+}
+
 pub fn constrain_transient_window(window: crate::window_geometry::TransientWindow) {
     let Some(hwnd) = find_owned_window(window.title()) else {
         return;

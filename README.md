@@ -66,8 +66,8 @@ applied to a single file or every item in a batch. For compatible codecs and
 encoder-default settings, ffprobe is used to attempt lossless stream-copy;
 otherwise the selected profile is re-encoded. Stream-copy cuts can start at an
 earlier keyframe and are not frame-accurate; timestamps and duration can differ
-from the requested range. Set a quality, transform, bitrate or hardware encoder
-to require re-encoding. If ffprobe is missing or cannot determine compatibility,
+from the requested range. Set a quality, crop, resize, rotation, bitrate or hardware encoder
+to require re-encoding. Removing audio alone can still use stream-copy. If ffprobe is missing or cannot determine compatibility,
 the app re-encodes. A failed copy attempt falls back to re-encoding only after
 its isolated partial file is cleaned up. Copy output is published without
 overwriting via a hard link, which requires filesystem support; publication failure
@@ -269,7 +269,8 @@ recoverable:
 Two ways to get it from the
 [Releases page](https://github.com/SeanShaffer88/ytTrayDL/releases)
 — downloads are 64-bit (`-x64`) builds. The release workflow is configured
-to attach a checksummed, sanitized summary of its synthetic real-media field run;
+to attach a checksummed, sanitized summary of its synthetic real-media field
+run and converter-media tests;
 that summary does not establish physical hardware or interactive GUI behaviour:
 
 

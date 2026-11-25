@@ -5,10 +5,12 @@ param(
     [Parameter(Mandatory)][string]$Root,
     [Parameter(Mandatory)][string]$Provenance,
     [Parameter(Mandatory)][string]$Output,
-    [Parameter(Mandatory)][string]$Commit
+    [Parameter(Mandatory)][string]$Commit,
+    [switch]$ConverterTestsPassed
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if (-not $ConverterTestsPassed) { throw 'Converter media tests must pass before evidence export' }
 if ($Commit -notmatch '^[0-9a-f]{40}$') { throw 'Invalid commit identity' }
 if (Test-Path -LiteralPath $Output) { throw 'Output must be new' }
 $invocation = Get-Content -LiteralPath (Join-Path $Root 'invocation.json') -Raw | ConvertFrom-Json
@@ -33,6 +35,7 @@ $report = [ordered]@{
     operatingSystem = $invocation.os
     coverage = $evidence.coverage
     status = 'passed'
+    converterMediaTests = 'passed'
     scenarios = @($evidence.scenarios | ForEach-Object { @{ name = $_.scenario; status = $_.status } })
     tools = $tools
     rawEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'evidence.json') -Algorithm SHA256).Hash.ToLowerInvariant()

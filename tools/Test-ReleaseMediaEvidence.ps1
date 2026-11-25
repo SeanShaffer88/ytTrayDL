@@ -14,22 +14,25 @@ try {
     $provenance | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $root 'provenance.json')
     $export = Join-Path $PSScriptRoot 'Export-ReleaseMediaEvidence.ps1'
     $output = Join-Path $root 'public.json'
-    & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output $output -Commit $commit
+    & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output $output -Commit $commit -ConverterTestsPassed
     $report = Get-Content -LiteralPath $output -Raw
     if ($report.Contains('PRIVATE-PATH')) { throw 'Private assertion leaked' }
     $parsed = $report | ConvertFrom-Json
-    if ($parsed.status -ne 'passed' -or $parsed.scenarios.Count -ne 9 -or $parsed.commit -ne $commit) { throw 'Invalid summary' }
+    if ($parsed.converterMediaTests -ne 'passed' -or $parsed.status -ne 'passed' -or $parsed.scenarios.Count -ne 9 -or $parsed.commit -ne $commit) { throw 'Invalid summary' }
+    $rejected = $false
+    try { & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output (Join-Path $root 'untested.json') -Commit $commit } catch { $rejected = $true }
+    if (-not $rejected -or (Test-Path (Join-Path $root 'untested.json'))) { throw 'Missing converter test accepted' }
     $invocation.exitCode = 1
     $invocation | ConvertTo-Json | Set-Content (Join-Path $root 'invocation.json')
     $rejected = $false
-    try { & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output (Join-Path $root 'failed.json') -Commit $commit } catch { $rejected = $true }
+    try { & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output (Join-Path $root 'failed.json') -Commit $commit -ConverterTestsPassed } catch { $rejected = $true }
     if (-not $rejected -or (Test-Path (Join-Path $root 'failed.json'))) { throw 'Failed run accepted' }
     $invocation.exitCode = 0
     $invocation | ConvertTo-Json | Set-Content (Join-Path $root 'invocation.json')
     $evidence.scenarios = @($evidence.scenarios | Select-Object -First 8)
     $evidence | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $root 'evidence.json')
     $rejected = $false
-    try { & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output (Join-Path $root 'missing.json') -Commit $commit } catch { $rejected = $true }
+    try { & $export -Root $root -Provenance (Join-Path $root 'provenance.json') -Output (Join-Path $root 'missing.json') -Commit $commit -ConverterTestsPassed } catch { $rejected = $true }
     if (-not $rejected -or (Test-Path (Join-Path $root 'missing.json'))) { throw 'Incomplete run accepted' }
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force

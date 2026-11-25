@@ -42,6 +42,13 @@ jobs:
       - name: Resolve hash-pinned real media tools
         shell: pwsh
         run: ./tools/Get-FieldTools.ps1 -Destination "$env:RUNNER_TEMP/field-tools" -ProcessRunner "$env:RUNNER_TEMP/process-runner/InstallerStateProbe.exe"
+      - name: Test real converter media
+        shell: pwsh
+        run: |
+          $env:YTTRAYDL_TEST_FFMPEG = $env:FIELD_FFMPEG
+          $env:YTTRAYDL_TEST_FFPROBE = $env:FIELD_FFPROBE
+          cargo test --locked --test converter_media
+          if ($LASTEXITCODE -ne 0) { throw "Converter media tests failed: $LASTEXITCODE" }
       - name: Run real-media field validation
         shell: pwsh
         run: |
@@ -53,7 +60,7 @@ jobs:
       - name: Prepare public media evidence
         shell: pwsh
         run: |
-          ./tools/Export-ReleaseMediaEvidence.ps1 -Root "$env:RUNNER_TEMP/media-evidence" -Provenance "$env:RUNNER_TEMP/field-tools/provenance.json" -Output "media-evidence.json" -Commit $env:GITHUB_SHA
+          ./tools/Export-ReleaseMediaEvidence.ps1 -Root "$env:RUNNER_TEMP/media-evidence" -Provenance "$env:RUNNER_TEMP/field-tools/provenance.json" -Output "media-evidence.json" -Commit $env:GITHUB_SHA -ConverterTestsPassed
       - name: Install Inno Setup 6.7.1
         run: choco install innosetup --version=6.7.1 --no-progress --yes
       - name: Verify Inno compiler engine
@@ -177,7 +184,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > tag.json
           python3 -c 'import json,sys; r=json.load(open("run.json")); t=json.load(open("tag.json")); assert r["event"] == "push" and r["head_branch"] == sys.argv[1] and r["head_sha"] == t["object"]["sha"], "Run does not build the release tag"' "$TAG"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" > jobs.json
-          python3 -c 'import json; j=json.load(open("jobs.json"))["jobs"]; assert len(j)==1; s={x["name"]: x["conclusion"] for x in j[0]["steps"]}; assert all(s.get(n)=="success" for n in ("Validate tag and notes", "Run native tests and build release executable", "Resolve hash-pinned real media tools", "Run real-media field validation", "Prepare public media evidence", "Verify Inno compiler engine", "Build and verify packages", "Upload checked packages as build artifacts")), "Release build checks did not pass"'
+          python3 -c 'import json; j=json.load(open("jobs.json"))["jobs"]; assert len(j)==1; s={x["name"]: x["conclusion"] for x in j[0]["steps"]}; assert all(s.get(n)=="success" for n in ("Validate tag and notes", "Run native tests and build release executable", "Resolve hash-pinned real media tools", "Test real converter media", "Run real-media field validation", "Prepare public media evidence", "Verify Inno compiler engine", "Build and verify packages", "Upload checked packages as build artifacts")), "Release build checks did not pass"'
           gh run download "$RUN_ID" --name release-packages --dir checked
           RELEASE_URL=$(gh release view "$TAG" --json apiUrl --jq .apiUrl)
           gh api "$RELEASE_URL" > release.json

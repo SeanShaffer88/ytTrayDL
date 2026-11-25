@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Remove the main window scrollbar and use the requested module button order and labels.
+- Move detailed activity, saved links, ignored links, failure actions and tool progress to Downloads; configure tools in Settings.
+
 ## 0.13.3 — Trimming and verification
 
 - Attempt compatible single and batch trims using stream-copy, with keyframe

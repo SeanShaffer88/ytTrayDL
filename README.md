@@ -13,9 +13,13 @@ downloads quietly in the background with your defaults while you keep working.
 Settings use bounded pages, never scrollbars. Related controls share a page when
 space permits; use the section selector and Previous/Next page controls to reach
 all options. Domain rules and watched channels have independent list pages.
-Settings window resizing and tool-download progress adjust page capacity without
-changing saved preferences. The main window has a fixed size, adjusted only when
-necessary to fit a smaller monitor work area.
+Settings window resizing adjusts page capacity without changing saved preferences.
+The main window has a fixed size, adjusted only when necessary to fit a smaller
+monitor work area, and has no scrollbar. Its buttons are Player, Lyrics & Tags,
+Video Encoder, Settings, Downloads and Output Folder, in that order. On short
+work areas they use two columns in reading order. Detailed download activity,
+saved links, ignored links, failures, and tool progress/cancellation are in the
+Downloads window; install or configure media tools in Settings → Tools.
 
 The 0.8.1 responsiveness candidate fixes a measured GUI geometry stall and adds
 visible tool-download progress and cancellation. See the
@@ -171,8 +175,8 @@ click once to show it, click again to hide it.
 - **No duplicates** — re-copying the same link doesn't re-trigger, and a
   yt-dlp download archive means previously downloaded videos are skipped
   (the popup offers "Download anyway" when yt-dlp detects one).
-- **Progress you can see** — live percent, speed and ETA in the panel and
-  Downloads window, parsed from yt-dlp's own output.
+- **Progress you can see** — live percent, speed and ETA in the Downloads
+  window, parsed from yt-dlp's own output.
 - **Full queue control** — in the Downloads window: reorder what's next,
   pause and resume (a resume continues the partial file, it doesn't
   restart it), retry failures with their original quality, and pause
@@ -188,8 +192,8 @@ click once to show it, click again to hide it.
   the panel and they're processed like copied links.
 - **A popup that shows its work** — thumbnail, resolution and
   approximate size before you commit, a per-download "Save to"
-  folder, and a "Later" button that parks the link in the panel's
-  Saved list for when you're ready.
+  folder, and a "Later" button that parks the link in the Downloads window's
+  Saved for later list for when you're ready.
 - **Subtitles-only and audio your way** — a preset that fetches
   just the subtitle files (`.srt`, no video or audio), and audio
   presets for MP3, M4A, Opus, FLAC, WAV or the original format.
@@ -231,7 +235,7 @@ click once to show it, click again to hide it.
 
 ## Screenshots
 
-The control panel — status, manual link downloads, recent activity:
+Historical v0.6.0 control panel capture (the current no-scroll layout differs):
 
 ![Control panel](docs/screenshots/panel.png)
 
@@ -297,12 +301,12 @@ that summary does not establish physical hardware or interactive GUI behaviour:
 
 Then:
 
-1. Run it. If yt-dlp is missing, the panel opens with an **Install yt-dlp**
-   button.
+1. Run it. If yt-dlp is missing, open **Settings → Tools** and select **Install**
+   in the yt-dlp section. Tool download progress appears in Downloads.
 2. Copy any supported link and try it.
 
 Optional: enable **Start with Windows** in Settings (per-user, no admin
-needed). If ffmpeg is missing, use the panel's **Install ffmpeg** button
+needed). If ffmpeg is missing, use **Settings → Tools** to install it
 (or drop `ffmpeg.exe` next to `yttraydl.exe` / on PATH yourself).
 
 For unattended Setup, missing tools are downloaded unless `/TOOLSDOWNLOAD=skip`

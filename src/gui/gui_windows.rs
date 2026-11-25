@@ -14,22 +14,12 @@ use yttraydl::settings::{
     AudioQuality, Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
 use yttraydl::window_geometry::{TransientWindow, WindowKind};
-use yttraydl::ytdlp::YtDlpSource;
 
 fn status_color(status: HistoryStatus) -> egui::Color32 {
     match status {
         HistoryStatus::Completed => OK_GREEN,
         HistoryStatus::Failed => ACCENT,
         HistoryStatus::Cancelled => TEXT_FAINT,
-    }
-}
-
-fn source_label(source: &YtDlpSource) -> &'static str {
-    match source {
-        YtDlpSource::UserConfigured => "path you set in Settings",
-        YtDlpSource::BesideExe => "next to ytTrayDL",
-        YtDlpSource::Managed => "ytTrayDL-managed copy",
-        YtDlpSource::Path => "found on PATH",
     }
 }
 
@@ -62,6 +52,119 @@ fn panel_regions(full: egui::Rect, header_bottom: f32) -> (egui::Rect, egui::Rec
         egui::pos2(full.right() - 12.0, body_bottom),
     );
     (body, footer)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainAction {
+    Player,
+    Tags,
+    Encoder,
+    Settings,
+    Downloads,
+    OutputFolder,
+}
+
+const MAIN_ACTIONS: [(MainAction, &str); 6] = [
+    (MainAction::Player, "Player"),
+    (MainAction::Tags, "Lyrics & Tags"),
+    (MainAction::Encoder, "Video Encoder"),
+    (MainAction::Settings, "Settings"),
+    (MainAction::Downloads, "Downloads"),
+    (MainAction::OutputFolder, "Output Folder"),
+];
+
+/// Preserve both visual and keyboard order. On a short work area use two
+/// columns instead of introducing a scrollbar or hiding controls.
+fn main_navigation_buttons(ui: &mut egui::Ui) -> Vec<(MainAction, egui::Response)> {
+    let gap = ui.spacing().item_spacing.y;
+    let columns = if ui.available_height() < 6.0 * (34.0 + gap) {
+        2
+    } else {
+        1
+    };
+    let mut buttons = Vec::with_capacity(MAIN_ACTIONS.len());
+    for row in MAIN_ACTIONS.chunks(columns) {
+        ui.horizontal(|ui| {
+            let width = ((ui.available_width()
+                - (columns - 1) as f32 * ui.spacing().item_spacing.x)
+                / columns as f32)
+                .max(1.0);
+            for &(action, label) in row {
+                let response = ui.add_sized([width, 34.0], egui::Button::new(label));
+                buttons.push((action, response));
+            }
+        });
+    }
+    buttons
+}
+
+struct MainControls {
+    download: bool,
+    monitoring_changed: bool,
+    auto_changed: bool,
+    buttons: Vec<(MainAction, egui::Response)>,
+}
+
+/// Actual fixed-height control panel content, shared with headless layout tests.
+fn main_controls(
+    ui: &mut egui::Ui,
+    manual_url: &mut String,
+    monitoring: &mut bool,
+    auto: &mut bool,
+    status: &str,
+) -> MainControls {
+    ui.add_space(2.0);
+    let mut download = false;
+    premium_card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(section_heading("Download a link"));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let button_width = 108.0;
+            let field_width =
+                (ui.available_width() - button_width - ui.spacing().item_spacing.x - 16.0)
+                    .max(80.0);
+            let input = ui
+                .add(
+                    egui::TextEdit::singleline(manual_url)
+                        .hint_text("Paste a video URL…")
+                        .desired_width(field_width),
+                )
+                .on_hover_text("Type or paste a URL, then press Enter or Download");
+            paint_focus_ring_for_field(ui, &input);
+            let clicked = ui
+                .add_sized(egui::vec2(button_width, 30.0), primary_button("Download"))
+                .on_hover_text("Open the download popup for this link")
+                .clicked();
+            download =
+                clicked || (input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.add(egui::Label::new(egui::RichText::new(status).color(TEXT_DIM)).truncate())
+            .on_hover_text(
+                "Configure or install media tools in Settings. Progress appears in Downloads.",
+            );
+    });
+    let mut monitoring_changed = false;
+    let mut auto_changed = false;
+    ui.horizontal_wrapped(|ui| {
+        monitoring_changed = switch(ui, monitoring)
+            .on_hover_text("Watch the clipboard for supported links")
+            .changed();
+        ui.label("Monitoring");
+        ui.add_space(12.0);
+        auto_changed = switch(ui, auto)
+            .on_hover_text("Skip the popup and download with your default preset")
+            .changed();
+        ui.label("Auto-download");
+    });
+    MainControls {
+        download,
+        monitoring_changed,
+        auto_changed,
+        buttons: main_navigation_buttons(ui),
+    }
 }
 
 fn flexible_title_row<R>(
@@ -186,6 +289,94 @@ mod layout_tests {
             // never the footer's hit region.
             assert!(body.height() < 2000.0);
             assert!(!body.intersects(footer));
+        }
+    }
+
+    #[test]
+    fn main_buttons_have_exact_order_and_fit_without_a_scrollbar() {
+        assert_eq!(
+            super::MAIN_ACTIONS.map(|(_, label)| label),
+            [
+                "Player",
+                "Lyrics & Tags",
+                "Video Encoder",
+                "Settings",
+                "Downloads",
+                "Output Folder"
+            ]
+        );
+        for size in [
+            egui::vec2(600.0, 730.0),
+            egui::vec2(400.0, 500.0),
+            egui::vec2(340.0, 420.0),
+        ] {
+            for status in [
+                "yt-dlp and ffmpeg ready",
+                "Download failed — open Downloads for details",
+                "yt-dlp missing — configure in Settings",
+            ] {
+                let ctx = egui::Context::default();
+                super::super::apply_theme(&ctx);
+                let mut observed = Vec::new();
+                let mut body = egui::Rect::NOTHING;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE)
+                            .show(ctx, |ui| {
+                                (body, _) =
+                                    super::panel_regions(ui.max_rect(), ui.max_rect().top() + 96.0);
+                                let mut child = ui.new_child(
+                                    egui::UiBuilder::new()
+                                        .max_rect(body)
+                                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                                );
+                                child.set_clip_rect(body);
+                                let mut url = String::new();
+                                let mut monitoring = false;
+                                let mut auto = false;
+                                let controls = super::main_controls(
+                                    &mut child,
+                                    &mut url,
+                                    &mut monitoring,
+                                    &mut auto,
+                                    status,
+                                );
+                                observed = controls
+                                    .buttons
+                                    .into_iter()
+                                    .map(|(action, response)| (action, response.rect))
+                                    .collect();
+                            });
+                    },
+                );
+                assert_eq!(
+                    observed
+                        .iter()
+                        .map(|(action, _)| *action)
+                        .collect::<Vec<_>>(),
+                    super::MAIN_ACTIONS
+                        .iter()
+                        .map(|(action, _)| *action)
+                        .collect::<Vec<_>>()
+                );
+                for (action, rect) in &observed {
+                    assert!(
+                        body.contains_rect(*rect),
+                        "{size:?} / {status}: {action:?} at {rect:?} outside {body:?}"
+                    );
+                }
+                for pair in observed.windows(2) {
+                    assert!(pair[1].1.top() >= pair[0].1.top());
+                    if pair[1].1.top() == pair[0].1.top() {
+                        assert!(pair[1].1.left() > pair[0].1.left());
+                    }
+                }
+            }
         }
     }
 
@@ -585,8 +776,8 @@ impl App {
         });
         ui.allocate_rect(band_rect, egui::Sense::hover());
 
-        // The footer has its own hit region. Long or populated body content
-        // scrolls within the remaining height instead of pushing it offscreen.
+        // Fixed layout: the main window never hosts a scrolling body. Dynamic
+        // download/history/saved/tool details live in the Downloads window.
         let (content_rect, footer_rect) = panel_regions(full, band_rect.bottom());
         let mut content = ui.new_child(
             egui::UiBuilder::new()
@@ -594,15 +785,7 @@ impl App {
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
         content.set_clip_rect(content_rect.intersect(ui.clip_rect()));
-        let mut body = egui::ScrollArea::vertical()
-            .id_salt("control-panel-body")
-            .auto_shrink([false, false])
-            .max_height(content_rect.height());
-        if self.scroll_to_tool_progress {
-            body = body.vertical_scroll_offset(0.0);
-            self.scroll_to_tool_progress = false;
-        }
-        body.show(&mut content, |ui| self.panel_body(ui));
+        self.panel_body(&mut content);
         let mut footer = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(footer_rect.shrink2(egui::vec2(12.0, 8.0)))
@@ -612,51 +795,70 @@ impl App {
     }
 
     fn panel_body(&mut self, ui: &mut egui::Ui) {
-        // Manual URL entry.
-        ui.add_space(12.0);
-        premium_card(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(section_heading("Download a link"));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                // Reserve the button FIRST (0.5.1). The 0.5.0 budget
-                // (available − 112) ran the row past the panel's
-                // right edge in the field: egui's TextEdit outer
-                // width is its desired_width PLUS its frame margin
-                // (2×8px \u2014 vendored egui 0.33.3 TextEdit
-                // builder), which the budget never subtracted, and
-                // the button's min_size was treated as its exact
-                // width. Now the button has a fixed size and the
-                // field gets what remains after button + spacing +
-                // the field's own margin.
-                let btn_w = 108.0;
-                let field_w =
-                    (ui.available_width() - btn_w - ui.spacing().item_spacing.x - 16.0).max(80.0);
-                let resp = ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.manual_url)
-                            .hint_text("Paste a video URL…")
-                            .desired_width(field_w),
-                    )
-                    .on_hover_text("Type or paste a URL, then press Enter or Download");
-                // Accent focus ring + deep-red outer glow (0.6.0).
-                paint_focus_ring_for_field(ui, &resp);
-                let go = ui
-                    .add_sized(egui::vec2(btn_w, 30.0), primary_button("Download…"))
-                    .on_hover_text("Open the download popup for this link")
-                    .clicked();
-                if (go || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
-                    && !self.manual_url.trim().is_empty()
-                {
-                    let url = self.manual_url.trim().to_string();
-                    self.manual_url.clear();
-                    self.handle_detected_url(&url, true);
+        // Fixed-size status remains bounded regardless of failures or downloads.
+        let status = if self.failure_notice.is_some() {
+            "Download failed — open Downloads for details"
+        } else if self.ytdlp_operation.is_some() || self.ffmpeg_operation.is_some() {
+            "Tool download in progress — open Downloads"
+        } else if !self.tool_status_ready {
+            "Checking tools"
+        } else if self.bin.is_some() && self.ffmpeg_ok {
+            "yt-dlp and ffmpeg ready"
+        } else if self.bin.is_none() {
+            "yt-dlp missing — configure in Settings"
+        } else {
+            "ffmpeg missing — configure in Settings"
+        };
+        let mut monitoring = self.settings.monitoring_enabled;
+        let mut auto = self.settings.default_action == DefaultAction::AutoDownload;
+        let controls = main_controls(ui, &mut self.manual_url, &mut monitoring, &mut auto, status);
+        if controls.download && !self.manual_url.trim().is_empty() {
+            let url = self.manual_url.trim().to_string();
+            self.manual_url.clear();
+            self.handle_detected_url(&url, true);
+        }
+        if controls.monitoring_changed {
+            self.settings.monitoring_enabled = monitoring;
+            self.settings_dirty = true;
+        }
+        if controls.auto_changed {
+            self.settings.default_action = if auto {
+                DefaultAction::AutoDownload
+            } else {
+                DefaultAction::Prompt
+            };
+            self.settings_dirty = true;
+        }
+        for (action, response) in controls.buttons {
+            if !response.clicked() {
+                continue;
+            }
+            match action {
+                MainAction::Player => {
+                    request_module(ui.ctx(), &mut self.show_player, "yttraydl-player")
                 }
-            });
-        });
+                MainAction::Tags => request_module(ui.ctx(), &mut self.show_tags, "yttraydl-tags"),
+                MainAction::Encoder => {
+                    request_module(ui.ctx(), &mut self.show_converter, "yttraydl-converter")
+                }
+                MainAction::Settings => self.show_settings = !self.show_settings,
+                MainAction::Downloads => {
+                    request_module(ui.ctx(), &mut self.show_downloads, "yttraydl-downloads")
+                }
+                MainAction::OutputFolder => {
+                    let folder = self.settings.download_folder.clone();
+                    let _ = std::fs::create_dir_all(&folder);
+                    if let Err(error) = platform::open_path(&folder) {
+                        self.toast(format!("Could not open folder: {error}"), ToastKind::Error);
+                    }
+                }
+            }
+        }
+    }
 
-        self.tool_progress_ui(ui);
-
+    // Unbounded or conditional content belongs in the separate Downloads
+    // viewport, where its existing scrolling and cancellation controls remain.
+    fn download_auxiliary_ui(&mut self, ui: &mut egui::Ui) {
         // Failure banner (0.4.0): the latest final failure, with
         // one-click retry — failures used to be easy to miss.
         if let Some(notice) = self.failure_notice.clone() {
@@ -695,430 +897,6 @@ impl App {
                         }
                     });
                 });
-        }
-
-        // yt-dlp / ffmpeg status — the ENGINE well (0.6.0):
-        // a recessed surface under a micro-label, per the
-        // premium mockup. The status rows are dot + strong
-        // item + faint right-aligned note; the install flows
-        // (ffmpeg missing / yt-dlp missing) keep their 0.5.0
-        // content inside the same well.
-        ui.add_space(10.0);
-        premium_well(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(section_heading("Engines"));
-            ui.add_space(4.0);
-            if !self.tool_status_ready {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Checking installed tools…");
-                });
-                return;
-            }
-            match &self.bin {
-                Some(bin) => {
-                    let version = self.ytdlp_version.clone().unwrap_or_else(|| "…".into());
-                    ui.horizontal(|ui| {
-                        status_dot(ui, OK_GREEN);
-                        ui.label(
-                            egui::RichText::new(format!("yt-dlp {version}"))
-                                .color(TEXT)
-                                .size(13.5),
-                        )
-                        .on_hover_text(bin.path.display().to_string());
-                        let remaining = ui.available_width();
-                        if remaining > 40.0 {
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(remaining, 20.0),
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(source_label(&bin.source))
-                                                .color(TEXT_FAINT)
-                                                .size(11.5),
-                                        )
-                                        .truncate(),
-                                    );
-                                },
-                            );
-                        }
-                    });
-                    if self.ffmpeg_ok {
-                        ui.horizontal(|ui| {
-                            status_dot(ui, OK_GREEN);
-                            ui.label(egui::RichText::new("ffmpeg found").color(TEXT).size(13.5));
-                            let remaining = ui.available_width();
-                            if remaining > 40.0 {
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(remaining, 20.0),
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(
-                                                    "merging and MP3 conversion available",
-                                                )
-                                                .color(TEXT_FAINT)
-                                                .size(11.5),
-                                            )
-                                            .truncate(),
-                                        );
-                                    },
-                                );
-                            }
-                        });
-                    } else {
-                        ui.add(egui::Label::new(egui::RichText::new("ffmpeg not found — best-quality streams that need merging and MP3 conversion will fail.").color(ACCENT)).wrap());
-                        ui.horizontal(|ui| {
-                            let busy = self.ffmpeg_fetch_rx.is_some();
-                            if ui
-                                .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "Install ffmpeg" }))
-                                .on_hover_text("Download the GyanD essentials build (about 110 MB) from gyan.dev into %APPDATA%\\ytTrayDL\\bin — the same folder as the managed yt-dlp")
-                                .clicked()
-                            {
-                                self.start_ffmpeg_download();
-                            }
-                            ui.label(
-                                egui::RichText::new("or put ffmpeg.exe next to ytTrayDL or on PATH")
-                                    .small()
-                                    .color(TEXT_DIM),
-                            );
-                        });
-                    }
-                }
-                None => {
-                    ui.label(
-                        egui::RichText::new(
-                            "yt-dlp is not installed yet — ytTrayDL can't download without it.",
-                        )
-                        .color(ACCENT)
-                        .strong(),
-                    );
-                    ui.label("One click installs the official standalone yt-dlp.exe from GitHub into ytTrayDL's own folder. Nothing else on your PC is changed.");
-                    ui.horizontal_wrapped(|ui| {
-                        let busy = self.ytdlp_fetch_rx.is_some();
-                        if ui
-                            .add_enabled(!busy, primary_button(if busy { "Downloading…" } else { "Install yt-dlp" }))
-                            .on_hover_text("Download yt-dlp.exe from github.com/yt-dlp/yt-dlp releases into %APPDATA%\\ytTrayDL\\bin")
-                            .clicked()
-                        {
-                            self.start_ytdlp_download();
-                        }
-                        if ui
-                            .button("Choose yt-dlp.exe…")
-                            .on_hover_text("Use a yt-dlp.exe you already have")
-                            .clicked()
-                        {
-                            if let Some(f) = pick_file("yt-dlp", "exe") {
-                                self.settings.ytdlp_path = f;
-                                self.settings_dirty = true;
-                                self.relocalize_binaries();
-                            }
-                        }
-                        if ui
-                            .button("Releases page")
-                            .on_hover_text("Open the yt-dlp releases page in your browser")
-                            .clicked()
-                        {
-                            let _ = platform::open_url("https://github.com/yt-dlp/yt-dlp/releases");
-                        }
-                    });
-                }
-            }
-        });
-
-        // Stacked quick controls and full-width navigation keep labels readable
-        // in the narrow layout while the body remains scrollable on small screens.
-        premium_card(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let mut monitoring = self.settings.monitoring_enabled;
-                if switch(ui, &mut monitoring)
-                    .on_hover_text("Watch the clipboard for supported links")
-                    .changed()
-                {
-                    self.settings.monitoring_enabled = monitoring;
-                    self.settings_dirty = true;
-                }
-                ui.label("Monitoring");
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                let mut auto = self.settings.default_action == DefaultAction::AutoDownload;
-                if switch(ui, &mut auto)
-                    .on_hover_text("Skip the popup and download with your default preset")
-                    .changed()
-                {
-                    self.settings.default_action = if auto {
-                        DefaultAction::AutoDownload
-                    } else {
-                        DefaultAction::Prompt
-                    };
-                    self.settings_dirty = true;
-                }
-                ui.label("Auto-download");
-            });
-        });
-        let width = ui.available_width();
-        let btn_size = egui::vec2(width, 34.0);
-        if icon_text_button(ui, IconKind::Gear, "Settings…", btn_size)
-            .on_hover_text("Show/hide the Settings window")
-            .clicked()
-        {
-            self.show_settings = !self.show_settings;
-        }
-        let active = self.downloads.active_count();
-        let label = if active > 0 {
-            format!("Downloads ({active} active)…")
-        } else {
-            "Downloads…".to_string()
-        };
-        if icon_text_button(ui, IconKind::Download, &label, btn_size)
-            .on_hover_text("Active downloads and history")
-            .clicked()
-        {
-            request_module(ui.ctx(), &mut self.show_downloads, "yttraydl-downloads");
-        }
-        if icon_text_button(ui, IconKind::Folder, "Download folder", btn_size)
-            .on_hover_text("Open the download folder in Explorer")
-            .clicked()
-        {
-            let folder = self.settings.download_folder.clone();
-            let _ = std::fs::create_dir_all(&folder);
-            if let Err(e) = platform::open_path(&folder) {
-                self.toast(format!("Could not open folder: {e}"), ToastKind::Error);
-            }
-        }
-
-        if ui
-            .add_sized(
-                [ui.available_width(), 34.0],
-                egui::Button::new("Video converter…"),
-            )
-            .on_hover_text("Open the local video converter")
-            .clicked()
-        {
-            request_module(ui.ctx(), &mut self.show_converter, "yttraydl-converter");
-        }
-
-        if ui
-            .add_sized(
-                [ui.available_width(), 34.0],
-                egui::Button::new("Lyrics & tags…"),
-            )
-            .on_hover_text("Open the local audio tag editor")
-            .clicked()
-        {
-            request_module(ui.ctx(), &mut self.show_tags, "yttraydl-tags");
-        }
-
-        if ui
-            .add_sized([ui.available_width(), 34.0], egui::Button::new("Player…"))
-            .on_hover_text("Open the local player queue")
-            .clicked()
-        {
-            request_module(ui.ctx(), &mut self.show_player, "yttraydl-player");
-        }
-
-        // Active downloads (compact).
-        let active: Vec<(u64, String, String, f32, Option<String>, JobState)> = self
-            .downloads
-            .running_jobs()
-            .chain(self.downloads.queued_jobs())
-            .map(|j| {
-                (
-                    j.id,
-                    j.title.clone(),
-                    j.url.clone(),
-                    j.percent,
-                    j.eta_text.clone(),
-                    j.state,
-                )
-            })
-            .collect();
-        if !active.is_empty() {
-            ui.add_space(8.0);
-            ui.label(section_heading("Downloading"));
-            let mut cancel: Option<u64> = None;
-            let mut previous_bottom = None;
-            for (id, title, url, pct, eta, state) in &active {
-                paint_entry_boundary(ui, previous_bottom);
-                let mut action_rects = Vec::new();
-                let (title_cell, ()) = flexible_title_row(
-                    ui,
-                    ("main-job", id),
-                    if title.is_empty() { url } else { title },
-                    &format!("{title}\n{url}"),
-                    &["✕"],
-                    |_| {},
-                    |ui| {
-                        if grid_action(ui.small_button("✕"), &mut action_rects)
-                            .on_hover_text(
-                                "Cancel this download (the partial file is kept for resume)",
-                            )
-                            .clicked()
-                        {
-                            cancel = Some(*id);
-                        }
-                    },
-                );
-                paint_grid_columns(ui, title_cell.rect, &action_rects);
-                ui.horizontal(|ui| {
-                    if *state == JobState::Queued {
-                        ui.label(egui::RichText::new("queued").color(TEXT_FAINT));
-                    } else {
-                        ui.add(egui::ProgressBar::new(pct / 100.0).desired_width(90.0));
-                        let metadata = format!(
-                            "{pct:.0}%{}",
-                            eta.as_ref()
-                                .map(|e| format!(" · ETA {e}"))
-                                .unwrap_or_default()
-                        );
-                        ui.add(egui::Label::new(&metadata).truncate())
-                            .on_hover_text(metadata);
-                    }
-                });
-                previous_bottom = Some(ui.min_rect().bottom());
-            }
-            if let Some(id) = cancel {
-                self.downloads.cancel(id);
-            }
-        }
-
-        // Recent history.
-        if !self.history.entries.is_empty() {
-            ui.add_space(8.0);
-            ui.label(section_heading("Recent"));
-            type RecentRow = (
-                String,
-                HistoryStatus,
-                Option<std::path::PathBuf>,
-                String,
-                String,
-                i64,
-            );
-            let recent: Vec<RecentRow> = self
-                .history
-                .recent(5)
-                .iter()
-                .map(|e| {
-                    (
-                        e.title.clone(),
-                        e.status,
-                        e.file.clone(),
-                        e.url.clone(),
-                        e.preset_label.clone(),
-                        e.finished_at_unix,
-                    )
-                })
-                .collect();
-            let mut open_file: Option<std::path::PathBuf> = None;
-            for (title, status, file, url, preset_label, finished_at) in &recent {
-                // Each entry is a small raised card (0.6.0):
-                // gradient thumbnail tile with a play triangle,
-                // two-line text (title + host · quality · time —
-                // history stores no uploader or duration, so the
-                // mockup's meta line is built from what history
-                // does record), the painted status dot, and the
-                // folder button. Widths are budgeted exactly as
-                // in 0.5.1: tile, text, dot and button all have
-                // fixed shares and the title truncates inside
-                // its share, so the row fits at 340px too.
-                let shown = egui::Frame::NONE
-                    .fill(CARD)
-                    .stroke(egui::Stroke::new(1.0_f32, HAIRLINE))
-                    .corner_radius(RADIUS)
-                    .inner_margin(egui::Margin::symmetric(10, 7))
-                    .outer_margin(egui::Margin {
-                        left: 0,
-                        right: 0,
-                        top: 0,
-                        bottom: 6,
-                    })
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let (tile, _) = ui
-                                .allocate_exact_size(egui::vec2(56.0, 32.0), egui::Sense::hover());
-                            paint_vertical_gradient(
-                                ui.painter(),
-                                tile,
-                                7.0,
-                                egui::Color32::from_rgb(0x3A, 0x22, 0x26),
-                                egui::Color32::from_rgb(0x1C, 0x14, 0x18),
-                            );
-                            let c = tile.center();
-                            ui.painter().add(egui::Shape::convex_polygon(
-                                vec![
-                                    egui::pos2(c.x - 5.0, c.y - 7.0),
-                                    egui::pos2(c.x - 5.0, c.y + 7.0),
-                                    egui::pos2(c.x + 7.0, c.y),
-                                ],
-                                egui::Color32::WHITE,
-                                egui::Stroke::NONE,
-                            ));
-                            let spacing = ui.spacing().item_spacing.x;
-                            let btn_w = if file.is_some() { 30.0 } else { 0.0 };
-                            let text_w = (ui.available_width()
-                                - 10.0
-                                - spacing
-                                - btn_w
-                                - if file.is_some() { spacing } else { 0.0 })
-                            .max(40.0);
-                            let meta = format!(
-                                "{} · {} · {}",
-                                host_of(url),
-                                preset_label,
-                                local_time_hhmm(*finished_at)
-                            );
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(text_w, 34.0),
-                                egui::Layout::top_down(egui::Align::Min),
-                                |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(title.clone())
-                                                .color(TEXT)
-                                                .size(13.0),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(title.clone());
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(meta).color(TEXT_FAINT).size(11.5),
-                                        )
-                                        .truncate(),
-                                    );
-                                },
-                            );
-                            // Painted dot, not the "●" character
-                            // (0.5.1 — U+25CF is missing from
-                            // egui's default font and rendered
-                            // as a hollow square in the field).
-                            status_dot(ui, status_color(*status));
-                            if let Some(f) = file {
-                                if icon_text_button(
-                                    ui,
-                                    IconKind::Folder,
-                                    "",
-                                    egui::vec2(btn_w, 24.0),
-                                )
-                                .on_hover_text("Show in Explorer")
-                                .clicked()
-                                {
-                                    open_file = Some(f.clone());
-                                }
-                            }
-                        });
-                    });
-                paint_top_highlight(ui.painter(), shown.response.rect, RADIUS as f32);
-            }
-            if let Some(f) = open_file {
-                if let Some(parent) = f.parent() {
-                    let _ = platform::open_path(parent);
-                }
-            }
         }
 
         // Saved for later (0.4.0): links parked from the popup.
@@ -1207,7 +985,7 @@ impl App {
             if ui
                 .add_sized(
                     hide_size,
-                    egui::Button::new("Hide tray icon…").truncate(),
+                    egui::Button::new("Hide tray icon").truncate(),
                 )
                 .on_hover_text("Run without a tray icon. Relaunch ytTrayDL or press Ctrl+Alt+G to get it back.")
                 .clicked()
@@ -2425,6 +2203,8 @@ impl App {
                         ui.separator();
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.tool_progress_ui(ui);
+                        self.download_auxiliary_ui(ui);
                         premium_card(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(section_heading("Active"));

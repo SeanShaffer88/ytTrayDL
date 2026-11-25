@@ -1339,6 +1339,7 @@ mod geometry_cache_tests {
         DestroyWindow, UnregisterClassW, WM_CLOSE, WM_GETTEXT,
     };
     static SLOW_TEXT_CALLS: AtomicU32 = AtomicU32::new(0);
+    // SAFETY: Windows calls this procedure with its documented HWND/message ABI.
     unsafe extern "system" fn slow_window(
         hwnd: HWND,
         message: u32,
@@ -1355,6 +1356,8 @@ mod geometry_cache_tests {
         }
         DefWindowProcW(hwnd, message, w, l)
     }
+    // SAFETY: callers provide a terminated class name and valid Win32 window
+    // procedure; returned windows are destroyed before unregistering the class.
     unsafe fn create(
         class: &[u16],
         title: &str,
@@ -1387,6 +1390,8 @@ mod geometry_cache_tests {
     fn geometry_cache_excludes_other_thread_text_and_invalidates_destroyed_windows() {
         let (tx, rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
+        // SAFETY: the thread owns its test window, class and message pump;
+        // all names and output records remain live for their Win32 calls.
         let foreign = std::thread::spawn(move || unsafe {
             let class = wide(&format!("ytTrayDL-slow-field-{}", GetCurrentThreadId()));
             let window = create(&class, "Owned other-thread sentinel", slow_window);
@@ -1403,6 +1408,8 @@ mod geometry_cache_tests {
         assert!(!other.is_null());
         let mut text = [0u16; 64];
         let control = Instant::now();
+        // SAFETY: the foreign test window is alive and text is a writable
+        // buffer with the passed length; the window is closed only afterward.
         unsafe {
             GetWindowTextW(other, text.as_mut_ptr(), text.len() as i32);
         }
@@ -1412,6 +1419,8 @@ mod geometry_cache_tests {
         let missing = find_owned_window("Absent owned field window");
         let lookup_duration = lookup.elapsed();
         let crossed = SLOW_TEXT_CALLS.load(Ordering::Relaxed);
+        // SAFETY: other is the borrowed live test HWND; failure does not
+        // transfer ownership or invalidate Rust memory.
         unsafe {
             PostMessageW(other, WM_CLOSE, 0, 0);
         }
@@ -1427,6 +1436,9 @@ mod geometry_cache_tests {
             lookup_duration < Duration::from_millis(100),
             "geometry lookup entered the armed 150ms stall"
         );
+        // SAFETY: this thread owns both test windows and class; each window is
+        // destroyed before unregistering, and cached stale handles are queried
+        // only through Win32 validation functions.
         unsafe {
             let class = wide(&format!("ytTrayDL-cache-field-{}", GetCurrentThreadId()));
             let first = create(&class, "ytTrayDL", DefWindowProcW);
@@ -1448,6 +1460,9 @@ mod owned_clipboard_tests {
     #[test]
     fn native_owned_allocation_is_bounded() {
         use windows_sys::Win32::System::Memory::*;
+        // SAFETY: this test owns the GlobalAlloc allocation, locks it while
+        // accessing the measured extent, unlocks before decoding, and frees it
+        // exactly once after both checks.
         unsafe {
             let data = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 4);
             assert!(!data.is_null());

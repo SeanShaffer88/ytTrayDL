@@ -188,27 +188,6 @@ jobs:
           gh run download "$RUN_ID" --name release-packages --dir checked
           RELEASE_URL=$(gh release view "$TAG" --json apiUrl --jq .apiUrl)
           gh api "$RELEASE_URL" > release.json
-          python3 - "$VERSION" <<'PYCODE'
-          import hashlib, json, pathlib, sys
-          version = sys.argv[1]
-          root = pathlib.Path('checked')
-          expected = {'SHA256SUMS.txt', f'ytTrayDL-Setup-v{version}-windows-x64.exe', f'ytTrayDL-v{version}-windows-x64.zip', f'ytTrayDL-v{version}-real-media-evidence.json'}
-          assert {p.name for p in root.iterdir()} == expected, 'Unexpected build artifact inventory'
-          release = json.load(open('release.json'))
-          assert release['draft'] and release['tag_name'] == f'v{version}', 'Expected the matching draft release'
-          remote = {a['name']: a for a in release['assets']}
-          assert set(remote) == expected, 'Unexpected release asset inventory'
-          for name in expected:
-              data = (root / name).read_bytes()
-              asset = remote[name]
-              assert asset['state'] == 'uploaded' and asset['size'] == len(data)
-              assert asset['digest'] == 'sha256:' + hashlib.sha256(data).hexdigest(), f'Uploaded digest mismatch: {name}'
-          sums = {}
-          for line in (root / 'SHA256SUMS.txt').read_text().splitlines():
-              digest, name = line.split('  ', 1)
-              sums[name] = digest
-          assert set(sums) == expected - {'SHA256SUMS.txt'}
-          for name, digest in sums.items():
-              assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, f'Checksum mismatch: {name}'
-          PYCODE
+          COMMIT=$(python3 -c 'import json; print(json.load(open("run.json"))["head_sha"])')
+          python3 tools/verify_release_assets.py checked release.json "$VERSION" "$COMMIT"
           gh release edit "$TAG" --draft=false

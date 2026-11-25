@@ -15,7 +15,15 @@ fn main() {
         }
     }
     let mode = args.last().unwrap();
-    if mode == "probe-hang" {
+    if mode == "fixture-fail" {
+        eprintln!("ERROR: synthetic fixture failure");
+        std::process::exit(3);
+    } else if mode == "fixture-argv" {
+        assert_eq!(args.iter().filter(|arg| *arg == "--").count(), 1);
+        assert_eq!(args[args.len() - 2], "--");
+        assert!(args.iter().any(|arg| arg == "--no-playlist"));
+        println!("yttraydl:final:fixture.mp4");
+    } else if mode == "probe-hang" {
         loop {
             std::thread::sleep(Duration::from_secs(1));
         }

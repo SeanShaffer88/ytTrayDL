@@ -178,3 +178,38 @@ fn background_shutdown_cancels_and_joins_owned_probe() {
     });
     tasks.spawn(|_| panic!("shutdown must prevent new work"));
 }
+
+#[test]
+fn native_fixture_checks_queue_argv_and_failure_without_network() {
+    let settings = Settings {
+        low_disk_threshold_mb: 0,
+        max_concurrent_downloads: 1,
+        ..Settings::default()
+    };
+    let mut manager = DownloadManager::new();
+    manager.enqueue("fixture-argv".into(), "argv".into(), Preset::Best, false);
+    manager.enqueue("fixture-fail".into(), "failure".into(), Preset::Best, false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        manager.pump(&settings, Some(fixture()));
+        manager.poll_events();
+        if manager.finished_jobs().len() == 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "queue did not drain");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let jobs = manager.finished_jobs();
+    assert_eq!(jobs[0].state, JobState::Failed);
+    assert!(jobs[0]
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("synthetic fixture failure"));
+    assert_eq!(jobs[1].state, JobState::Done);
+    assert_eq!(
+        jobs[1].final_file.as_deref(),
+        Some(Path::new("fixture.mp4"))
+    );
+    manager.shutdown();
+}

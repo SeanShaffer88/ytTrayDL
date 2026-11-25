@@ -39,3 +39,10 @@ check in generated crash artifacts containing private clipboard data. Add small,
 synthetic reproductions to the seed corpus after reviewing them.
 
 For vulnerabilities, follow [SECURITY.md](SECURITY.md), not a public issue.
+
+## Hardware encoding reports
+
+Community testing on real Windows hardware is welcome. Please use the fields in
+[the hardware matrix](docs/HARDWARE-ENCODING-MATRIX.md) and report both success
+and failure, with logs sanitized of personal paths and other private data. Do not
+assume encoder availability proves a working GPU/driver combination.

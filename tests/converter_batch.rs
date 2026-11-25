@@ -47,3 +47,66 @@ fn progress_stream_keeps_bounded_tail_instead_of_failing_on_large_output() {
     )
     .unwrap();
 }
+
+#[test]
+fn failed_copy_falls_back_without_leaving_partial_copy_or_overwriting() {
+    use yttraydl::converter::{
+        prepare_conversion, run_prepared_batch, ConversionMethod, ConversionOptions,
+        OptimizedProgress, TrimRange, VideoProfile,
+    };
+    let root = std::env::temp_dir().join(format!("yttraydl-copy-fallback-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let input = root.join("input.mp4");
+    let output = root.join("output.mp4");
+    std::fs::write(&input, b"input").unwrap();
+    let fake = std::path::Path::new(env!("CARGO_BIN_EXE_process_fixture"));
+    let options = ConversionOptions {
+        trim: TrimRange::parse("1", "2").unwrap(),
+        ..Default::default()
+    };
+    let job = prepare_conversion(fake, &input, &output, VideoProfile::Mp4, options).unwrap();
+    let mut events = Vec::new();
+    let methods = run_prepared_batch(&[job], Some(fake), &CancellationToken::default(), |event| {
+        events.push(event)
+    })
+    .unwrap();
+    assert_eq!(methods, [ConversionMethod::Reencode]);
+    assert!(events.contains(&OptimizedProgress::Method {
+        index: 1,
+        total: 1,
+        method: ConversionMethod::Reencode,
+        fallback: true
+    }));
+    assert_eq!(std::fs::read(&output).unwrap(), b"reencoded");
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cancellation_before_copy_starts_creates_no_output() {
+    use yttraydl::converter::{
+        prepare_conversion, run_prepared_batch, ConversionOptions, OptimizedProgress, TrimRange,
+        VideoProfile,
+    };
+    let root = std::env::temp_dir().join(format!("yttraydl-copy-cancel-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let input = root.join("input.mp4");
+    let output = root.join("output.mp4");
+    std::fs::write(&input, b"input").unwrap();
+    let fake = std::path::Path::new(env!("CARGO_BIN_EXE_process_fixture"));
+    let options = ConversionOptions {
+        trim: TrimRange::parse("1", "2").unwrap(),
+        ..Default::default()
+    };
+    let job = prepare_conversion(fake, &input, &output, VideoProfile::Mp4, options).unwrap();
+    let token = CancellationToken::default();
+    let result = run_prepared_batch(&[job], Some(fake), &token, |event| {
+        if matches!(event, OptimizedProgress::Method { .. }) {
+            token.cancel();
+        }
+    });
+    assert!(result.unwrap_err().contains("cancel"));
+    assert!(!output.exists());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}

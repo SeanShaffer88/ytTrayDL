@@ -326,3 +326,113 @@ fn ffmpeg_extracts_audio_profiles_from_video() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn real_stream_copy_batch_and_publication_race() {
+    use yttraydl::converter::{
+        prepare_batch, prepare_conversion, run_prepared_batch, ConversionMethod, ConversionOptions,
+        OptimizedProgress, Rotation,
+    };
+    let (Some(ffmpeg), Some(ffprobe)) = (
+        std::env::var_os("YTTRAYDL_TEST_FFMPEG").map(PathBuf::from),
+        std::env::var_os("YTTRAYDL_TEST_FFPROBE").map(PathBuf::from),
+    ) else {
+        eprintln!("Skipping optimized trim integration: ffmpeg and ffprobe are not configured");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("yttraydl-copy-media-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let first = dir.join("first.mp4");
+    let second = dir.join("second.mp4");
+    let token = CancellationToken::default();
+    let fixture = ProcessSpec::new(&ffmpeg)
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=64x64:rate=10",
+            "-t",
+            "3",
+            "-c:v",
+            "libx264",
+            "-g",
+            "10",
+            "-n",
+        ])
+        .arg(&first);
+    run_capture(&fixture, ProcessLimits::default(), &token).unwrap();
+    std::fs::copy(&first, &second).unwrap();
+    let options = ConversionOptions {
+        trim: TrimRange::parse("0.4", "1.8").unwrap(),
+        ..Default::default()
+    };
+    let jobs = prepare_batch(
+        &ffmpeg,
+        &[first.clone(), second],
+        &dir,
+        VideoProfile::Mp4,
+        options,
+    )
+    .unwrap();
+    let methods = run_prepared_batch(&jobs, Some(&ffprobe), &token, |_| {}).unwrap();
+    assert_eq!(
+        methods,
+        [ConversionMethod::StreamCopy, ConversionMethod::StreamCopy]
+    );
+    for name in ["first.converted.mp4", "second.converted.mp4"] {
+        let probe = ProcessSpec::new(&ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "csv=p=0",
+                "-i",
+            ])
+            .arg(dir.join(name));
+        let result = run_capture(&probe, ProcessLimits::default(), &token).unwrap();
+        assert!(String::from_utf8_lossy(&result.stdout).contains("h264"));
+    }
+    let transformed = dir.join("rotated.mp4");
+    let job = prepare_conversion(
+        &ffmpeg,
+        &first,
+        &transformed,
+        VideoProfile::Mp4,
+        ConversionOptions {
+            rotation: Rotation::HalfTurn,
+            ..options
+        },
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    assert_eq!(
+        run_prepared_batch(&[job], Some(&ffprobe), &token, |event| events.push(event)).unwrap(),
+        [ConversionMethod::Reencode]
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        OptimizedProgress::Method {
+            method: ConversionMethod::Reencode,
+            fallback: false,
+            ..
+        }
+    )));
+    let collision = dir.join("collision.mp4");
+    let job = prepare_conversion(&ffmpeg, &first, &collision, VideoProfile::Mp4, options).unwrap();
+    std::fs::write(&collision, b"do not replace").unwrap();
+    assert!(run_prepared_batch(&[job], Some(&ffprobe), &token, |_| {})
+        .unwrap_err()
+        .contains("publish"));
+    assert_eq!(std::fs::read(&collision).unwrap(), b"do not replace");
+    assert!(!std::fs::read_dir(&dir).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".yttraydl-trim-")));
+    std::fs::remove_dir_all(dir).unwrap();
+}

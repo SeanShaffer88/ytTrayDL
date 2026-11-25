@@ -132,7 +132,7 @@ impl App {
             };
             let result = player::locate_ffplay(explicit, ffmpeg.as_deref())
                 .ok_or_else(|| {
-                    "ffplay not found. Select ffplay or install it next to ffmpeg or on PATH"
+                    "Playback not started: ffplay not found. Check the explicit path in Media & playback options, or install ffplay next to ffmpeg or on PATH"
                         .to_string()
                 })
                 .and_then(|bin| player::build_playback(&bin, &input, volume))
@@ -312,6 +312,12 @@ impl App {
                     egui::ScrollArea::vertical().id_salt("player-options").max_height(max_options_height).auto_shrink([false, true]).show(ui, |ui| {
                     ui.add_enabled_ui(!busy, |ui| {
                         ui.label("ffplay executable (optional; not included in the managed ffmpeg download)");
+                        ui.label("An explicit path overrides auto-detection; clear it to search next to ffmpeg and on PATH.");
+                        if ui.link("Get ffplay / FFmpeg downloads").clicked() {
+                            if let Err(error) = yttraydl::platform::open_url("https://ffmpeg.org/download.html") {
+                                state.status = format!("Could not open download page: {error}");
+                            }
+                        }
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut state.ffplay_path).desired_width((ui.available_width() - 90.0).max(40.0)).hint_text("Auto-detect next to ffmpeg or on PATH"));
                             if ui.button("Browse…").clicked() {

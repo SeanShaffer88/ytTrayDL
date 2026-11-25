@@ -22,7 +22,12 @@ jobs:
       - name: Install minimum Rust toolchain
         run: rustup toolchain install 1.89.0 --profile minimal --no-self-update
       - name: Check full locked graph on minimum Rust
-        run: cargo +1.89.0 check --all-targets --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          if cargo +1.89.0 check --all-targets --locked 2>&1 | tee msrv-check.log; then exit 0; fi
+          python -c 'import pathlib; s=pathlib.Path("msrv-check.log").read_text(errors="replace")[-3000:]; print("::error title=MSRV check details::" + s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+          exit 1
       - name: Check field harness on minimum Rust
         run: cargo +1.89.0 check --all-targets --features field-validation --locked
 
@@ -36,7 +41,12 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (host)
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          if cargo clippy --all-targets --all-features --locked -- -D warnings 2>&1 | tee host-clippy.log; then exit 0; fi
+          python -c 'import pathlib; s=pathlib.Path("host-clippy.log").read_text(errors="replace")[-3000:]; print("::error title=Host clippy details::" + s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+          exit 1
       - name: Tests (full suite)
         run: cargo test --locked
       - name: Field harness clippy (host)
@@ -116,6 +126,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Test release media evidence export
+        shell: pwsh
+        run: |
+          try { ./tools/Test-ReleaseMediaEvidence.ps1 } catch {
+            $message = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Media evidence exporter test::$message"
+            throw
+          }
       - name: Build owned process runner
         shell: pwsh
         run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/process-runner"
@@ -131,6 +149,13 @@ jobs:
       - name: Resolve hash-pinned real tools
         shell: pwsh
         run: ./tools/Get-FieldTools.ps1 -Destination "$env:RUNNER_TEMP/field-tools" -ProcessRunner "$env:RUNNER_TEMP/process-runner/InstallerStateProbe.exe"
+      - name: Test real converter media
+        shell: pwsh
+        run: |
+          $env:YTTRAYDL_TEST_FFMPEG = $env:FIELD_FFMPEG
+          $env:YTTRAYDL_TEST_FFPROBE = $env:FIELD_FFPROBE
+          cargo test --locked --test converter_media
+          if ($LASTEXITCODE -ne 0) { throw "Converter media tests failed: $LASTEXITCODE" }
       - name: Build real media harness
         run: cargo build --locked --features field-validation --bin field_validation
       - name: Exercise real media and process lifecycle
@@ -138,7 +163,18 @@ jobs:
         run: |
           $harness = (Resolve-Path './target/debug/field_validation.exe').Path
           ./tools/Invoke-MediaFieldValidation.ps1 -Harness $harness -YtDlp $env:FIELD_YTDLP -FFmpeg $env:FIELD_FFMPEG -FFprobe $env:FIELD_FFPROBE -Root "$env:RUNNER_TEMP/media-evidence" -Scenario all -TimeoutSeconds 120
-          if ($LASTEXITCODE -ne 0) { throw "Media field assertions failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            $code = $LASTEXITCODE
+            $report = Join-Path $env:RUNNER_TEMP 'media-evidence/evidence.json'
+            if (Test-Path -LiteralPath $report) {
+              $evidence = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+              $details = @($evidence.scenarios | Where-Object { $_.status -ne 'passed' } | ForEach-Object { "$($_.scenario): $($_.error)" }) -join "`n"
+              if ($evidence.error) { $details += "`n$($evidence.error)" }
+              $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Media field details::$details"
+            }
+            throw "Media field assertions failed: $code"
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

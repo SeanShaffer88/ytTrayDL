@@ -4517,8 +4517,13 @@ dependencies = [
  "tray-icon",
  "windows-sys 0.59.0",
  "winresource",
+ "yttraydl-property-check",
  "zip",
 ]
+
+[[package]]
+name = "yttraydl-property-check"
+version = "0.1.0"
 
 [[package]]
 name = "zbus"

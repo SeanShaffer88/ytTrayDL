@@ -78,6 +78,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+yttraydl-property-check = { path = "tools/property-check" }
+
 [build-dependencies]
 winresource = "0.1"
 

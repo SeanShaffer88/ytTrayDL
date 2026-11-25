@@ -1,0 +1,17 @@
+name: Inspect upstream release signature
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch published release metadata and signed checksums
+        run: |
+          tag=2026.11.23
+          base="https://github.com/yt-dlp/yt-dlp/releases/download/$tag"
+          curl -fsSL "$base/SHA2-256SUMS" -o sums
+          curl -fsSL "$base/SHA2-256SUMS.sig" -o sums.sig
+          echo "::notice::SUMS $(base64 -w0 sums)"
+          echo "::notice::SIG $(base64 -w0 sums.sig)"

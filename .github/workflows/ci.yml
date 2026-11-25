@@ -118,7 +118,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test release media evidence export
         shell: pwsh
-        run: ./tools/Test-ReleaseMediaEvidence.ps1
+        run: |
+          try { ./tools/Test-ReleaseMediaEvidence.ps1 } catch {
+            $message = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Media evidence exporter test::$message"
+            throw
+          }
       - name: Build owned process runner
         shell: pwsh
         run: ./tools/Build-InstallerStateProbe.ps1 -Destination "$env:RUNNER_TEMP/process-runner"

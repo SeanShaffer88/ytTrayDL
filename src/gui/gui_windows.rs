@@ -14,12 +14,22 @@ use yttraydl::settings::{
     AudioQuality, Container, DefaultAction, DetectionScope, PopupPosition, Preset, QueueEmptyAction,
 };
 use yttraydl::window_geometry::{TransientWindow, WindowKind};
+use yttraydl::ytdlp::YtDlpSource;
 
 fn status_color(status: HistoryStatus) -> egui::Color32 {
     match status {
         HistoryStatus::Completed => OK_GREEN,
         HistoryStatus::Failed => ACCENT,
         HistoryStatus::Cancelled => TEXT_FAINT,
+    }
+}
+
+fn source_label(source: &YtDlpSource) -> &'static str {
+    match source {
+        YtDlpSource::UserConfigured => "path you set in Settings",
+        YtDlpSource::BesideExe => "next to ytTrayDL",
+        YtDlpSource::Managed => "ytTrayDL-managed copy",
+        YtDlpSource::Path => "found on PATH",
     }
 }
 

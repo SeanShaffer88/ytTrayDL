@@ -23,3 +23,8 @@ transitive crate without compatible upstream APIs risks breaking platform builds
 these are tracked rather than hidden behind broad exemptions. See the historical
 [dependency review](RELEASE-0.8.0.md#dependency-review) and
 [audit](AUDIT-2026-11-21.md#dependency-resolution).
+
+The GUI font package declares the SIL Open Font License 1.1 and Ubuntu Font
+Licence 1.0 in addition to MIT/Apache; the policy explicitly allows those font
+licenses for this dependency graph. This is a compatibility review aid, not a
+claim that the existing third-party notices cover every historical dependency.

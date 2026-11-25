@@ -79,7 +79,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-yttraydl-property-check = { path = "tools/property-check" }
+yttraydl-property-check = { version = "0.1.0", path = "tools/property-check" }
 
 [build-dependencies]
 winresource = "0.1"

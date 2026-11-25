@@ -295,6 +295,10 @@ fn errors_cancellation_hash_truncation_and_version_failure_preserve_previous_man
             bad_version: true,
             ..Default::default()
         },
+        FakeHost {
+            bad_signature: true,
+            ..Default::default()
+        },
     ] {
         assert!(install(&root.0, ProvisionSelection::All, &host).is_err());
         assert_eq!(fs::read(root.0.join("current-tools.json")).unwrap(), before);
@@ -838,6 +842,21 @@ fn signature_sidecars_require_unique_official_release_assets() {
     assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_ok());
     assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 100).is_err());
     assert!(resolve_sidecar(&encoded(&data), "other", name, 8192).is_err());
+    for (field, invalid) in [
+        (
+            "browser_download_url",
+            json!("https://attacker.invalid/signature"),
+        ),
+        ("digest", json!("sha256:invalid")),
+        ("size", json!(0)),
+    ] {
+        let mut modified = data.clone();
+        modified["assets"][1][field] = invalid;
+        assert!(
+            resolve_sidecar(&encoded(&modified), "2026.10.26", name, 8192).is_err(),
+            "{field}"
+        );
+    }
     data["assets"].as_array_mut().unwrap().push(entry);
     assert!(resolve_sidecar(&encoded(&data), "2026.10.26", name, 8192).is_err());
 }

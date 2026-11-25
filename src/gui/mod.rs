@@ -24,7 +24,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use yttraydl::dedupe::SeenCache;
 use yttraydl::download::{DownloadEvent, DownloadManager, JobState};
-use yttraydl::history::{now_unix, History, HistoryEntry};
+use yttraydl::history::{now_unix, History, HistoryEntry, HistoryStatus};
 #[cfg(windows)]
 use yttraydl::platform;
 use yttraydl::platform::{PlatformEvent, PlatformSetup};

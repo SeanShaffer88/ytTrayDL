@@ -623,7 +623,7 @@ Known limitations are listed in `docs/DESIGN.md`.
   downloader queue/failure scenario, contributor examples and extracted common
   GUI widgets into their own module.
 - Documented least-privilege/offline tool setup and the current release-metadata
-  checksum trust model. Independent upstream OpenPGP signature verification is
-  **not yet implemented**. See the security policy before relying on it.
+  checksum trust model. Added fail-closed yt-dlp release-signature verification
+  against the pinned key; see the security policy for scope and rotation limits.
 - Verification and remaining limitations are recorded in the PR; interactive
   Windows desktop behavior is not established by Linux or hosted CI alone.

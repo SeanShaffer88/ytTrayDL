@@ -123,6 +123,8 @@ managed one. To provision later, use the app's Tools UI or its documented CLI.
 
 Managed provisioning downloads release assets over HTTPS and requires their
 published size and SHA-256 metadata; it verifies the exact bytes before use.
-It resolves versions at provisioning time, not as immutable pins baked into the
-installer. This integrity check and its limits, including the lack of detached
-signature verification, are described in [SECURITY.md](../SECURITY.md).
+It resolves versions at provisioning time, not as immutable version pins baked
+into the installer. For yt-dlp, the signed SHA-256 list is additionally checked
+against a pinned upstream release key and its executable digest must match. For
+ffmpeg, independent signature verification is not implemented. Details and key
+rotation limitations are described in [SECURITY.md](../SECURITY.md).

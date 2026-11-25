@@ -26,4 +26,4 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          cargo deny --locked --color never check 2>&1 | tee /tmp/deny.log || { python3 -c 'print("::error::" + open("/tmp/deny.log").read()[-12000:].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))'; exit 1; }
+          cargo deny --locked --color never check 2>&1 | tee /tmp/deny.log || { python3 -c 'print("::error::" + "\n".join(line for line in open("/tmp/deny.log") if "error[" in line or "error:" in line or "license" in line or "checks" in line)[:12000].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))'; exit 1; }

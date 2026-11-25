@@ -21,8 +21,10 @@ for the provisioning and preservation contract.
 
 Retain sanitized evidence with the exact release candidate; do not publish user
 paths, tokens, private media or credentials. Hosted installer CI and its artifacts
-provide separate automated evidence. The candidate release workflow attaches a sanitized real-media evidence summary;
-the new release flow still requires hosted validation.
+provide separate automated evidence. The candidate release workflow attaches a sanitized real-media evidence summary.
+Hosted preflight [45547968517](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45547968517)
+passed for commit `e588cb5`; actual tagged publication and draft repair remain
+unverified.
 
 ## Hosted automation
 
@@ -31,8 +33,10 @@ stable version strictly older than the candidate (selected from the first 100
 releases and checked against its published checksum), uninstall followed by
 reinstall, and installed-app `--provision-tools all` with a fresh report. The
 report scenario also checks that an existing report is refused without changing
-its bytes or the managed-tool manifest. The candidate runs remain required;
-these silent tests cannot establish interactive wizard or physical desktop
+its bytes or the managed-tool manifest, and compares report paths and hashes to
+the actual activated tools. Hosted CI [45547947249](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45547947249)
+passed these scenarios for commit `e588cb5`; repeat them for each candidate.
+These silent tests cannot establish interactive wizard or physical desktop
 behaviour. Historical baseline jobs remain separate regression tests.
 
 The GitHub release API and published checksum are from the same repository and

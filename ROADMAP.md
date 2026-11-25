@@ -36,16 +36,20 @@ app version, environment, steps and outcomes when evidence becomes available.
 
 ## Milestone 3 — installer and release hardening
 
-- [ ] Run the expanded disposable Windows installer CI on the exact candidate:
-  clean install, previous stable upgrade, uninstall/reinstall, offline skip and
-  fresh provisioning report. Review the per-scenario evidence. The interactive
-  steps in the [installer checklist](docs/INSTALLER-VERIFICATION.md) remain open.
+- [x] Exercise clean install, previous-stable upgrade, uninstall/reinstall,
+  offline skip and fresh provisioning report in disposable hosted Windows CI
+  [45547947249](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45547947249)
+  for commit `e588cb5`. The interactive steps in the
+  [installer checklist](docs/INSTALLER-VERIFICATION.md) remain open; repeat the
+  automated scenarios for each release candidate.
 - [x] Verify the release packaging preflight with sanitized real-media evidence
   and checksums: hosted [45542474505](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45542474505)
   passed for commit `4a5b9b8` (workflow dispatch, no publication).
+- [x] Exercise the repair verifier against built packages with simulated remote
+  metadata in hosted [45547968517](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45547968517)
+  for commit `e588cb5`, plus offline positive and negative tests.
 - [ ] Verify actual tagged publication and draft repair using a future release;
-  the extracted repair verifier also has offline synthetic positive and negative
-  tests. Do not claim those tests publish or repair a real draft.
+  the simulated verification did not publish or repair a real draft.
 
 ## Deferred / Out of Scope
 

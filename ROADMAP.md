@@ -21,9 +21,13 @@ app version, environment, steps and outcomes when evidence becomes available.
 
 ## Milestone 2 — playback and trimming polish
 
-- [ ] Verify the new stream-copy trim path on hosted and interactive Windows,
-  including keyframe limitations, method reporting and safe fallback. Profile,
-  transforms and explicit hardware encoder choices must remain preserved.
+- [x] Exercise stream-copy trimming with pinned real ffmpeg/ffprobe on hosted
+  Windows, including batch copy, transform-driven re-encoding and a publication
+  collision. Offline tests cover fallback and cancellation. Hosted CI
+  [45542476148](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45542476148)
+  passed for commit `4a5b9b8`.
+- [ ] Verify keyframe limitations, method reporting and safe fallback in an
+  interactive Windows session. Physical GPU encoding remains unverified.
 - [x] Provide a direct ffplay download link and explain discovery and refusal.
 - [x] Evaluate network URL playback: defer it. The current player is local-only;
   network playback would require an explicit opt-in, URL and redirect policy,
@@ -32,11 +36,20 @@ app version, environment, steps and outcomes when evidence becomes available.
 
 ## Milestone 3 — installer and release hardening
 
-- [ ] Complete the [installer verification checklist](docs/INSTALLER-VERIFICATION.md)
-  on disposable Windows systems and record the report for the exact candidate.
-- [ ] Validate the new release real-media evidence attachment and repair flow
-  on hosted Windows; it packages a sanitized scenario summary with checksums.
-  The workflow changes are not yet verified on a release run.
+- [x] Exercise clean install, previous-stable upgrade, uninstall/reinstall,
+  offline skip and fresh provisioning report in disposable hosted Windows CI
+  [45547947249](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45547947249)
+  for commit `e588cb5`. The interactive steps in the
+  [installer checklist](docs/INSTALLER-VERIFICATION.md) remain open; repeat the
+  automated scenarios for each release candidate.
+- [x] Verify the release packaging preflight with sanitized real-media evidence
+  and checksums: hosted [45542474505](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45542474505)
+  passed for commit `4a5b9b8` (workflow dispatch, no publication).
+- [x] Exercise the repair verifier against built packages with simulated remote
+  metadata in hosted [45547968517](https://github.com/SeanShaffer88/ytTrayDL/actions/runs/45547968517)
+  for commit `e588cb5`, plus offline positive and negative tests.
+- [ ] Verify actual tagged publication and draft repair using a future release;
+  the simulated verification did not publish or repair a real draft.
 
 ## Deferred / Out of Scope
 

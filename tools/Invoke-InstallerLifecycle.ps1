@@ -1,7 +1,7 @@
 # Actual trusted installer execution is restricted to an ephemeral GitHub VM.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('clean','upgrade','upgrade061-off','upgrade070-off')][string]$Scenario,
+    [Parameter(Mandatory)][ValidateSet('clean','upgrade','upgrade061-off','upgrade070-off','previous-stable')][string]$Scenario,
     [Parameter(Mandatory)][string]$Candidate,
     [Parameter(Mandatory)][string]$CandidateExe,
     [Parameter(Mandatory)][string]$StateProbe,
@@ -50,7 +50,12 @@ function Run-Installer([string]$Path, [string[]]$Arguments, [string]$Phase) {
     & $StateProbe --run-owned 300 $Path @Arguments *> (Join-Path $EvidenceRoot "$Phase-process.log")
     $code = $LASTEXITCODE
     $events.Add(@{ phase=$Phase; exitCode=$code; arguments=$Arguments; sha256=$hash; containment='production-owned-tree'; processEvidence="$Phase-process.log" })
-    Assert ($code -eq 0) "$Phase exit code is zero"
+    if ($code -ne 0) {
+        $log = Join-Path $EvidenceRoot "$Phase.log"
+        $tail = if (Test-Path -LiteralPath $log) { (Get-Content -LiteralPath $log -Tail 18) -join "`n" } else { 'No installer log' }
+        throw "$Phase exit code $code; installer log tail:`n$tail"
+    }
+    Assert $true "$Phase exit code is zero"
 }
 function Install([string]$Path, [string]$Phase, [string]$Tasks='desktopicon,startup') {
     # OwnedProcess accepts argv, not a shell command line; Command supplies the
@@ -90,6 +95,13 @@ try {
     $null = New-ItemProperty -LiteralPath $runKey -Name $siblingRunName -Value 'field-071-unrelated-sentinel' -PropertyType String
     $oldHash = $null
     if ($isUpgrade) {
+        if ($Scenario -eq 'previous-stable') {
+            # Refuse an unchecked, prerelease or same-version baseline.
+            . (Join-Path $PSScriptRoot 'Select-PreviousStable.ps1')
+            $releases = Invoke-RestMethod 'https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases?per_page=100' -TimeoutSec 120
+            $baselineVersion = Select-PreviousStable -Releases $releases -CandidateVersion $candidateVersion
+            Assert $true "selected previous stable $baselineVersion"
+        }
         $release = Invoke-RestMethod "https://api.github.com/repos/SeanShaffer88/ytTrayDL/releases/tags/v$baselineVersion" -TimeoutSec 120
         $asset = @($release.assets | Where-Object name -eq "ytTrayDL-Setup-v$baselineVersion-windows-x64.exe")
         $sums = @($release.assets | Where-Object name -eq 'SHA256SUMS.txt')
@@ -173,6 +185,25 @@ try {
     Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'preserved user media hash'
     Assert ((Get-FileHash $siblingShortcut).Hash -eq $siblingShortcutHash) 'uninstall preserved unrelated sibling shortcut'
     Assert ((Get-ItemProperty -LiteralPath $runKey -Name $siblingRunName).$siblingRunName -eq 'field-071-unrelated-sentinel') 'uninstall preserved unrelated startup value'
+    if ($Scenario -eq 'clean') {
+        Install $Candidate 'after-uninstall-reinstall' $candidateTasks
+        Assert ((Get-FileHash $exe -Algorithm SHA256).Hash -eq (Get-FileHash $CandidateExe -Algorithm SHA256).Hash) 'reinstall after uninstall restores candidate executable'
+        Assert ((Get-ItemProperty $key).DisplayVersion -eq $candidateVersion) 'reinstall after uninstall restores registration'
+        Check-Data $hashes
+        Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'reinstall after uninstall preserved user media'
+        # Inno may retain the first uninstaller briefly while its self-delete
+        # finishes and register unins001.exe on reinstall. Resolve the new owned
+        # uninstaller from the candidate registration, not a fixed filename.
+        $uninstallString = (Get-ItemProperty -LiteralPath $key).UninstallString
+        Assert ($uninstallString -match '^"(?<path>[^"\r\n]+)"(?:\s.*)?$') 'reinstall registration has quoted uninstall executable'
+        $registeredUninstaller = [IO.Path]::GetFullPath($Matches.path)
+        Assert ((Split-Path -Parent $registeredUninstaller).TrimEnd('\') -eq $install.TrimEnd('\')) 'reinstall uninstaller stays inside app directory'
+        Assert ((Split-Path -Leaf $registeredUninstaller) -match '^unins[0-9]{3}\.exe$' -and (Test-Path -LiteralPath $registeredUninstaller -PathType Leaf)) 'reinstall registered uninstaller exists'
+        Run-Installer $registeredUninstaller @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + (Join-Path $EvidenceRoot 'reinstall-uninstall.log'))) 'reinstall-uninstall'
+        Assert (!(Test-Path $exe) -and !(Test-Path $key)) 'second uninstall removes candidate and registration'
+        Check-Data $hashes
+        Assert ((Get-FileHash $foreign).Hash -eq $foreignHash) 'second uninstall preserves user media'
+    }
     $passed = $true
 } finally {
     @{ scenario=$Scenario; baselineVersion=$baselineVersion; candidateTasks=$candidateTasks; passed=$passed; commit=$env:GITHUB_SHA; os=[Environment]::OSVersion.VersionString; runner=$env:RUNNER_ENVIRONMENT; events=$events.ToArray(); startupExecution='Not exercised; registry command only'; gui='Not exercised in headless installer job' } | ConvertTo-Json -Depth 9 | Set-Content (Join-Path $EvidenceRoot 'evidence.json')

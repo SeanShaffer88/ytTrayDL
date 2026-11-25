@@ -132,6 +132,8 @@ jobs:
             Write-Output "::error title=Package preflight::$message"
             throw
           }
+      - name: Test repair verifier with built packages
+        run: python tools/test_release_preflight.py
       - name: Upload checked packages as build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -184,31 +186,10 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > tag.json
           python3 -c 'import json,sys; r=json.load(open("run.json")); t=json.load(open("tag.json")); assert r["event"] == "push" and r["head_branch"] == sys.argv[1] and r["head_sha"] == t["object"]["sha"], "Run does not build the release tag"' "$TAG"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" > jobs.json
-          python3 -c 'import json; j=json.load(open("jobs.json"))["jobs"]; assert len(j)==1; s={x["name"]: x["conclusion"] for x in j[0]["steps"]}; assert all(s.get(n)=="success" for n in ("Validate tag and notes", "Run native tests and build release executable", "Resolve hash-pinned real media tools", "Test real converter media", "Run real-media field validation", "Prepare public media evidence", "Verify Inno compiler engine", "Build and verify packages", "Upload checked packages as build artifacts")), "Release build checks did not pass"'
+          python3 -c 'import json; j=json.load(open("jobs.json"))["jobs"]; assert len(j)==1; s={x["name"]: x["conclusion"] for x in j[0]["steps"]}; assert all(s.get(n)=="success" for n in ("Validate tag and notes", "Run native tests and build release executable", "Resolve hash-pinned real media tools", "Test real converter media", "Run real-media field validation", "Prepare public media evidence", "Verify Inno compiler engine", "Build and verify packages", "Test repair verifier with built packages", "Upload checked packages as build artifacts")), "Release build checks did not pass"'
           gh run download "$RUN_ID" --name release-packages --dir checked
           RELEASE_URL=$(gh release view "$TAG" --json apiUrl --jq .apiUrl)
           gh api "$RELEASE_URL" > release.json
-          python3 - "$VERSION" <<'PYCODE'
-          import hashlib, json, pathlib, sys
-          version = sys.argv[1]
-          root = pathlib.Path('checked')
-          expected = {'SHA256SUMS.txt', f'ytTrayDL-Setup-v{version}-windows-x64.exe', f'ytTrayDL-v{version}-windows-x64.zip', f'ytTrayDL-v{version}-real-media-evidence.json'}
-          assert {p.name for p in root.iterdir()} == expected, 'Unexpected build artifact inventory'
-          release = json.load(open('release.json'))
-          assert release['draft'] and release['tag_name'] == f'v{version}', 'Expected the matching draft release'
-          remote = {a['name']: a for a in release['assets']}
-          assert set(remote) == expected, 'Unexpected release asset inventory'
-          for name in expected:
-              data = (root / name).read_bytes()
-              asset = remote[name]
-              assert asset['state'] == 'uploaded' and asset['size'] == len(data)
-              assert asset['digest'] == 'sha256:' + hashlib.sha256(data).hexdigest(), f'Uploaded digest mismatch: {name}'
-          sums = {}
-          for line in (root / 'SHA256SUMS.txt').read_text().splitlines():
-              digest, name = line.split('  ', 1)
-              sums[name] = digest
-          assert set(sums) == expected - {'SHA256SUMS.txt'}
-          for name, digest in sums.items():
-              assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, f'Checksum mismatch: {name}'
-          PYCODE
+          COMMIT=$(python3 -c 'import json; print(json.load(open("run.json"))["head_sha"])')
+          python3 tools/verify_release_assets.py checked release.json "$VERSION" "$COMMIT"
           gh release edit "$TAG" --draft=false

@@ -6,7 +6,12 @@
 //!   thread (it blocks in WaitForSingleObject),
 //! - the Ctrl+Alt+G hotkey (`WM_HOTKEY`).
 //!
-//! All three report through the same mpsc channel the GUI drains.
+//! All three report through the same mpsc channel the GUI drains. The message
+//! thread owns its window, clipboard listener and hotkey; WM_DESTROY unregisters
+//! them. The event waiter owns and closes its handle. COM taskbar state is
+//! thread-local and balances only successful apartment initialization. Clipboard
+//! reads retry briefly, validate allocation size, require a bounded terminator,
+//! and suppress only repeated nonzero sequence numbers after a successful read.
 
 use super::{
     Platform, PlatformEvent, PlatformSetup, MANUAL_URL_MESSAGE, OPEN_CONVERTER_MESSAGE,
@@ -72,8 +77,9 @@ pub struct Inner {
     _thread: Option<std::thread::JoinHandle<()>>,
 }
 
-// HANDLE is a raw pointer wrapper; the mutex is only ever closed on
-// this struct's Drop, from the owning thread's process teardown.
+// SAFETY: the mutex handle is process-owned, transferred with Inner and closed
+// only in Platform::drop. The listener and waiter use their own handles; the
+// stop flag is atomic and no borrowed pointer crosses threads.
 unsafe impl Send for Inner {}
 
 pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
@@ -83,10 +89,14 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
     // Single instance: try to create the named mutex. If it already
     // exists, signal the running instance to show itself and report
     // `already_running` so the caller exits quietly.
+    // SAFETY: the security attributes are null and wide() supplies a
+    // NUL-terminated name valid for the duration of CreateMutexW.
     let mutex = unsafe { CreateMutexW(std::ptr::null(), 1, wide(MUTEX_NAME).as_ptr()) };
+    // SAFETY: GetLastError reads this thread's last-error slot immediately.
     let last_err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     const ERROR_ALREADY_EXISTS: u32 = 183;
     if !mutex.is_null() && last_err == ERROR_ALREADY_EXISTS {
+        // SAFETY: this non-null handle came from CreateMutexW and is closed once.
         unsafe {
             CloseHandle(mutex);
         }
@@ -111,6 +121,8 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
     {
         let tx2 = tx.clone();
         let stop = event_stop.clone();
+        // SAFETY: the thread owns the event handle it creates and closes it
+        // after the wait loop; API name buffers live through each call.
         std::thread::spawn(move || unsafe {
             let ev = CreateEventW(std::ptr::null(), 0, 0, wide(SHOW_EVENT_NAME).as_ptr());
             if ev.is_null() {
@@ -140,6 +152,7 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
 
     // Clipboard listener + hotkey on a message-window thread.
     let thread_tx = tx.clone();
+    // SAFETY: the new thread owns the message loop and callback registration.
     let thread = std::thread::spawn(move || unsafe {
         message_window_thread(thread_tx);
     });
@@ -162,6 +175,8 @@ pub fn setup(show_on_launch: bool, has_launch_intent: bool) -> PlatformSetup {
 }
 
 fn signal_show_event() {
+    // SAFETY: OpenEventW receives a terminated name; a successful handle is
+    // used only for signaling and is closed before this function returns.
     unsafe {
         let ev = OpenEventW(EVENT_MODIFY_STATE, 0, wide(SHOW_EVENT_NAME).as_ptr());
         if !ev.is_null() {
@@ -200,6 +215,8 @@ fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let class = wide("ytTrayDLMessageWindow");
     loop {
+        // SAFETY: the class string is terminated and stays alive for the call;
+        // the returned HWND is checked before use.
         let hwnd = unsafe {
             FindWindowExW(
                 HWND_MESSAGE,
@@ -222,6 +239,8 @@ fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
             if remaining == 0 {
                 break;
             }
+            // SAFETY: COPYDATASTRUCT and payload remain alive for the bounded
+            // synchronous send; the output pointer refers to a local usize.
             let sent = unsafe {
                 SendMessageTimeoutW(
                     hwnd,
@@ -248,6 +267,8 @@ fn forward_copydata(message: usize, payload: &[u8]) -> Result<(), String> {
 }
 
 fn window_executable_matches(hwnd: HWND, expected: &Path) -> bool {
+    // SAFETY: output buffers are allocated for the declared lengths, and the
+    // process handle is checked and closed once after querying its image path.
     unsafe {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
@@ -305,6 +326,8 @@ unsafe fn message_window_thread(tx: Sender<PlatformEvent>) {
     RegisterHotKey(hwnd, HOTKEY_SHOW, MOD_CONTROL | MOD_ALT, 'G' as u32);
     let _ = tx; // the window proc sends via the static SENDER
 
+    // SAFETY: MSG is a plain Win32 record; zero is valid before GetMessageW
+    // fills it, and the buffer remains live throughout the dispatch loop.
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     loop {
         let r = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
@@ -944,6 +967,8 @@ struct TaskbarObject {
 
 impl Drop for TaskbarObject {
     fn drop(&mut self) {
+        // SAFETY: the thread-local object is released on its creating thread;
+        // CoUninitialize balances only a successful CoInitializeEx call.
         unsafe {
             if !self.pointer.is_null() {
                 type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
@@ -971,6 +996,8 @@ fn taskbar_list3() -> Option<*mut std::ffi::c_void> {
     if cached.is_some() {
         return cached;
     }
+    // SAFETY: COM is initialized on this thread before creating the requested
+    // interface; a thread-local owner releases it and balances initialization.
     unsafe {
         // Best-effort COM init for this thread; eframe/winit may
         // already have initialized an apartment (an RPC_E_CHANGED_MODE
@@ -1043,6 +1070,10 @@ pub fn set_taskbar_progress(frac: Option<f64>) {
 
 // The allocation remains locked throughout the bounded copy. No clipboard state
 // is modified, allowing this acquisition path to be tested with owned memory.
+/// # Safety
+/// `data` must be a valid CF_UNICODETEXT handle borrowed from an open clipboard.
+/// GlobalLock keeps its storage stable until GlobalUnlock; the allocation size
+/// is bounded before forming a slice and decoding requires a terminator.
 unsafe fn decode_global_text(data: windows_sys::Win32::Foundation::HGLOBAL) -> Option<String> {
     let units = super::clipboard_allocation_units(GlobalSize(data))?;
     let ptr = GlobalLock(data) as *const u16;

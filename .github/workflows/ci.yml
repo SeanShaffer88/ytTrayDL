@@ -156,7 +156,18 @@ jobs:
         run: |
           $harness = (Resolve-Path './target/debug/field_validation.exe').Path
           ./tools/Invoke-MediaFieldValidation.ps1 -Harness $harness -YtDlp $env:FIELD_YTDLP -FFmpeg $env:FIELD_FFMPEG -FFprobe $env:FIELD_FFPROBE -Root "$env:RUNNER_TEMP/media-evidence" -Scenario all -TimeoutSeconds 120
-          if ($LASTEXITCODE -ne 0) { throw "Media field assertions failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            $code = $LASTEXITCODE
+            $report = Join-Path $env:RUNNER_TEMP 'media-evidence/evidence.json'
+            if (Test-Path -LiteralPath $report) {
+              $evidence = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+              $details = @($evidence.scenarios | Where-Object { $_.status -ne 'passed' } | ForEach-Object { "$($_.scenario): $($_.error)" }) -join "`n"
+              if ($evidence.error) { $details += "`n$($evidence.error)" }
+              $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Media field details::$details"
+            }
+            throw "Media field assertions failed: $code"
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

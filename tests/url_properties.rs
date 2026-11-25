@@ -15,7 +15,11 @@ fn generated_http_schemes_domains_and_playlists() {
             url_detect::is_known_site(&url_detect::host_of(&url)),
             "case {case}"
         );
-        assert_eq!(url_detect::extract_urls(&url), [url.clone()], "case {case}");
+        assert_eq!(
+            url_detect::extract_urls(&url),
+            std::slice::from_ref(&url),
+            "case {case}"
+        );
         for prefix in ["httpx://", "http:/", "https:/", "ftp://"] {
             assert!(
                 !url_detect::is_http_url(&format!("{prefix}youtube.com/{id}")),

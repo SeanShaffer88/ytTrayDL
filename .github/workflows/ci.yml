@@ -43,7 +43,7 @@ jobs:
       - name: Clippy (Windows target)
         run: |
           set -o pipefail
-          cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features --locked --color never -- -D warnings 2>&1 | tee /tmp/windows-clippy.log || { tail -60 /tmp/windows-clippy.log | while IFS= read -r line; do echo "::error::$line"; done; exit 1; }
+          cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features --locked --color never -- -D warnings 2>&1 | tee /tmp/windows-clippy.log || { python3 -c 'print("::error::" + "\n".join(open("/tmp/windows-clippy.log").read().splitlines()[-25:]).replace("%", "%25").replace("\n", "%0A"))'; exit 1; }
       - name: Tests (full suite)
         run: cargo test --locked
       - name: Windows check
@@ -67,7 +67,7 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content test-output.txt | Select-Object -Last 120
           if ($code -ne 0) {
-            $text = (Get-Content test-output.txt -Raw).Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            $text = ((Get-Content test-output.txt | Select-Object -Last 35) -join "`n").Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
             Write-Output "::error::$text"
             exit $code
           }

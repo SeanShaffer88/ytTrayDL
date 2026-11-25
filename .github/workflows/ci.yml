@@ -213,7 +213,13 @@ jobs:
         run: |
           $candidate = @(Get-ChildItem candidate-setup -Filter '*.exe' -File)
           if ($candidate.Count -ne 1) { throw 'Expected exactly one candidate installer' }
-          ./tools/Invoke-InstallerLifecycle.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-evidence" -TrustIsolatedRunner
+          try {
+            ./tools/Invoke-InstallerLifecycle.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-evidence" -TrustIsolatedRunner
+          } catch {
+            $message = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Installer lifecycle details::$message"
+            throw
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -248,7 +254,13 @@ jobs:
         run: |
           $candidate = @(Get-ChildItem candidate-setup -Filter '*.exe' -File)
           if ($candidate.Count -ne 1) { throw 'Expected exactly one candidate installer' }
-          ./tools/Invoke-InstallerProvisioning.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/tools-state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-tools-evidence" -TrustIsolatedRunner
+          try {
+            ./tools/Invoke-InstallerProvisioning.ps1 -Scenario '${{ matrix.scenario }}' -Candidate $candidate[0].FullName -CandidateExe './candidate-exe/yttraydl.exe' -StateProbe "$env:RUNNER_TEMP/tools-state-probe/InstallerStateProbe.exe" -EvidenceRoot "$env:RUNNER_TEMP/installer-tools-evidence" -TrustIsolatedRunner
+          } catch {
+            $message = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Installer provisioning details::$message"
+            throw
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

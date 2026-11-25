@@ -59,16 +59,7 @@ jobs:
       - name: Field harness clippy (Windows)
         run: cargo clippy --target x86_64-pc-windows-msvc --all-targets --features field-validation --locked -- -D warnings
       - name: Tests (native)
-        shell: pwsh
-        run: |
-          cargo test --locked --color never *> test-output.txt
-          $code = $LASTEXITCODE
-          Get-Content test-output.txt | Select-Object -Last 120
-          if ($code -ne 0) {
-            $text = ((Get-Content test-output.txt | Select-Object -Last 35) -join "`n").Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
-            Write-Output "::error::$text"
-            exit $code
-          }
+        run: cargo test --locked
       - name: Release build
         run: cargo build --release --locked --bin yttraydl
       - name: Stage portable payload with dependency notices

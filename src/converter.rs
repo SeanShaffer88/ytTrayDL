@@ -441,6 +441,69 @@ pub struct ConversionOptions {
     pub audio_bitrate: AudioBitrate,
 }
 
+/// Conservative preflight for a future lossless trim attempt. `probe_json` is
+/// bounded ffprobe JSON containing stream codec_name and codec_type fields.
+/// Unknown or missing data fails closed to re-encoding. This decision alone
+/// does not start a process or promise that a particular muxer will succeed.
+pub fn stream_copy_compatible(
+    profile: VideoProfile,
+    options: ConversionOptions,
+    probe_json: &[u8],
+) -> bool {
+    if options.trim == TrimRange::default()
+        || options.encoder != VideoEncoder::Software
+        || options.quality != EncodingQuality::EncoderDefault
+        || options.crop.is_some()
+        || options.resize != ResizePreset::Original
+        || options.rotation != Rotation::None
+        || options.audio_bitrate != AudioBitrate::EncoderDefault
+        || (profile.is_audio_only() && options.mute_audio)
+    {
+        return false;
+    }
+    let (video, audio) = match profile {
+        VideoProfile::Mp4 | VideoProfile::Mkv => (Some("h264"), "aac"),
+        VideoProfile::Webm => (Some("vp9"), "opus"),
+        VideoProfile::Mp4Hevc | VideoProfile::MkvHevc => (Some("hevc"), "aac"),
+        VideoProfile::Mp4Av1 => (Some("av1"), "aac"),
+        VideoProfile::WebmAv1 => (Some("av1"), "opus"),
+        VideoProfile::Mp3Audio => (None, "mp3"),
+        VideoProfile::M4aAudio => (None, "aac"),
+        VideoProfile::FlacAudio => (None, "flac"),
+        VideoProfile::OpusAudio => (None, "opus"),
+    };
+    let Ok(probe) = serde_json::from_slice::<serde_json::Value>(probe_json) else {
+        return false;
+    };
+    let Some(streams) = probe.get("streams").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    let first = |kind: &str| {
+        streams
+            .iter()
+            .find(|stream| stream.get("codec_type").and_then(|v| v.as_str()) == Some(kind))
+    };
+    let codec = |stream: &serde_json::Value| {
+        stream
+            .get("codec_name")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    };
+    if let Some(expected) = video {
+        if first("video").and_then(codec).as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if !options.mute_audio {
+        match first("audio") {
+            Some(stream) if codec(stream).as_deref() != Some(audio) => return false,
+            None if video.is_none() => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
 fn video_filters(options: ConversionOptions) -> Option<String> {
     let mut filters = Vec::new();
     if let Some(crop) = options.crop {
@@ -863,6 +926,106 @@ pub fn run_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_copy_preflight_preserves_profile_and_user_intent() {
+        let trim = TrimRange::parse("1", "2").unwrap();
+        let options = ConversionOptions {
+            trim,
+            ..Default::default()
+        };
+        let compatible = br#"{"streams":[{"codec_type":"video","codec_name":"h264"},{"codec_type":"audio","codec_name":"aac"}]}"#;
+        assert!(stream_copy_compatible(
+            VideoProfile::Mp4,
+            options,
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Webm,
+            options,
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions::default(),
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions {
+                encoder: VideoEncoder::Nvenc,
+                ..options
+            },
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions {
+                quality: EncodingQuality::High,
+                ..options
+            },
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions {
+                resize: ResizePreset::P720,
+                ..options
+            },
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions {
+                rotation: Rotation::HalfTurn,
+                ..options
+            },
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions {
+                audio_bitrate: AudioBitrate::K128,
+                ..options
+            },
+            compatible
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            options,
+            b"not json"
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            options,
+            br#"{"streams":[]}"#
+        ));
+        let wrong_audio = br#"{"streams":[{"codec_type":"video","codec_name":"h264"},{"codec_type":"audio","codec_name":"opus"}]}"#;
+        assert!(!stream_copy_compatible(
+            VideoProfile::Mp4,
+            options,
+            wrong_audio
+        ));
+        assert!(stream_copy_compatible(
+            VideoProfile::Mp4,
+            ConversionOptions {
+                mute_audio: true,
+                ..options
+            },
+            wrong_audio
+        ));
+        let audio = br#"{"streams":[{"codec_type":"audio","codec_name":"mp3"}]}"#;
+        assert!(stream_copy_compatible(
+            VideoProfile::Mp3Audio,
+            options,
+            audio
+        ));
+        assert!(!stream_copy_compatible(
+            VideoProfile::M4aAudio,
+            options,
+            audio
+        ));
+    }
 
     #[test]
     fn progress_parser_handles_chunks_invalid_lines_and_bounds() {

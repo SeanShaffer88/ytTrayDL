@@ -531,7 +531,6 @@ pub struct App {
     app_dir: Option<std::path::PathBuf>,
     repaint: egui::Context,
     main_window_remembered: bool,
-    scroll_to_tool_progress: bool,
 
     pub toasts: Vec<Toast>,
     pub last_ignored: Vec<(String, String)>,
@@ -755,7 +754,6 @@ impl App {
             app_dir: exe_dir,
             repaint: cc.egui_ctx.clone(),
             main_window_remembered,
-            scroll_to_tool_progress: false,
             toasts: Vec::new(),
             last_ignored: Vec::new(),
             rule_input_ignore: String::new(),
@@ -1091,7 +1089,13 @@ impl App {
             return;
         }
         self.next_tool_operation = self.next_tool_operation.wrapping_add(1);
-        self.scroll_to_tool_progress = true;
+        // Progress and cancellation live in the Downloads window; never hide
+        // an in-flight tool operation when the main panel has no scrollbar.
+        request_module(
+            &self.repaint,
+            &mut self.show_downloads,
+            "yttraydl-downloads",
+        );
         let id = self.next_tool_operation;
         let mailbox = ProgressMailbox::default();
         mailbox.start(id);

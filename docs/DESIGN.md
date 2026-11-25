@@ -716,3 +716,17 @@ fallback; cancellation, timeouts, I/O and publication failures stop the batch.
 Filesystems without hard links cannot publish a copy; interruptions can leave a
 temporary directory. Progress reports the current method and final counts.
 See [ROADMAP.md](../ROADMAP.md) for validation status.
+
+
+### Main window no-scroll revision
+
+The fixed main panel renders no scroll area. Its navigation labels, in reading
+order, are Player, Lyrics & Tags, Video Encoder, Settings, Downloads and Output
+Folder, without ellipses. Short work areas use two columns in reading order.
+Active downloads, history, saved links, ignored links, failure retry/dismissal,
+and managed-tool progress/cancellation are reachable in Downloads; tool setup
+remains in Settings → Tools. Starting a tool operation opens Downloads for
+progress. The headless egui layout regression covers the actual controls and
+button bounds; physical Windows rendering, focus and high-DPI behaviour remain
+unverified for this revision. Existing screenshots are historical, not a
+capture of this candidate.

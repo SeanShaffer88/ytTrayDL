@@ -92,6 +92,9 @@ fn main_navigation_buttons(ui: &mut egui::Ui) -> Vec<(MainAction, egui::Response
     } else {
         1
     };
+    let rows = MAIN_ACTIONS.len().div_ceil(columns);
+    let height =
+        ((ui.available_height() - (rows - 1) as f32 * gap) / rows as f32).clamp(18.0, 34.0);
     let mut buttons = Vec::with_capacity(MAIN_ACTIONS.len());
     for row in MAIN_ACTIONS.chunks(columns) {
         ui.horizontal(|ui| {
@@ -100,7 +103,7 @@ fn main_navigation_buttons(ui: &mut egui::Ui) -> Vec<(MainAction, egui::Response
                 / columns as f32)
                 .max(1.0);
             for &(action, label) in row {
-                let response = ui.add_sized([width, 34.0], egui::Button::new(label));
+                let response = ui.add_sized([width, height], egui::Button::new(label));
                 buttons.push((action, response));
             }
         });
